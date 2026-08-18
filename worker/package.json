@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
     "@waitloop/doudizhu": "workspace:*",
     "@waitloop/game-core": "workspace:*",
-    "@waitloop/protocol": "workspace:*"
+    "@waitloop/protocol": "workspace:*",
+    "zod": "4.4.3"
   }
 }

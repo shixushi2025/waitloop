@@ -3,6 +3,7 @@ import { parseWaitloopAgentEvent } from "@waitloop/protocol";
 
 import { AgentSession } from "./agent-session";
 import { GameRoom } from "./game-room";
+import { handleWaitloopMcp } from "./mcp";
 
 export { AgentSession, GameRoom };
 
@@ -16,10 +17,7 @@ interface Env {
 
 interface ApiErrorBody {
   version: 1;
-  error: {
-    code: string;
-    message: string;
-  };
+  error: { code: string; message: string };
 }
 
 const MAX_JSON_BODY_BYTES = 16 * 1024;
@@ -46,8 +44,7 @@ function isLocalHostname(hostname: string): boolean {
 
 function bearerToken(request: Request): string | null {
   const value = request.headers.get("authorization");
-  if (!value?.startsWith("Bearer ")) return null;
-  return value.slice("Bearer ".length);
+  return value?.startsWith("Bearer ") ? value.slice("Bearer ".length) : null;
 }
 
 function authorizeAgentMutation(request: Request, env: Env, url: URL): Response | null {
@@ -96,7 +93,6 @@ async function readJson(request: Request): Promise<{ ok: true; value: unknown } 
 function parseSessionRoute(pathname: string): { sessionId: string; websocket: boolean } | null {
   const match = /^\/api\/v1\/sessions\/([^/]+)(\/ws)?$/.exec(pathname);
   if (!match?.[1]) return null;
-
   try {
     const sessionId = decodeURIComponent(match[1]);
     if (sessionId.length === 0 || sessionId.length > 128) return null;
@@ -109,7 +105,6 @@ function parseSessionRoute(pathname: string): { sessionId: string; websocket: bo
 function parseRoomRoute(pathname: string): { roomId: string; action: "snapshot" | "moves" | "ws" | "pause" | "resume" } | null {
   const match = /^\/api\/v1\/rooms\/([^/]+)(?:\/(moves|ws|pause|resume))?$/.exec(pathname);
   if (!match?.[1]) return null;
-
   try {
     const roomId = decodeURIComponent(match[1]);
     if (roomId.length === 0 || roomId.length > 128) return null;
@@ -128,21 +123,17 @@ async function handleAgentEvent(request: Request, env: Env, url: URL): Promise<R
 
   const body = await readJson(request);
   if (!body.ok) return body.response;
-
   const parsed = parseWaitloopAgentEvent(body.value);
   if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message);
 
   const result = await env.AGENT_SESSIONS.getByName(parsed.value.sessionId).applyEvent(parsed.value);
-  return json(
-    {
-      version: 1,
-      accepted: result.accepted,
-      changed: result.changed,
-      decision: result.decision,
-      snapshot: result.snapshot,
-    },
-    { status: result.accepted ? 200 : 409 },
-  );
+  return json({
+    version: 1,
+    accepted: result.accepted,
+    changed: result.changed,
+    decision: result.decision,
+    snapshot: result.snapshot,
+  }, { status: result.accepted ? 200 : 409 });
 }
 
 async function handleSessionRoute(
@@ -157,7 +148,6 @@ async function handleSessionRoute(
 
   const stub = env.AGENT_SESSIONS.getByName(route.sessionId);
   if (route.websocket) return stub.fetch(request);
-
   const snapshot = await stub.getSnapshot();
   if (!snapshot) return apiError(404, "session_not_found", "No agent session exists for this ID.");
   return json({ version: 1, snapshot });
@@ -166,6 +156,10 @@ async function handleSessionRoute(
 function gameRpcError(code: string, message: string): Response {
   const status = code === "room_not_found" ? 404 : code === "viewer_not_in_room" || code === "player_not_in_room" ? 403 : 409;
   return apiError(status, code, message);
+}
+
+function newSeatToken(): string {
+  return `wlseat_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
 async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<Response> {
@@ -179,13 +173,28 @@ async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<R
     return apiError(400, "invalid_room_request", "Room request must be a version 1 object.");
   }
 
-  const { gameId, playerIds, landlordId, viewerId, botPlayerIds } = body.value;
+  const { gameId, playerIds, landlordId, viewerId, botPlayerIds, agentPlayerId } = body.value;
   if (gameId !== "doudizhu") return apiError(400, "unknown_game", "Only doudizhu is available in this alpha.");
   if (typeof viewerId !== "string" || viewerId.length === 0) {
     return apiError(400, "invalid_viewer", "viewerId is required.");
   }
   if (!Array.isArray(botPlayerIds) || !botPlayerIds.every((id) => typeof id === "string")) {
     return apiError(400, "invalid_bots", "botPlayerIds must be an array of strings.");
+  }
+
+  const seatTokens: Record<string, string> = {};
+  let agentSeatToken: string | undefined;
+  if (agentPlayerId !== undefined) {
+    if (
+      typeof agentPlayerId !== "string" ||
+      !Array.isArray(playerIds) ||
+      !playerIds.includes(agentPlayerId) ||
+      botPlayerIds.includes(agentPlayerId)
+    ) {
+      return apiError(400, "invalid_agent_player", "agentPlayerId must identify a non-bot player in the room.");
+    }
+    agentSeatToken = newSeatToken();
+    seatTokens[agentPlayerId] = agentSeatToken;
   }
 
   const roomId = `room-${crypto.randomUUID()}`;
@@ -195,10 +204,17 @@ async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<R
     gameInput: { playerIds, landlordId },
     viewerId,
     botPlayerIds,
+    seatTokens,
   });
-
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-  return json({ version: 1, roomId, snapshot: result.value }, { status: 201 });
+
+  const response: Record<string, unknown> = {
+    version: 1,
+    roomId,
+    snapshot: result.value,
+  };
+  if (agentSeatToken) response.agentSeatToken = agentSeatToken;
+  return json(response, { status: 201 });
 }
 
 async function handleRoomRoute(
@@ -209,7 +225,6 @@ async function handleRoomRoute(
 ): Promise<Response> {
   const authError = authorizePrivateAccess(request, env, url);
   if (authError) return authError;
-
   const stub = env.GAME_ROOMS.getByName(route.roomId);
 
   if (route.action === "ws") {
@@ -238,7 +253,6 @@ async function handleRoomRoute(
     if (typeof playerId !== "string" || typeof moveId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
       return apiError(400, "invalid_move", "playerId, expectedRevision, and moveId are required.");
     }
-
     const command: GameMoveCommandV1 = {
       version: 1,
       roomId: route.roomId,
@@ -256,7 +270,6 @@ async function handleRoomRoute(
   if (typeof viewerId !== "string" || viewerId.length === 0) {
     return apiError(400, "invalid_viewer", "viewerId is required.");
   }
-
   const result = route.action === "pause" ? await stub.pause(viewerId) : await stub.resume(viewerId);
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
   return json({ version: 1, snapshot: result.value });
@@ -270,9 +283,9 @@ export default {
       if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
       return json({ version: 1, service: "waitloop", status: "ok" });
     }
-
     if (url.pathname === "/api/v1/agent-events") return handleAgentEvent(request, env, url);
     if (url.pathname === "/api/v1/rooms") return handleCreateRoom(request, env, url);
+    if (url.pathname === "/mcp") return handleWaitloopMcp(request, env);
 
     const sessionRoute = parseSessionRoute(url.pathname);
     if (sessionRoute) return handleSessionRoute(request, env, url, sessionRoute);
@@ -280,10 +293,9 @@ export default {
     const roomRoute = parseRoomRoute(url.pathname);
     if (roomRoute) return handleRoomRoute(request, env, url, roomRoute);
 
-    if (url.pathname.startsWith("/api/") || url.pathname === "/mcp") {
+    if (url.pathname.startsWith("/api/")) {
       return apiError(404, "not_found", "The requested API endpoint does not exist.");
     }
-
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
