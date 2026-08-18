@@ -26,19 +26,19 @@
         </p>
       </section>
 
-      <section class="terminal" aria-label="Waitloop preview">
+      <section class="terminal" aria-label="Waitloop session">
         <div class="terminal-head">
-          <span>session</span>
+          <span id="session-label">session / none</span>
           <span class="runtime" id="runtime-status">checking runtime</span>
         </div>
 
         <dl class="status-grid">
           <dt>agent</dt>
-          <dd>not connected</dd>
+          <dd id="agent-value">not connected</dd>
           <dt>status</dt>
-          <dd><span class="state state-idle">idle</span></dd>
+          <dd><span class="state state-idle" id="state-value">idle</span></dd>
           <dt>elapsed</dt>
-          <dd>00:00</dd>
+          <dd id="elapsed-value">00:00</dd>
         </dl>
 
         <div class="rule" aria-hidden="true"></div>
@@ -47,9 +47,9 @@
   waitloop();
 }</code></pre>
 
-        <div class="prompt" aria-label="Example command">
+        <div class="prompt" aria-live="polite">
           <span aria-hidden="true">&gt;</span>
-          <span>connect an agent to begin</span>
+          <span id="prompt-value">connect an agent to begin</span>
           <span class="cursor" aria-hidden="true"></span>
         </div>
       </section>
