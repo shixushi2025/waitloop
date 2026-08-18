@@ -1,0 +1,229 @@
+.game-shell {
+  padding-bottom: 52px;
+}
+
+.game-intro {
+  padding: 88px 0 44px;
+  max-width: 760px;
+}
+
+.game-intro h1 {
+  font-size: clamp(40px, 6vw, 68px);
+}
+
+.game-terminal {
+  margin-bottom: 72px;
+}
+
+.game-start {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 28px 30px;
+  color: var(--muted);
+  font: 13px/1.7 var(--mono);
+}
+
+.game-start p {
+  margin: 0;
+  max-width: 580px;
+}
+
+.command-button,
+.text-button,
+.move-button {
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  font: 13px/1.4 var(--mono);
+}
+
+.command-button {
+  flex: 0 0 auto;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.command-button span {
+  color: var(--accent);
+  margin-right: 8px;
+}
+
+.command-button:hover,
+.command-button:focus-visible,
+.move-button:hover,
+.move-button:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.command-button:disabled,
+.move-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.game-status {
+  padding-bottom: 22px;
+}
+
+.game-section {
+  padding: 26px 30px 6px;
+}
+
+.game-section + .game-section {
+  padding-top: 20px;
+}
+
+.player-list {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.player {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  gap: 20px;
+  align-items: baseline;
+  padding: 11px 13px;
+  background: var(--panel);
+  font: 13px/1.5 var(--mono);
+}
+
+.player .role,
+.player .count {
+  color: var(--muted);
+}
+
+.player.current .name::before {
+  content: "> ";
+  color: var(--accent);
+}
+
+.last-move {
+  min-height: 24px;
+  color: var(--muted);
+  font: 14px/1.6 var(--mono);
+}
+
+.card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.card-token {
+  min-width: 36px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  text-align: center;
+  font: 13px/1 var(--mono);
+}
+
+.move-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  padding-bottom: 24px;
+}
+
+.move-button {
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.move-button .move-index {
+  color: var(--muted);
+  margin-right: 9px;
+}
+
+.move-button.pass {
+  color: var(--muted);
+}
+
+.attention {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--warning);
+  background: var(--panel);
+  font: 12px/1.5 var(--mono);
+}
+
+.attention[hidden] {
+  display: none;
+}
+
+.attention div {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.attention strong {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+.attention span {
+  color: var(--muted);
+}
+
+.text-button {
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+}
+
+@media (max-width: 700px) {
+  .game-intro {
+    padding-top: 70px;
+  }
+
+  .game-start {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 22px 18px;
+  }
+
+  .command-button {
+    width: 100%;
+    text-align: left;
+  }
+
+  .game-section {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .player {
+    grid-template-columns: 1fr auto;
+  }
+
+  .player .role {
+    display: none;
+  }
+
+  .move-list {
+    grid-template-columns: 1fr;
+  }
+
+  .attention {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Waitloop Dou Dizhu alpha." />
+    <meta name="theme-color" content="#0d0f0f" />
+    <title>Dou Dizhu · Waitloop</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/game.css" />
+  </head>
+  <body>
+    <main class="shell game-shell">
+      <header class="topbar">
+        <a class="brand" href="/">waitloop<span aria-hidden="true">_</span></a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="/">home</a>
+          <a href="https://github.com/shixushi2025/waitloop">github</a>
+        </nav>
+      </header>
+
+      <section class="game-intro">
+        <p class="eyebrow">games / doudizhu / alpha</p>
+        <h1>Dou Dizhu,<br />without the casino.</h1>
+        <p class="lede">One human, two deliberately simple bots. The server owns the rules and hidden hands.</p>
+      </section>
+
+      <section class="attention" id="attention" hidden aria-live="assertive">
+        <div>
+          <strong id="attention-title">agent needs attention</strong>
+          <span id="attention-detail">game paused</span>
+        </div>
+        <button class="text-button" id="resume-button" type="button" hidden>resume game</button>
+      </section>
+
+      <section class="terminal game-terminal" aria-label="Dou Dizhu room">
+        <div class="terminal-head">
+          <span id="room-label">room / none</span>
+          <span id="connection-status">not connected</span>
+        </div>
+
+        <div class="game-start" id="game-start">
+          <p>Start a local alpha room. You are the landlord; two server-side bots fill the other seats.</p>
+          <button class="command-button" id="new-game" type="button"><span>&gt;</span> new game</button>
+        </div>
+
+        <div id="game-view" hidden>
+          <dl class="status-grid game-status">
+            <dt>role</dt>
+            <dd id="role-value">-</dd>
+            <dt>turn</dt>
+            <dd id="turn-value">-</dd>
+            <dt>revision</dt>
+            <dd id="revision-value">-</dd>
+            <dt>status</dt>
+            <dd id="game-status-value">-</dd>
+          </dl>
+
+          <div class="rule" aria-hidden="true"></div>
+
+          <section class="game-section">
+            <p class="section-label">players/</p>
+            <div class="player-list" id="players"></div>
+          </section>
+
+          <section class="game-section">
+            <p class="section-label">last_move/</p>
+            <div class="last-move" id="last-move">none</div>
+          </section>
+
+          <section class="game-section">
+            <p class="section-label">hand/</p>
+            <div class="card-row" id="hand"></div>
+          </section>
+
+          <section class="game-section">
+            <p class="section-label">legal_moves/</p>
+            <div class="move-list" id="moves"></div>
+          </section>
+
+          <div class="prompt">
+            <span aria-hidden="true">&gt;</span>
+            <span id="game-prompt">waiting</span>
+            <span class="cursor" aria-hidden="true"></span>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span>waitloop.run</span>
+        <span>work comes first</span>
+      </footer>
+    </main>
+
+    <script type="module" src="/game.js"></script>
+  </body>
+</html>
