@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@waitloop/doudizhu": "workspace:*",
+    "@waitloop/game-core": "workspace:*",
     "@waitloop/protocol": "workspace:*"
   }
 }

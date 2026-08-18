@@ -14,11 +14,19 @@
       {
         "name": "AGENT_SESSIONS",
         "class_name": "AgentSession"
+      },
+      {
+        "name": "GAME_ROOMS",
+        "class_name": "GameRoom"
       }
     ]
   },
   "exports": {
     "AgentSession": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "GameRoom": {
       "type": "durable-object",
       "storage": "sqlite"
     }
