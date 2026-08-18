@@ -6,7 +6,8 @@ const roomLabel = document.querySelector("#room-label");
 const connectionStatus = document.querySelector("#connection-status");
 const gameStart = document.querySelector("#game-start");
 const gameView = document.querySelector("#game-view");
-const newGameButton = document.querySelector("#new-game");
+const newBotGameButton = document.querySelector("#new-bot-game");
+const newAgentGameButton = document.querySelector("#new-agent-game");
 const roleValue = document.querySelector("#role-value");
 const turnValue = document.querySelector("#turn-value");
 const revisionValue = document.querySelector("#revision-value");
@@ -20,6 +21,9 @@ const attention = document.querySelector("#attention");
 const attentionTitle = document.querySelector("#attention-title");
 const attentionDetail = document.querySelector("#attention-detail");
 const resumeButton = document.querySelector("#resume-button");
+const mcpSetup = document.querySelector("#mcp-setup");
+const mcpConfig = document.querySelector("#mcp-config");
+const copyMcpButton = document.querySelector("#copy-mcp");
 
 let roomId = params.get("room");
 let snapshot = null;
@@ -27,6 +31,7 @@ let roomSocket = null;
 let roomReconnectTimer = null;
 let sessionSocket = null;
 let attentionPauseRequested = false;
+let mcpConfigText = "";
 
 function isElement(value) {
   return value instanceof HTMLElement;
@@ -60,12 +65,18 @@ function setConnection(text) {
   if (isElement(connectionStatus)) connectionStatus.textContent = text;
 }
 
+function setCreateButtonsDisabled(disabled) {
+  if (newBotGameButton instanceof HTMLButtonElement) newBotGameButton.disabled = disabled;
+  if (newAgentGameButton instanceof HTMLButtonElement) newAgentGameButton.disabled = disabled;
+}
+
 function promptFor(current) {
   if (current.status === "finished") {
     return current.state.winnerId === VIEWER_ID ? "you won · return to work when ready" : `${current.state.winnerId} won`;
   }
   if (current.status === "paused") return "game paused · work has priority";
   if (current.currentPlayerId === VIEWER_ID) return "your turn · choose a legal move";
+  if (current.currentPlayerId === "agent") return "agent turn · waiting for MCP move";
   return `${current.currentPlayerId ?? "room"} is moving`;
 }
 
@@ -191,6 +202,28 @@ function render(current) {
   renderMoves(current);
 }
 
+function showMcpSetup(createdRoomId, seatToken) {
+  if (!isElement(mcpSetup) || !isElement(mcpConfig)) return;
+
+  const endpoint = `${window.location.origin}/mcp`;
+  const config = {
+    mcpServers: {
+      waitloop: {
+        type: "http",
+        url: endpoint,
+        headers: {
+          Authorization: `Bearer ${seatToken}`,
+          "X-Waitloop-Room": createdRoomId,
+        },
+      },
+    },
+  };
+
+  mcpConfigText = JSON.stringify(config, null, 2);
+  mcpConfig.textContent = mcpConfigText;
+  mcpSetup.hidden = false;
+}
+
 async function loadRoom() {
   if (!roomId) return false;
 
@@ -236,34 +269,52 @@ function connectRoomSocket() {
   });
 }
 
-async function createRoom() {
-  if (newGameButton instanceof HTMLButtonElement) newGameButton.disabled = true;
+async function createRoom(mode) {
+  setCreateButtonsDisabled(true);
   setConnection("creating room");
+  if (isElement(mcpSetup)) mcpSetup.hidden = true;
+  mcpConfigText = "";
 
-  try {
-    const response = await fetch("/api/v1/rooms", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
+  const agentMode = mode === "agent";
+  const payload = agentMode
+    ? {
+        version: 1,
+        gameId: "doudizhu",
+        playerIds: [VIEWER_ID, "agent", "bot"],
+        landlordId: VIEWER_ID,
+        viewerId: VIEWER_ID,
+        botPlayerIds: ["bot"],
+        agentPlayerId: "agent",
+      }
+    : {
         version: 1,
         gameId: "doudizhu",
         playerIds: [VIEWER_ID, "bot-a", "bot-b"],
         landlordId: VIEWER_ID,
         viewerId: VIEWER_ID,
         botPlayerIds: ["bot-a", "bot-b"],
-      }),
+      };
+
+  try {
+    const response = await fetch("/api/v1/rooms", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(payload),
     });
     const body = await response.json();
     if (!response.ok || !isGameSnapshot(body.snapshot)) throw new Error(body?.error?.message ?? "could not create room");
 
     roomId = body.roomId;
     render(body.snapshot);
+    if (agentMode && typeof body.agentSeatToken === "string") {
+      showMcpSetup(body.roomId, body.agentSeatToken);
+    }
     connectRoomSocket();
   } catch (error) {
     setConnection("create failed");
     if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "create failed";
   } finally {
-    if (newGameButton instanceof HTMLButtonElement) newGameButton.disabled = false;
+    setCreateButtonsDisabled(false);
   }
 }
 
@@ -327,7 +378,17 @@ function connectAgentSession() {
   });
 }
 
-newGameButton?.addEventListener("click", () => void createRoom());
+newBotGameButton?.addEventListener("click", () => void createRoom("bots"));
+newAgentGameButton?.addEventListener("click", () => void createRoom("agent"));
+copyMcpButton?.addEventListener("click", async () => {
+  if (!mcpConfigText) return;
+  try {
+    await navigator.clipboard.writeText(mcpConfigText);
+    if (copyMcpButton instanceof HTMLButtonElement) copyMcpButton.textContent = "copied";
+  } catch {
+    if (copyMcpButton instanceof HTMLButtonElement) copyMcpButton.textContent = "copy failed";
+  }
+});
 resumeButton?.addEventListener("click", () => {
   attentionPauseRequested = false;
   if (isElement(attention)) attention.hidden = true;

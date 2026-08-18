@@ -1,0 +1,71 @@
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.mcp-setup {
+  margin: 18px 30px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.mcp-setup[hidden] {
+  display: none;
+}
+
+.mcp-setup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.mcp-setup-head .section-label {
+  margin-bottom: 7px;
+}
+
+.mcp-setup-head strong {
+  font: 13px/1.5 var(--mono);
+  font-weight: 500;
+}
+
+.mcp-note {
+  margin: 14px 0;
+  max-width: 720px;
+  color: var(--muted);
+  font: 12px/1.65 var(--mono);
+}
+
+.mcp-note code {
+  color: var(--text);
+}
+
+.mcp-config {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  white-space: pre;
+  font: 12px/1.65 var(--mono);
+}
+
+@media (max-width: 700px) {
+  .start-actions {
+    flex-direction: column;
+  }
+
+  .mcp-setup {
+    margin-left: 18px;
+    margin-right: 18px;
+  }
+
+  .mcp-setup-head {
+    flex-direction: column;
+    gap: 10px;
+  }
+}

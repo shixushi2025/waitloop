@@ -8,6 +8,7 @@
     <title>Dou Dizhu · Waitloop</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/game.css" />
+    <link rel="stylesheet" href="/mcp-setup.css" />
   </head>
   <body>
     <main class="shell game-shell">
@@ -22,7 +23,7 @@
       <section class="game-intro">
         <p class="eyebrow">games / doudizhu / alpha</p>
         <h1>Dou Dizhu,<br />without the casino.</h1>
-        <p class="lede">One human, two deliberately simple bots. The server owns the rules and hidden hands.</p>
+        <p class="lede">The server owns the rules and hidden hands. Start with two simple bots, or leave one seat for an MCP-connected agent.</p>
       </section>
 
       <section class="attention" id="attention" hidden aria-live="assertive">
@@ -40,11 +41,28 @@
         </div>
 
         <div class="game-start" id="game-start">
-          <p>Start a local alpha room. You are the landlord; two server-side bots fill the other seats.</p>
-          <button class="command-button" id="new-game" type="button"><span>&gt;</span> new game</button>
+          <div>
+            <p>Choose the smallest useful setup. Both modes keep hidden cards server-side.</p>
+            <div class="start-actions">
+              <button class="command-button" id="new-bot-game" type="button"><span>&gt;</span> you + 2 bots</button>
+              <button class="command-button" id="new-agent-game" type="button"><span>&gt;</span> you + agent + bot</button>
+            </div>
+          </div>
         </div>
 
         <div id="game-view" hidden>
+          <section class="mcp-setup" id="mcp-setup" hidden aria-label="MCP seat setup">
+            <div class="mcp-setup-head">
+              <div>
+                <p class="section-label">agent_seat/</p>
+                <strong>Connect one agent to this room.</strong>
+              </div>
+              <button class="text-button" id="copy-mcp" type="button">copy config</button>
+            </div>
+            <p class="mcp-note">The seat token authorizes only the <code>agent</code> seat in this room. It is shown once; do not commit or share it.</p>
+            <pre class="mcp-config" id="mcp-config"></pre>
+          </section>
+
           <dl class="status-grid game-status">
             <dt>role</dt>
             <dd id="role-value">-</dd>
