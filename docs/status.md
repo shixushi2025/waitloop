@@ -62,10 +62,13 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - generic game registry boundary
 - local-alpha room creation API
 - authoritative move application
-- two simple server-side bot seats
+- simple server-side bot seats
 - WebSocket room snapshots
 - terminal/IDE-like Dou Dizhu web UI
-- linked agent state can pause the game UI/runtime
+- `you + 2 bots` room mode
+- `you + agent + bot` room mode
+- one-time MCP seat setup output for the agent room
+- linked coding-agent state can pause the game UI/runtime
 
 ### MCP
 
@@ -75,30 +78,33 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - `get_turn()`
 - `play_move(expectedRevision, moveId)`
 - seat tokens hashed before Durable Object persistence
+- agent seat token is returned only when the room is created and is not placed in the room URL
 
 ## Still required before a public beta
 
-- clean CI confirmation on the complete dependency graph and lockfile
+- clean CI confirmation on the complete dependency graph and a committed lockfile
 - device/account pairing instead of alpha bearer tokens
 - authenticated browser WebSocket flow
 - room lifecycle/expiry cleanup
 - rate limiting
 - production CSP/CORS/auth hardening
 - game state persistence migration tests
-- full Dou Dizhu bidding, scoring, and rule-profile documentation
+- full Dou Dizhu bidding and scoring
 - robust reconnect/recovery UX
 - install/update/uninstall CLI
+- packaged dynamic MCP setup for supported coding agents
 
 ## Next implementation order
 
-1. Validate/fix the current workspace in CI.
-2. Add a human + agent + bot room creation UX and MCP setup output.
-3. Finish the Claude Code integration around that setup flow.
+1. Validate/fix the current workspace in CI and commit a lockfile.
+2. Build the Waitloop installer/pairing flow so browser/API auth no longer depends on development-only tokens.
+3. Finish Claude Code setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
 4. Add Cursor adapter.
 5. Add Codex adapter.
 6. Add DSH adapter.
-7. Deploy the first Cloudflare preview.
-8. Only after the waiting loop is solid, add more games and Arena experiments.
+7. Deploy the first authenticated Cloudflare preview.
+8. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
+9. Only then add more games and Arena experiments.
 
 ## v0.1 acceptance target
 
