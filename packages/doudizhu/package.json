@@ -1,0 +1,12 @@
+{
+  "name": "@waitloop/doudizhu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@waitloop/game-core": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
