@@ -150,7 +150,6 @@ async function commandPair(args: string[]): Promise<void> {
   console.log("paired");
   console.log(`device    ${result.deviceId}`);
   console.log(`scopes    ${result.scopes.join(", ")}`);
-  console.log(`mode      ${result.mode}`);
   console.log("credential stored privately; raw token was not printed");
 }
 
