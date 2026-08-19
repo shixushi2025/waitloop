@@ -1,8 +1,8 @@
 # Waitloop CLI
 
-The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, device credentials, agent detection, lifecycle hook installation, diagnostics, and opening the current waiting session.
+The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, device pairing, lifecycle hook installation, diagnostics, and opening the current waiting session.
 
-It is deliberately thin. Game rules, room authority, MCP tools, and remote session state remain server-side.
+Game rules, room authority, hosted game agents, MCP tools, and remote session state remain server-side.
 
 ## Goals
 
@@ -20,17 +20,11 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
 ├── config.json
 └── state/
     ├── claude-code/
-    │   ├── <hashed-native-session>.json
-    │   └── latest.json
     ├── cursor/
-    │   ├── <hashed-native-session>.json
-    │   └── latest.json
     └── codex/
-        ├── <hashed-native-session>.json
-        └── latest.json
 ```
 
-`config.json` is written with private-file permissions where the OS supports them. A paired alpha configuration looks like:
+A paired configuration looks like:
 
 ```json
 {
@@ -41,64 +35,85 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
 }
 ```
 
-The device ID is only local/display identity. Authorization comes from the scoped `deviceToken`.
+The device ID is metadata only. Authorization comes from the scoped `deviceToken`. Raw device credentials are not stored server-side; the server persists only a SHA-256 digest.
 
-Legacy `ingestToken` and alpha `accessToken` fields remain readable for migration/development. A successful device pairing removes the saved legacy lifecycle ingest token from the normal path.
+Native agent session identifiers are used only as local correlation inputs and are hashed before they become local temporary filenames. They are not emitted in Waitloop lifecycle events.
 
-Local turn state contains only:
+## Current alpha install
 
-- adapter ID (`claude-code`, `cursor`, or `codex`)
-- opaque Waitloop turn ID
-- lifecycle state
-- start/update timestamps
+The CLI package exists in this repository as `@waitloop/cli`, but it is not yet a public npm release.
 
-Native agent session identifiers are hashed only for temporary local filenames and are never sent to Waitloop.
+Current source install:
+
+```bash
+git clone https://github.com/shixushi2025/waitloop.git
+cd waitloop
+pnpm install --frozen-lockfile
+pnpm build:cli
+npm install -g ./packages/cli
+```
+
+Then:
+
+```bash
+waitloop init --url https://waitloop.run
+waitloop pair
+waitloop doctor
+```
+
+The canonical external-agent installation guide is also published at:
+
+```text
+https://waitloop.run/agent.md
+```
 
 ## Commands
 
 ### Initialize
 
 ```bash
-waitloop init
+waitloop init --url https://waitloop.run
 ```
 
-Options:
+Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install supported lifecycle adapters.
 
-```text
---url URL
---ingest-token TOKEN       # legacy migration only
---access-token TOKEN       # alpha/private bootstrap only
---yes
-```
-
-Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install all detected lifecycle adapters that Waitloop currently supports.
+Development/migration options such as `--ingest-token` and `--access-token` remain available but are not part of the normal public setup path.
 
 ### Pair a device
 
-The credential substrate is implemented now. Until the public browser/account approval flow exists, remote alpha environments use privileged bootstrap authority:
+Normal public flow:
+
+```bash
+waitloop pair
+```
+
+The CLI:
+
+1. ensures a local device identity exists;
+2. creates a short-lived pairing request;
+3. keeps a high-entropy verifier locally;
+4. opens or prints the browser approval URL;
+5. waits for explicit browser approval;
+6. exchanges the verifier for one `agent:write` device credential;
+7. stores that credential privately;
+8. removes the saved legacy lifecycle ingest token from the normal path.
+
+Use:
+
+```bash
+waitloop pair --no-open
+```
+
+when the CLI should print the approval URL without opening a browser.
+
+The privileged bootstrap path remains only for development/recovery:
 
 ```bash
 WAITLOOP_BOOTSTRAP_TOKEN=... waitloop pair
-```
-
-or, for development only:
-
-```bash
 waitloop pair --bootstrap-token TOKEN
 ```
 
-Prefer the environment variable because command-line arguments can be retained by shell history/process inspection.
-
-`waitloop pair`:
-
-1. creates local config/device identity if necessary;
-2. calls `POST /api/v1/devices/bootstrap`;
-3. receives one `agent:write` device credential;
-4. stores the credential privately;
-5. never prints the raw credential;
-6. removes the saved legacy lifecycle ingest token after successful migration.
-
-The server persists only the SHA-256 digest of the raw device credential. See [`pairing.md`](pairing.md) for the authorization model and the planned short-lived browser approval flow.
+Do not use the Worker-wide bootstrap/access authority as a normal end-user credential.
 
 ### Unpair
 
@@ -106,7 +121,7 @@ The server persists only the SHA-256 digest of the raw device credential. See [`
 waitloop unpair
 ```
 
-The CLI first self-revokes the remote device credential, then removes it locally. If Waitloop is unreachable or returns a server error, the local credential is retained so revocation can be retried instead of silently abandoning a still-valid remote credential. A `401` means it is already invalid remotely and is safe to remove locally.
+The CLI first self-revokes the remote device credential and then removes it locally. If Waitloop is unreachable or returns a server error, the local credential is retained so revocation can be retried.
 
 ### Diagnostics
 
@@ -130,11 +145,11 @@ waitloop uninstall codex
 waitloop uninstall all
 ```
 
-Installers merge only Waitloop-owned hook entries and preserve unrelated user hooks. Uninstallers remove only handlers whose command exactly matches the Waitloop command for that adapter.
+Installers merge only Waitloop-owned hook entries and preserve unrelated user hooks. Uninstallers remove only Waitloop-owned handlers.
 
 ## Claude Code lifecycle integration
 
-The Claude installer writes to `~/.claude/settings.json` and installs:
+The CLI installer writes Waitloop hooks into the user's Claude configuration and runs:
 
 ```text
 waitloop hook claude-code
@@ -151,17 +166,25 @@ StopFailure                         failed
 SessionEnd                          local cleanup
 ```
 
-The hook receives Claude's hook JSON on stdin but reads only `session_id` and `hook_event_name`. Prompt text, current directory, transcript path, tool input, and tool output are ignored.
+The hook receives Claude hook JSON on stdin but reads only the native session correlation field and hook event name. Prompt text, current directory, transcript path, tool input, and tool output are ignored.
+
+A source-only alpha Claude Code plugin also exists at:
+
+```text
+integrations/claude-code/
+```
+
+For normal product setup, prefer the CLI installer so lifecycle configuration and pairing stay centralized.
 
 ## Cursor lifecycle integration
 
-The Cursor installer writes version-1 hooks to `~/.cursor/hooks.json` and installs:
+The Cursor installer writes version-1 Waitloop hooks to the user Cursor hook configuration and installs:
 
 ```text
 waitloop hook cursor
 ```
 
-for these events:
+Current mapping:
 
 ```text
 beforeSubmitPrompt   running
@@ -170,19 +193,17 @@ stop/aborted|error   failed
 sessionEnd           local cleanup
 ```
 
-The adapter uses `conversation_id` (or `generation_id` as a fallback) only as a local correlation key. That native ID is hashed before it is used in a local filename and is not included in the Waitloop network event. Prompt text, repository paths, output text, and any other Cursor hook fields are ignored.
-
-The hook returns an empty JSON object so Waitloop does not attempt to steer or block Cursor's agent loop.
+Cursor native conversation/generation identifiers remain local correlation inputs and are not emitted in Waitloop lifecycle network events.
 
 ## Codex lifecycle integration
 
-The Codex installer writes user-level hooks to `~/.codex/hooks.json` and installs:
+The Codex installer writes user-level Waitloop hooks and installs:
 
 ```text
 waitloop hook codex
 ```
 
-for these events:
+Current mapping:
 
 ```text
 UserPromptSubmit   running
@@ -191,11 +212,13 @@ Stop               completed
 SessionEnd         local cleanup
 ```
 
-Waitloop uses only Codex's `session_id` and `hook_event_name` for local correlation. It does not read or emit prompt text, `turn_id`, working directory, transcript path, tool input, or the last assistant message.
+After installation, the user must review/trust the Waitloop hook in Codex's `/hooks` UI. Waitloop must not bypass that trust step.
 
-`UserPromptSubmit`, `PermissionRequest`, and `Stop` are installed as background hooks so lifecycle reporting cannot control or delay the agent loop. `SessionEnd` remains synchronous because Codex treats that event synchronously.
+Prompt text, working directory, transcript data, tool input, assistant output, native `session_id`, and native `turn_id` are not emitted to Waitloop.
 
-Codex requires non-managed command hooks to be reviewed and trusted. After installing the adapter, use Codex's `/hooks` UI to review the exact Waitloop hook definition before expecting lifecycle events.
+## DSH
+
+DSH detection exists, but the lifecycle adapter is still planned. Do not invent a `waitloop install dsh` command until the implementation/status manifest says it is available.
 
 ## Current turn
 
@@ -205,7 +228,7 @@ waitloop open
 waitloop open --print
 ```
 
-`status` reads only adapter-local `latest.json` files. If multiple adapters have recent turns, all are shown newest first. `open` prefers a running/waiting turn and adds only its opaque Waitloop session ID as the `session` query parameter.
+`status` reads only adapter-local latest-state files. `open` prefers a running/waiting turn and includes only the opaque Waitloop session ID in the browser URL.
 
 ### Inspect configuration safely
 
@@ -213,41 +236,40 @@ waitloop open --print
 waitloop config
 ```
 
-Secret values are redacted; output shows only whether device, legacy ingest, and alpha access credentials are configured.
+Secret values are redacted.
 
 ## Lifecycle credential order
 
-Lifecycle delivery chooses credentials in this order:
+Lifecycle delivery prefers:
 
 ```text
 1. WAITLOOP_DEVICE_TOKEN
 2. config deviceToken
-3. WAITLOOP_INGEST_TOKEN       (legacy)
-4. config ingestToken          (legacy)
+3. WAITLOOP_INGEST_TOKEN       (legacy migration)
+4. config ingestToken          (legacy migration)
 ```
 
-The device credential is scoped to lifecycle ingestion (`agent:write`). It does not grant room administration, browser private API access, or arbitrary MCP seat access.
+The device credential is scoped to lifecycle ingestion (`agent:write`). It does not grant arbitrary game, browser, admin, or MCP access.
 
 ## Hook delivery behavior
 
-Lifecycle delivery is best-effort and fail-open. The default HTTP timeout is one second so a Waitloop outage does not become an agent outage. Development can override this with:
+Lifecycle delivery is best-effort and fail-open. The default HTTP timeout is short so a Waitloop outage cannot become an agent outage. Development can override the timeout with:
 
 ```text
 WAITLOOP_HOOK_TIMEOUT_MS
 ```
 
-The value is capped at ten seconds.
+The value is bounded.
 
-## Public pairing still to build
+## Game MCP is separate
 
-The server/CLI device credential model is implemented, but the current remote issuance path is deliberately an **alpha bootstrap**, not the final user-facing pairing flow.
+Installing lifecycle hooks does not globally install a playable MCP seat.
 
-The next public flow will use:
+A connected-agent room creates a separate room/seat capability for:
 
-1. short-lived pairing request from the CLI;
-2. explicit browser/account approval;
-3. a local high-entropy verifier kept out of the browser URL;
-4. one-time exchange for the same scoped/revocable device credential model;
-5. account device listing/revocation.
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+```
 
-That work can be added without changing the agent lifecycle event protocol or the installed Claude/Cursor/Codex adapters.
+That seat credential is temporary and must remain separate from the long-lived device lifecycle credential. See [`mcp.md`](mcp.md).
