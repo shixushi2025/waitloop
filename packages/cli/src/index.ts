@@ -70,7 +70,11 @@ async function commandInit(args: string[]): Promise<void> {
   const url = optionValue(args, "--url");
   const ingestToken = optionValue(args, "--ingest-token");
   const accessToken = optionValue(args, "--access-token");
-  const config = createConfig({ previous, url, ingestToken, accessToken });
+  const configInput: Parameters<typeof createConfig>[0] = { previous };
+  if (url !== undefined) configInput.url = url;
+  if (ingestToken !== undefined) configInput.ingestToken = ingestToken;
+  if (accessToken !== undefined) configInput.accessToken = accessToken;
+  const config = createConfig(configInput);
   await saveConfig(config);
 
   console.log("waitloop init\n");
