@@ -12,6 +12,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build:cli": "pnpm --filter @waitloop/cli build",
+    "check:cli-package": "node scripts/validate-cli-package.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
