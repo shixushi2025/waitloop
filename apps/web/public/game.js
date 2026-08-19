@@ -7,7 +7,10 @@ const connectionStatus = document.querySelector("#connection-status");
 const gameStart = document.querySelector("#game-start");
 const gameView = document.querySelector("#game-view");
 const newBotGameButton = document.querySelector("#new-bot-game");
-const newAgentGameButton = document.querySelector("#new-agent-game");
+const newConnectedAgentGameButton = document.querySelector("#new-connected-agent-game");
+const hostedAgentActions = document.querySelector("#hosted-agent-actions");
+const hostedAgentStatus = document.querySelector("#hosted-agent-status");
+const createError = document.querySelector("#create-error");
 const roleValue = document.querySelector("#role-value");
 const turnValue = document.querySelector("#turn-value");
 const revisionValue = document.querySelector("#revision-value");
@@ -32,6 +35,8 @@ let roomReconnectTimer = null;
 let sessionSocket = null;
 let attentionPauseRequested = false;
 let mcpConfigText = "";
+let hostedAgents = [];
+let createInFlight = false;
 
 function isElement(value) {
   return value instanceof HTMLElement;
@@ -54,6 +59,18 @@ function isGameSnapshot(value) {
   );
 }
 
+function participantFor(current, playerId) {
+  return Array.isArray(current?.participants)
+    ? current.participants.find((participant) => participant?.id === playerId) ?? null
+    : null;
+}
+
+function playerLabel(current, playerId) {
+  if (!playerId) return "room";
+  if (playerId === VIEWER_ID) return "you";
+  return participantFor(current, playerId)?.label ?? playerId;
+}
+
 function updateUrl() {
   const url = new URL(window.location.href);
   if (roomId) url.searchParams.set("room", roomId);
@@ -65,19 +82,36 @@ function setConnection(text) {
   if (isElement(connectionStatus)) connectionStatus.textContent = text;
 }
 
+function setCreateError(message = "") {
+  if (!isElement(createError)) return;
+  createError.textContent = message;
+  createError.hidden = !message;
+}
+
 function setCreateButtonsDisabled(disabled) {
+  createInFlight = disabled;
   if (newBotGameButton instanceof HTMLButtonElement) newBotGameButton.disabled = disabled;
-  if (newAgentGameButton instanceof HTMLButtonElement) newAgentGameButton.disabled = disabled;
+  if (newConnectedAgentGameButton instanceof HTMLButtonElement) newConnectedAgentGameButton.disabled = disabled;
+  if (isElement(hostedAgentActions)) {
+    for (const button of hostedAgentActions.querySelectorAll("button")) {
+      if (button instanceof HTMLButtonElement) button.disabled = disabled;
+    }
+  }
 }
 
 function promptFor(current) {
   if (current.status === "finished") {
-    return current.state.winnerId === VIEWER_ID ? "you won · return to work when ready" : `${current.state.winnerId} won`;
+    return current.state.winnerId === VIEWER_ID
+      ? "you won · return to work when ready"
+      : `${playerLabel(current, current.state.winnerId)} won`;
   }
   if (current.status === "paused") return "game paused · work has priority";
   if (current.currentPlayerId === VIEWER_ID) return "your turn · choose a legal move";
-  if (current.currentPlayerId === "agent") return "agent turn · waiting for MCP move";
-  return `${current.currentPlayerId ?? "room"} is moving`;
+
+  const participant = participantFor(current, current.currentPlayerId);
+  if (participant?.kind === "connected-agent") return `${participant.label} turn · waiting for MCP move`;
+  if (participant?.kind === "hosted-agent") return `${participant.label} is thinking`;
+  return `${playerLabel(current, current.currentPlayerId)} is moving`;
 }
 
 function renderPlayers(current) {
@@ -85,16 +119,18 @@ function renderPlayers(current) {
   playersElement.replaceChildren();
 
   for (const player of current.state.players ?? []) {
+    const participant = participantFor(current, player.id);
     const row = document.createElement("div");
     row.className = `player${current.currentPlayerId === player.id ? " current" : ""}`;
 
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = player.id === VIEWER_ID ? "you" : player.id;
+    name.textContent = playerLabel(current, player.id);
+    if (participant?.model) name.title = participant.model;
 
     const role = document.createElement("span");
     role.className = "role";
-    role.textContent = player.role;
+    role.textContent = participant?.kind ? `${player.role} · ${participant.kind}` : player.role;
 
     const count = document.createElement("span");
     count.className = "count";
@@ -114,7 +150,7 @@ function renderLastMove(current) {
   }
 
   const cards = (last.cards ?? []).map((card) => rankLabel(card.rank)).join(" ");
-  lastMoveElement.textContent = `${last.playerId}  ${last.pattern?.kind ?? "play"}  ${cards}`;
+  lastMoveElement.textContent = `${playerLabel(current, last.playerId)}  ${last.pattern?.kind ?? "play"}  ${cards}`;
 }
 
 function renderHand(current) {
@@ -134,12 +170,14 @@ async function playMove(moveId) {
   if (!roomId || !snapshot || snapshot.status !== "playing") return;
 
   try {
+    setConnection("opponents moving");
+    if (isElement(gamePrompt)) gamePrompt.textContent = "move sent · resolving table";
     const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/moves`, {
       method: "POST",
+      credentials: "same-origin",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
         version: 1,
-        playerId: VIEWER_ID,
         expectedRevision: snapshot.revision,
         moveId,
       }),
@@ -147,7 +185,9 @@ async function playMove(moveId) {
     const body = await response.json();
     if (!response.ok) throw new Error(body?.error?.message ?? "move rejected");
     if (isGameSnapshot(body.snapshot)) render(body.snapshot);
+    setConnection("live");
   } catch (error) {
+    setConnection("move failed");
     if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "move failed";
   }
 }
@@ -191,7 +231,7 @@ function render(current) {
   if (isElement(gameStart)) gameStart.hidden = true;
   if (isElement(gameView)) gameView.hidden = false;
   if (isElement(roleValue)) roleValue.textContent = current.state.role ?? "-";
-  if (isElement(turnValue)) turnValue.textContent = current.currentPlayerId ?? "none";
+  if (isElement(turnValue)) turnValue.textContent = playerLabel(current, current.currentPlayerId);
   if (isElement(revisionValue)) revisionValue.textContent = String(current.revision);
   if (isElement(gameStatusValue)) gameStatusValue.textContent = current.status;
   if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(current);
@@ -228,7 +268,8 @@ async function loadRoom() {
   if (!roomId) return false;
 
   try {
-    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}?viewer=${encodeURIComponent(VIEWER_ID)}`, {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}`, {
+      credentials: "same-origin",
       headers: { accept: "application/json" },
     });
     const body = await response.json();
@@ -238,6 +279,7 @@ async function loadRoom() {
     return true;
   } catch (error) {
     setConnection("room unavailable");
+    setCreateError("This browser does not have access to that room, or the room no longer exists.");
     if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "room unavailable";
     return false;
   }
@@ -248,7 +290,7 @@ function connectRoomSocket() {
   if (roomSocket) roomSocket.close();
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  roomSocket = new WebSocket(`${protocol}//${window.location.host}/api/v1/rooms/${encodeURIComponent(roomId)}/ws?viewer=${encodeURIComponent(VIEWER_ID)}`);
+  roomSocket = new WebSocket(`${protocol}//${window.location.host}/api/v1/rooms/${encodeURIComponent(roomId)}/ws`);
 
   roomSocket.addEventListener("open", () => setConnection("live"));
   roomSocket.addEventListener("message", (event) => {
@@ -263,41 +305,32 @@ function connectRoomSocket() {
     }
   });
   roomSocket.addEventListener("close", () => {
+    if (!roomId) return;
     setConnection("reconnecting");
     window.clearTimeout(roomReconnectTimer);
     roomReconnectTimer = window.setTimeout(connectRoomSocket, 1500);
   });
 }
 
-async function createRoom(mode) {
+async function createRoom(mode, hostedAgentId) {
+  if (createInFlight) return;
   setCreateButtonsDisabled(true);
+  setCreateError("");
   setConnection("creating room");
   if (isElement(mcpSetup)) mcpSetup.hidden = true;
   mcpConfigText = "";
 
-  const agentMode = mode === "agent";
-  const payload = agentMode
-    ? {
-        version: 1,
-        gameId: "doudizhu",
-        playerIds: [VIEWER_ID, "agent", "bot"],
-        landlordId: VIEWER_ID,
-        viewerId: VIEWER_ID,
-        botPlayerIds: ["bot"],
-        agentPlayerId: "agent",
-      }
-    : {
-        version: 1,
-        gameId: "doudizhu",
-        playerIds: [VIEWER_ID, "bot-a", "bot-b"],
-        landlordId: VIEWER_ID,
-        viewerId: VIEWER_ID,
-        botPlayerIds: ["bot-a", "bot-b"],
-      };
+  const payload = {
+    version: 1,
+    gameId: "doudizhu",
+    mode,
+  };
+  if (mode === "hosted-agent") payload.hostedAgentId = hostedAgentId;
 
   try {
     const response = await fetch("/api/v1/rooms", {
       method: "POST",
+      credentials: "same-origin",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(payload),
     });
@@ -306,13 +339,15 @@ async function createRoom(mode) {
 
     roomId = body.roomId;
     render(body.snapshot);
-    if (agentMode && typeof body.agentSeatToken === "string") {
+    if (mode === "connected-agent" && typeof body.agentSeatToken === "string") {
       showMcpSetup(body.roomId, body.agentSeatToken);
     }
     connectRoomSocket();
   } catch (error) {
+    const message = error instanceof Error ? error.message : "create failed";
     setConnection("create failed");
-    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "create failed";
+    setCreateError(message);
+    if (isElement(gamePrompt)) gamePrompt.textContent = message;
   } finally {
     setCreateButtonsDisabled(false);
   }
@@ -324,8 +359,9 @@ async function setPaused(paused) {
   try {
     const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/${action}`, {
       method: "POST",
+      credentials: "same-origin",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ version: 1, viewerId: VIEWER_ID }),
+      body: JSON.stringify({ version: 1 }),
     });
     const body = await response.json();
     if (response.ok && isGameSnapshot(body.snapshot)) render(body.snapshot);
@@ -378,8 +414,42 @@ function connectAgentSession() {
   });
 }
 
+async function loadHostedAgents() {
+  if (!isElement(hostedAgentActions) || !isElement(hostedAgentStatus)) return;
+
+  try {
+    const response = await fetch("/api/v1/hosted-agents", { headers: { accept: "application/json" } });
+    const body = await response.json();
+    hostedAgents = response.ok && Array.isArray(body.agents) ? body.agents : [];
+  } catch {
+    hostedAgents = [];
+  }
+
+  hostedAgentActions.replaceChildren();
+  if (hostedAgents.length === 0) {
+    hostedAgentStatus.textContent = "No hosted model is configured on this deployment yet.";
+    return;
+  }
+
+  for (const agent of hostedAgents) {
+    if (!agent || typeof agent.id !== "string" || typeof agent.label !== "string") continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "command-button";
+    button.title = typeof agent.model === "string" ? agent.model : agent.label;
+
+    const prompt = document.createElement("span");
+    prompt.textContent = ">";
+    button.append(prompt, document.createTextNode(` you + ${agent.label} + bot`));
+    button.addEventListener("click", () => void createRoom("hosted-agent", agent.id));
+    hostedAgentActions.append(button);
+  }
+
+  hostedAgentStatus.textContent = "Hosted by Waitloop. Only that seat's visible game state is sent to the model provider.";
+}
+
 newBotGameButton?.addEventListener("click", () => void createRoom("bots"));
-newAgentGameButton?.addEventListener("click", () => void createRoom("agent"));
+newConnectedAgentGameButton?.addEventListener("click", () => void createRoom("connected-agent"));
 copyMcpButton?.addEventListener("click", async () => {
   if (!mcpConfigText) return;
   try {
@@ -405,4 +475,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 if (roomId) void loadRoom();
+void loadHostedAgents();
 connectAgentSession();
