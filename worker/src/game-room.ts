@@ -7,14 +7,34 @@ import {
   type StoredGameRoom,
   type StoredGameSnapshot,
 } from "./game-registry";
+import {
+  chooseHostedAgentMove,
+  type HostedAgentEnv,
+} from "./hosted-agent";
+import type {
+  GameParticipantV1,
+  HostedAgentDescriptorV1,
+  HostedAgentRuntimeStatsV1,
+} from "./participants";
 
-export interface GameRoomEnv {}
+export interface GameRoomEnv extends HostedAgentEnv {}
 
 interface PersistedGameRoomV1 {
   version: 1;
   room: StoredGameRoom;
   botPlayerIds: string[];
   seatTokenHashes: Record<string, string>;
+  viewerTokenHashes?: Record<string, string>;
+  participants?: GameParticipantV1[];
+  hostedAgents?: Record<string, HostedAgentDescriptorV1>;
+  hostedAgentStats?: Record<string, HostedAgentRuntimeStatsV1>;
+}
+
+interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
+  viewerTokenHashes: Record<string, string>;
+  participants: GameParticipantV1[];
+  hostedAgents: Record<string, HostedAgentDescriptorV1>;
+  hostedAgentStats: Record<string, HostedAgentRuntimeStatsV1>;
 }
 
 interface SocketAttachmentV1 {
@@ -22,10 +42,15 @@ interface SocketAttachmentV1 {
   viewerId: string;
 }
 
+export type GameRoomSnapshotV1 = StoredGameSnapshot & {
+  participants: GameParticipantV1[];
+  hostedAgentStats: HostedAgentRuntimeStatsV1[];
+};
+
 interface GameSocketMessageV1 {
   version: 1;
   type: "game.snapshot";
-  snapshot: StoredGameSnapshot;
+  snapshot: GameRoomSnapshotV1;
 }
 
 export type GameRoomRpcResult<T> =
@@ -39,6 +64,9 @@ export interface InitializeGameRoomRequest {
   viewerId: string;
   botPlayerIds: string[];
   seatTokens?: Record<string, string>;
+  viewerTokens?: Record<string, string>;
+  participants?: GameParticipantV1[];
+  hostedAgents?: Record<string, HostedAgentDescriptorV1>;
 }
 
 const STATE_KEY = "game-room-v1";
@@ -54,7 +82,7 @@ function failure(error: unknown): GameRoomRpcResult<never> {
   return { ok: false, error: { code: "invalid_game_state", message: "Unknown game error." } };
 }
 
-async function hashSeatToken(token: string): Promise<string> {
+async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -68,57 +96,158 @@ function constantTimeEqual(a: string, b: string): boolean {
   return difference === 0;
 }
 
+function normalizeState(state: PersistedGameRoomV1): NormalizedGameRoomV1 {
+  return {
+    ...state,
+    viewerTokenHashes: { ...(state.viewerTokenHashes ?? {}) },
+    participants: [...(state.participants ?? [])],
+    hostedAgents: { ...(state.hostedAgents ?? {}) },
+    hostedAgentStats: { ...(state.hostedAgentStats ?? {}) },
+  };
+}
+
+function fallbackMove(snapshot: StoredGameSnapshot) {
+  return snapshot.legalMoves.find((candidate) => candidate.id !== "pass") ?? snapshot.legalMoves[0];
+}
+
 export class GameRoom extends DurableObject<GameRoomEnv> {
-  private async readState(): Promise<PersistedGameRoomV1 | null> {
-    return (await this.ctx.storage.get<PersistedGameRoomV1>(STATE_KEY)) ?? null;
+  private readonly runtimeEnv: GameRoomEnv;
+
+  constructor(ctx: DurableObjectState, env: GameRoomEnv) {
+    super(ctx, env);
+    this.runtimeEnv = env;
   }
 
-  private async writeState(state: PersistedGameRoomV1): Promise<void> {
+  private async readState(): Promise<NormalizedGameRoomV1 | null> {
+    const state = (await this.ctx.storage.get<PersistedGameRoomV1>(STATE_KEY)) ?? null;
+    return state ? normalizeState(state) : null;
+  }
+
+  private async writeState(state: NormalizedGameRoomV1): Promise<void> {
     await this.ctx.storage.put(STATE_KEY, state);
   }
 
-  private snapshot(state: PersistedGameRoomV1, viewerId: string): StoredGameSnapshot {
-    return getRegisteredGame(state.room.gameId).snapshot(state.room, viewerId);
+  private snapshot(state: NormalizedGameRoomV1, viewerId: string): GameRoomSnapshotV1 {
+    const snapshot = getRegisteredGame(state.room.gameId).snapshot(state.room, viewerId);
+    return {
+      ...snapshot,
+      participants: state.participants.map((participant) => ({ ...participant })),
+      hostedAgentStats: Object.values(state.hostedAgentStats).map((stats) => ({ ...stats })),
+    };
   }
 
-  private async resolveSeat(state: PersistedGameRoomV1, token: string): Promise<string | null> {
+  private async resolveToken(
+    tokenHashes: Record<string, string>,
+    token: string,
+  ): Promise<string | null> {
     if (token.length < 24 || token.length > 256) return null;
-    const hash = await hashSeatToken(token);
+    const hash = await hashToken(token);
 
-    for (const [playerId, expectedHash] of Object.entries(state.seatTokenHashes)) {
+    for (const [playerId, expectedHash] of Object.entries(tokenHashes)) {
       if (constantTimeEqual(hash, expectedHash)) return playerId;
     }
     return null;
   }
 
-  private runBots(state: PersistedGameRoomV1): PersistedGameRoomV1 {
-    let room = state.room;
-    const game = getRegisteredGame(room.gameId);
+  private resolveSeat(state: NormalizedGameRoomV1, token: string): Promise<string | null> {
+    return this.resolveToken(state.seatTokenHashes, token);
+  }
 
-    for (let step = 0; step < MAX_AUTOMATED_MOVES && room.status === "playing"; step += 1) {
-      let botSnapshot: StoredGameSnapshot | null = null;
-      for (const botId of state.botPlayerIds) {
-        const candidate = game.snapshot(room, botId);
-        if (candidate.currentPlayerId === botId) {
-          botSnapshot = candidate;
-          break;
-        }
+  private resolveViewer(state: NormalizedGameRoomV1, token: string): Promise<string | null> {
+    return this.resolveToken(state.viewerTokenHashes, token);
+  }
+
+  private updateHostedStats(
+    state: NormalizedGameRoomV1,
+    playerId: string,
+    decision: Awaited<ReturnType<typeof chooseHostedAgentMove>>,
+    usedFallback: boolean,
+  ): NormalizedGameRoomV1 {
+    const current = state.hostedAgentStats[playerId] ?? {
+      version: 1,
+      playerId,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalLatencyMs: 0,
+      fallbackMoves: 0,
+    };
+
+    const next: HostedAgentRuntimeStatsV1 = {
+      version: 1,
+      playerId,
+      calls: current.calls + 1,
+      inputTokens: current.inputTokens + decision.inputTokens,
+      outputTokens: current.outputTokens + decision.outputTokens,
+      totalLatencyMs: current.totalLatencyMs + decision.latencyMs,
+      fallbackMoves: current.fallbackMoves + (usedFallback ? 1 : 0),
+    };
+    if (decision.error) next.lastError = decision.error;
+
+    return {
+      ...state,
+      hostedAgentStats: {
+        ...state.hostedAgentStats,
+        [playerId]: next,
+      },
+    };
+  }
+
+  private async runAutomatedPlayers(state: NormalizedGameRoomV1): Promise<NormalizedGameRoomV1> {
+    let next = state;
+    const game = getRegisteredGame(next.room.gameId);
+
+    for (let step = 0; step < MAX_AUTOMATED_MOVES && next.room.status === "playing"; step += 1) {
+      const probePlayerId = next.participants[0]?.id ?? next.botPlayerIds[0] ?? Object.keys(next.hostedAgents)[0];
+      if (!probePlayerId) break;
+
+      const probe = game.snapshot(next.room, probePlayerId);
+      const currentPlayerId = probe.currentPlayerId;
+      if (!currentPlayerId) break;
+
+      if (next.botPlayerIds.includes(currentPlayerId)) {
+        const botSnapshot = game.snapshot(next.room, currentPlayerId);
+        const move = fallbackMove(botSnapshot);
+        if (!move) break;
+        next = {
+          ...next,
+          room: game.applyMove(next.room, {
+            version: 1,
+            roomId: next.room.roomId,
+            playerId: currentPlayerId,
+            expectedRevision: next.room.revision,
+            moveId: move.id,
+          }),
+        };
+        continue;
       }
-      if (!botSnapshot) break;
 
-      const move = botSnapshot.legalMoves.find((candidate) => candidate.id !== "pass") ?? botSnapshot.legalMoves[0];
+      const hostedAgent = next.hostedAgents[currentPlayerId];
+      if (!hostedAgent) break;
+
+      const hostedSnapshot = game.snapshot(next.room, currentPlayerId);
+      const decision = await chooseHostedAgentMove(this.runtimeEnv, hostedAgent, hostedSnapshot);
+      const selected = decision.ok && decision.moveId
+        ? hostedSnapshot.legalMoves.find((move) => move.id === decision.moveId)
+        : undefined;
+      const move = selected ?? fallbackMove(hostedSnapshot);
       if (!move) break;
 
-      room = game.applyMove(room, {
-        version: 1,
-        roomId: room.roomId,
-        playerId: botSnapshot.viewerId,
-        expectedRevision: room.revision,
-        moveId: move.id,
-      });
+      const usedFallback = selected === undefined;
+      next = this.updateHostedStats(next, currentPlayerId, decision, usedFallback);
+      next = {
+        ...next,
+        room: game.applyMove(next.room, {
+          version: 1,
+          roomId: next.room.roomId,
+          playerId: currentPlayerId,
+          expectedRevision: next.room.revision,
+          moveId: move.id,
+        }),
+      };
     }
 
-    return room === state.room ? state : { ...state, room };
+    return next;
   }
 
   private async sendSnapshot(ws: WebSocket): Promise<void> {
@@ -146,7 +275,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  private async broadcast(state: PersistedGameRoomV1): Promise<void> {
+  private async broadcast(state: NormalizedGameRoomV1): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as SocketAttachmentV1 | null;
       if (!attachment || attachment.version !== 1) continue;
@@ -166,7 +295,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async initialize(request: InitializeGameRoomRequest): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  async initialize(request: InitializeGameRoomRequest): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       if (await this.readState()) {
         return { ok: false, error: { code: "room_exists", message: "Game room is already initialized." } };
@@ -180,20 +309,45 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       game.snapshot(room, request.viewerId);
       for (const botId of request.botPlayerIds) game.snapshot(room, botId);
 
+      const participants = request.participants ?? [];
+      if (participants.length > 0) {
+        if (participants.length !== 3 || new Set(participants.map((item) => item.id)).size !== participants.length) {
+          throw new Error("participants must describe exactly three distinct players.");
+        }
+        for (const participant of participants) game.snapshot(room, participant.id);
+      }
+
       const seatTokenHashes: Record<string, string> = {};
       for (const [playerId, token] of Object.entries(request.seatTokens ?? {})) {
         game.snapshot(room, playerId);
         if (request.botPlayerIds.includes(playerId)) throw new Error("Bot seats cannot receive MCP seat tokens.");
-        seatTokenHashes[playerId] = await hashSeatToken(token);
+        seatTokenHashes[playerId] = await hashToken(token);
       }
 
-      let state: PersistedGameRoomV1 = {
+      const viewerTokenHashes: Record<string, string> = {};
+      for (const [playerId, token] of Object.entries(request.viewerTokens ?? {})) {
+        game.snapshot(room, playerId);
+        viewerTokenHashes[playerId] = await hashToken(token);
+      }
+
+      const hostedAgents = { ...(request.hostedAgents ?? {}) };
+      for (const playerId of Object.keys(hostedAgents)) {
+        game.snapshot(room, playerId);
+        if (request.botPlayerIds.includes(playerId)) throw new Error("Hosted agent seats cannot also be bot seats.");
+        if (seatTokenHashes[playerId]) throw new Error("Hosted agent seats cannot also be MCP-connected seats.");
+      }
+
+      let state: NormalizedGameRoomV1 = {
         version: 1,
         room,
         botPlayerIds: [...request.botPlayerIds],
         seatTokenHashes,
+        viewerTokenHashes,
+        participants: participants.map((participant) => ({ ...participant })),
+        hostedAgents,
+        hostedAgentStats: {},
       };
-      state = this.runBots(state);
+      state = await this.runAutomatedPlayers(state);
       await this.writeState(state);
       return { ok: true, value: this.snapshot(state, request.viewerId) };
     } catch (error) {
@@ -201,7 +355,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async getSnapshot(viewerId: string): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  async getSnapshot(viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
@@ -211,7 +365,19 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async getSnapshotBySeatToken(seatToken: string): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  async getSnapshotByViewerToken(viewerToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
+      const playerId = await this.resolveViewer(state, viewerToken);
+      if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
+      return { ok: true, value: this.snapshot(state, playerId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async getSnapshotBySeatToken(seatToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
@@ -223,16 +389,50 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async applyMove(command: GameMoveCommandV1, viewerId: string): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  private async applyPlayerMove(
+    state: NormalizedGameRoomV1,
+    playerId: string,
+    expectedRevision: number,
+    moveId: string,
+  ): Promise<NormalizedGameRoomV1> {
+    const game = getRegisteredGame(state.room.gameId);
+    const moved = game.applyMove(state.room, {
+      version: 1,
+      roomId: state.room.roomId,
+      playerId,
+      expectedRevision,
+      moveId,
+    });
+    return this.runAutomatedPlayers({ ...state, room: moved });
+  }
+
+  async applyMove(command: GameMoveCommandV1, viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
-      const game = getRegisteredGame(state.room.gameId);
-      const moved = game.applyMove(state.room, command);
-      const next = this.runBots({ ...state, room: moved });
+      const next = await this.applyPlayerMove(state, command.playerId, command.expectedRevision, command.moveId);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, viewerId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async applyMoveByViewerToken(
+    viewerToken: string,
+    expectedRevision: number,
+    moveId: string,
+  ): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
+      const playerId = await this.resolveViewer(state, viewerToken);
+      if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
+      const next = await this.applyPlayerMove(state, playerId, expectedRevision, moveId);
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, playerId) };
     } catch (error) {
       return failure(error);
     }
@@ -242,22 +442,13 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     seatToken: string,
     expectedRevision: number,
     moveId: string,
-  ): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  ): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
       const playerId = await this.resolveSeat(state, seatToken);
       if (!playerId) return { ok: false, error: { code: "invalid_seat_token", message: "Seat token is invalid." } };
-
-      const game = getRegisteredGame(state.room.gameId);
-      const moved = game.applyMove(state.room, {
-        version: 1,
-        roomId: state.room.roomId,
-        playerId,
-        expectedRevision,
-        moveId,
-      });
-      const next = this.runBots({ ...state, room: moved });
+      const next = await this.applyPlayerMove(state, playerId, expectedRevision, moveId);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, playerId) };
@@ -266,7 +457,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async pause(viewerId: string): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  async pause(viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
@@ -280,13 +471,29 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
-  async resume(viewerId: string): Promise<GameRoomRpcResult<StoredGameSnapshot>> {
+  async pauseByViewerToken(viewerToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
+      const playerId = await this.resolveViewer(state, viewerToken);
+      if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
+      const game = getRegisteredGame(state.room.gameId);
+      const next = { ...state, room: game.pause(state.room) };
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, playerId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async resume(viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
       const game = getRegisteredGame(state.room.gameId);
       let next = { ...state, room: game.resume(state.room) };
-      next = this.runBots(next);
+      next = await this.runAutomatedPlayers(next);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, viewerId) };
@@ -295,20 +502,49 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
+  async resumeByViewerToken(viewerToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
+      const playerId = await this.resolveViewer(state, viewerToken);
+      if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
+      const game = getRegisteredGame(state.room.gameId);
+      let next = { ...state, room: game.resume(state.room) };
+      next = await this.runAutomatedPlayers(next);
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, playerId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const viewerId = url.searchParams.get("viewer");
-    if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket" || !viewerId) {
-      return new Response("Expected a WebSocket upgrade with viewer.", { status: 426 });
+    if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected a WebSocket upgrade.", { status: 426 });
     }
 
     const state = await this.readState();
     if (!state) return new Response("Room not found.", { status: 404 });
-    try {
-      this.snapshot(state, viewerId);
-    } catch {
-      return new Response("Viewer not in room.", { status: 403 });
+
+    const viewerToken = request.headers.get("x-waitloop-viewer-token");
+    let viewerId: string | null = null;
+    if (viewerToken) viewerId = await this.resolveViewer(state, viewerToken);
+
+    if (!viewerId) {
+      const url = new URL(request.url);
+      const legacyViewerId = url.searchParams.get("viewer");
+      if (legacyViewerId) {
+        try {
+          this.snapshot(state, legacyViewerId);
+          viewerId = legacyViewerId;
+        } catch {
+          viewerId = null;
+        }
+      }
     }
+
+    if (!viewerId) return new Response("Viewer is not authorized for this room.", { status: 403 });
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -319,11 +555,11 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async webSocketMessage(ws: WebSocket, _message: string | ArrayBuffer): Promise<void> {
+  override async webSocketMessage(ws: WebSocket, _message: string | ArrayBuffer): Promise<void> {
     await this.sendSnapshot(ws);
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
+  override async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
     ws.close(code, reason);
   }
 }
