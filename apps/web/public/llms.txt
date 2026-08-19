@@ -1,0 +1,12 @@
+# Waitloop
+
+> Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; games fill short waits; work immediately takes priority again when the agent needs attention.
+
+Canonical agent integration guide: https://waitloop.run/agent.md
+Machine-readable manifest: https://waitloop.run/agent.json
+Waitloop skill: https://waitloop.run/skills/waitloop/SKILL.md
+Game MCP endpoint: https://waitloop.run/mcp
+Health: https://waitloop.run/api/v1/health
+Source: https://github.com/shixushi2025/waitloop
+
+Important integration rule: lifecycle hooks and game MCP are separate. Hooks report running/waiting/completed/failed. MCP controls one authorized game seat and requires a room-specific seat token.
