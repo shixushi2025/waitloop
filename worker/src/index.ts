@@ -3,12 +3,17 @@ import { parseWaitloopAgentEvent } from "@waitloop/protocol";
 
 import { AgentSession } from "./agent-session";
 import { DeviceRegistry } from "./device-registry";
-import { GameRoom } from "./game-room";
+import { GameRoom, type GameRoomSnapshotV1 } from "./game-room";
 import {
   getHostedAgent,
   listHostedAgents,
   type HostedAgentEnv,
 } from "./hosted-agent";
+import {
+  getHumanHint,
+  resolveHumanCardSelection,
+  toHumanGameSnapshot,
+} from "./human-game";
 import { handleWaitloopMcp } from "./mcp";
 import { handlePairingApi } from "./pairing-api";
 import { PairingRequest } from "./pairing-request";
@@ -55,6 +60,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function rpcValue(result: object): unknown {
   if (!("value" in result)) throw new Error("Successful RPC result is missing a value.");
   return result.value;
+}
+
+function rpcSnapshot(result: object): GameRoomSnapshotV1 {
+  return rpcValue(result) as GameRoomSnapshotV1;
 }
 
 function isLocalHostname(hostname: string): boolean {
@@ -182,15 +191,16 @@ function parseSessionRoute(pathname: string): { sessionId: string; websocket: bo
   }
 }
 
-function parseRoomRoute(pathname: string): { roomId: string; action: "snapshot" | "moves" | "ws" | "pause" | "resume" } | null {
-  const match = /^\/api\/v1\/rooms\/([^/]+)(?:\/(moves|ws|pause|resume))?$/.exec(pathname);
+type RoomAction = "snapshot" | "moves" | "play" | "pass" | "hint" | "ws" | "pause" | "resume";
+
+function parseRoomRoute(pathname: string): { roomId: string; action: RoomAction } | null {
+  const match = /^\/api\/v1\/rooms\/([^/]+)(?:\/(moves|play|pass|hint|ws|pause|resume))?$/.exec(pathname);
   if (!match?.[1]) return null;
   try {
     const roomId = decodeURIComponent(match[1]);
     if (roomId.length === 0 || roomId.length > 128) return null;
-    const suffix = match[2];
-    const action = suffix === "moves" || suffix === "ws" || suffix === "pause" || suffix === "resume" ? suffix : "snapshot";
-    return { roomId, action };
+    const suffix = match[2] as RoomAction | undefined;
+    return { roomId, action: suffix ?? "snapshot" };
   } catch {
     return null;
   }
@@ -282,7 +292,6 @@ type RoomMode = "bots" | "hosted-agent" | "connected-agent";
 
 function roomMode(value: Record<string, unknown>): RoomMode | null {
   if (value.mode === "bots" || value.mode === "hosted-agent" || value.mode === "connected-agent") return value.mode;
-  // Backward compatibility for the first alpha web client.
   if (typeof value.agentPlayerId === "string") return "connected-agent";
   if (Array.isArray(value.botPlayerIds)) return "bots";
   return null;
@@ -373,7 +382,7 @@ async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<R
     version: 1,
     roomId,
     mode,
-    snapshot: rpcValue(result),
+    snapshot: toHumanGameSnapshot(rpcSnapshot(result)),
   };
   if (agentSeatToken) response.agentSeatToken = agentSeatToken;
 
@@ -383,11 +392,98 @@ async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<R
   });
 }
 
+async function requireViewerSnapshot(
+  stub: DurableObjectStub<GameRoom>,
+  viewerToken: string | null,
+): Promise<{ ok: true; snapshot: GameRoomSnapshotV1 } | { ok: false; response: Response }> {
+  if (!viewerToken) {
+    return { ok: false, response: apiError(401, "room_auth_required", "A room viewer credential is required.") };
+  }
+  const result = await stub.getSnapshotByViewerToken(viewerToken);
+  if (!result.ok) return { ok: false, response: gameRpcError(result.error.code, result.error.message) };
+  return { ok: true, snapshot: rpcSnapshot(result) };
+}
+
+async function handleHumanPlay(
+  request: Request,
+  stub: DurableObjectStub<GameRoom>,
+  viewerToken: string | null,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  const expectedRevision = body.expectedRevision;
+  const cardIds = body.cardIds;
+  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0 || !Array.isArray(cardIds) || !cardIds.every((id) => typeof id === "string")) {
+    return apiError(400, "invalid_play", "expectedRevision and cardIds are required.");
+  }
+
+  const current = await requireViewerSnapshot(stub, viewerToken);
+  if (!current.ok) return current.response;
+  if (current.snapshot.revision !== expectedRevision) {
+    return apiError(409, "stale_revision", "Room state changed. Refresh before playing.");
+  }
+  const move = resolveHumanCardSelection(current.snapshot, cardIds as string[]);
+  if (!move) return apiError(409, "illegal_selection", "Selected cards are not a legal play in the current state.");
+
+  const result = await stub.applyMoveByViewerToken(viewerToken!, expectedRevision as number, move.id);
+  if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+  return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
+}
+
+async function handleHumanPass(
+  request: Request,
+  stub: DurableObjectStub<GameRoom>,
+  viewerToken: string | null,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  const expectedRevision = body.expectedRevision;
+  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
+    return apiError(400, "invalid_pass", "expectedRevision is required.");
+  }
+
+  const current = await requireViewerSnapshot(stub, viewerToken);
+  if (!current.ok) return current.response;
+  if (current.snapshot.revision !== expectedRevision) {
+    return apiError(409, "stale_revision", "Room state changed. Refresh before passing.");
+  }
+  if (!current.snapshot.legalMoves.some((move) => move.id === "pass")) {
+    return apiError(409, "cannot_pass", "Passing is not legal in the current state.");
+  }
+
+  const result = await stub.applyMoveByViewerToken(viewerToken!, expectedRevision as number, "pass");
+  if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+  return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
+}
+
+async function handleHumanHint(
+  request: Request,
+  stub: DurableObjectStub<GameRoom>,
+  viewerToken: string | null,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  const expectedRevision = body.expectedRevision;
+  const cursor = body.cursor === undefined ? 0 : body.cursor;
+  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0 || !Number.isSafeInteger(cursor) || (cursor as number) < 0) {
+    return apiError(400, "invalid_hint", "expectedRevision and a non-negative cursor are required.");
+  }
+
+  const current = await requireViewerSnapshot(stub, viewerToken);
+  if (!current.ok) return current.response;
+  if (current.snapshot.revision !== expectedRevision) {
+    return apiError(409, "stale_revision", "Room state changed. Refresh before requesting a hint.");
+  }
+  const hint = getHumanHint(current.snapshot, cursor as number);
+  if (!hint) return apiError(409, "hint_unavailable", "No playable hint is available in the current state.");
+  return json({ version: 1, hint });
+}
+
 async function handleRoomRoute(
   request: Request,
   env: Env,
   url: URL,
-  route: { roomId: string; action: "snapshot" | "moves" | "ws" | "pause" | "resume" },
+  route: { roomId: string; action: RoomAction },
 ): Promise<Response> {
   const stub = env.GAME_ROOMS.getByName(route.roomId);
   const viewerToken = roomViewerToken(request, route.roomId);
@@ -395,9 +491,7 @@ async function handleRoomRoute(
   if (route.action === "ws") {
     if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
     if (viewerToken) {
-      const headers = new Headers(request.headers);
-      headers.set("x-waitloop-viewer-token", viewerToken);
-      return stub.fetch(new Request(request, { headers }));
+      return apiError(410, "browser_room_ws_disabled", "Browser rooms use the human snapshot protocol instead of legal-move WebSocket snapshots.");
     }
     const authError = authorizePrivateAccess(request, env, url);
     if (authError) return authError;
@@ -409,7 +503,7 @@ async function handleRoomRoute(
     if (viewerToken) {
       const result = await stub.getSnapshotByViewerToken(viewerToken);
       if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-      return json({ version: 1, snapshot: rpcValue(result) });
+      return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
     }
     const authError = authorizePrivateAccess(request, env, url);
     if (authError) return authError;
@@ -417,32 +511,32 @@ async function handleRoomRoute(
     if (!viewerId) return apiError(400, "invalid_viewer", "viewer query parameter is required.");
     const result = await stub.getSnapshot(viewerId);
     if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-    return json({ version: 1, snapshot: rpcValue(result) });
+    return json({ version: 1, snapshot: rpcSnapshot(result) });
   }
 
-  const body = await readJson(request);
-  if (!body.ok) return body.response;
-  if (!isRecord(body.value) || body.value.version !== 1) {
+  const bodyResult = await readJson(request);
+  if (!bodyResult.ok) return bodyResult.response;
+  if (!isRecord(bodyResult.value) || bodyResult.value.version !== 1) {
     return apiError(400, "invalid_request", "Request body must be a version 1 object.");
   }
+  const body = bodyResult.value;
+
+  if (route.action === "play") return handleHumanPlay(request, stub, viewerToken, body);
+  if (route.action === "pass") return handleHumanPass(request, stub, viewerToken, body);
+  if (route.action === "hint") return handleHumanHint(request, stub, viewerToken, body);
 
   if (route.action === "moves") {
     if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
-    const { expectedRevision, moveId } = body.value;
-    if (typeof moveId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
-      return apiError(400, "invalid_move", "expectedRevision and moveId are required.");
-    }
-
     if (viewerToken) {
-      const result = await stub.applyMoveByViewerToken(viewerToken, expectedRevision as number, moveId);
-      if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-      return json({ version: 1, snapshot: rpcValue(result) });
+      return apiError(403, "human_move_protocol_required", "Browser players must use /play, /pass, or /hint instead of raw move IDs.");
     }
-
     const authError = authorizePrivateAccess(request, env, url);
     if (authError) return authError;
-    const playerId = body.value.playerId;
-    if (typeof playerId !== "string") return apiError(400, "invalid_move", "playerId is required for private access.");
+
+    const { expectedRevision, moveId, playerId } = body;
+    if (typeof moveId !== "string" || typeof playerId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
+      return apiError(400, "invalid_move", "playerId, expectedRevision, and moveId are required for private access.");
+    }
     const command: GameMoveCommandV1 = {
       version: 1,
       roomId: route.roomId,
@@ -452,7 +546,7 @@ async function handleRoomRoute(
     };
     const result = await stub.applyMove(command, playerId);
     if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-    return json({ version: 1, snapshot: rpcValue(result) });
+    return json({ version: 1, snapshot: rpcSnapshot(result) });
   }
 
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
@@ -461,18 +555,18 @@ async function handleRoomRoute(
       ? await stub.pauseByViewerToken(viewerToken)
       : await stub.resumeByViewerToken(viewerToken);
     if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-    return json({ version: 1, snapshot: rpcValue(result) });
+    return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
   }
 
   const authError = authorizePrivateAccess(request, env, url);
   if (authError) return authError;
-  const viewerId = body.value.viewerId;
+  const viewerId = body.viewerId;
   if (typeof viewerId !== "string" || viewerId.length === 0) {
     return apiError(400, "invalid_viewer", "viewerId is required for private access.");
   }
   const result = route.action === "pause" ? await stub.pause(viewerId) : await stub.resume(viewerId);
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-  return json({ version: 1, snapshot: rpcValue(result) });
+  return json({ version: 1, snapshot: rpcSnapshot(result) });
 }
 
 function isPairPage(pathname: string): boolean {
