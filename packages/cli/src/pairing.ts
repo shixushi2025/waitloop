@@ -1,19 +1,28 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import { createConfig, loadConfig, saveConfig, type WaitloopConfig } from "./config.js";
 
-interface DeviceBootstrapResponseV1 {
+interface DeviceCredentialResponseV1 {
   version: 1;
   deviceId: string;
   deviceToken: string;
   scopes: string[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export interface PairingCreatedV1 {
+  pairingId: string;
+  code: string;
+  pairingUrl: string;
+  expiresAt: number;
 }
 
-function isLocalServer(url: string): boolean {
-  const hostname = new URL(url).hostname;
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+interface PairingCreateResponseV1 extends PairingCreatedV1 {
+  version: 1;
+  pollAfterMs: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function responseMessage(response: Response): Promise<string> {
@@ -26,7 +35,7 @@ async function responseMessage(response: Response): Promise<string> {
   return `HTTP ${response.status}`;
 }
 
-function parseBootstrapResponse(value: unknown, expectedDeviceId: string): DeviceBootstrapResponseV1 {
+function parseCredentialResponse(value: unknown, expectedDeviceId: string): DeviceCredentialResponseV1 {
   if (!isRecord(value) || value.version !== 1) throw new Error("Waitloop returned an invalid pairing response.");
   if (value.deviceId !== expectedDeviceId) throw new Error("Waitloop returned a credential for a different device.");
   if (typeof value.deviceToken !== "string" || !value.deviceToken.startsWith("wldev_") || value.deviceToken.length < 40) {
@@ -43,6 +52,31 @@ function parseBootstrapResponse(value: unknown, expectedDeviceId: string): Devic
   };
 }
 
+function parsePairingCreateResponse(value: unknown, baseUrl: string): PairingCreateResponseV1 {
+  if (!isRecord(value) || value.version !== 1) throw new Error("Waitloop returned an invalid pairing request.");
+  if (typeof value.pairingId !== "string" || !value.pairingId.startsWith("pair_")) {
+    throw new Error("Waitloop returned an invalid pairing ID.");
+  }
+  if (typeof value.code !== "string" || value.code.length < 4) throw new Error("Waitloop returned an invalid pairing code.");
+  if (typeof value.pairingUrl !== "string") throw new Error("Waitloop returned an invalid pairing URL.");
+  const pairingUrl = new URL(value.pairingUrl);
+  if (pairingUrl.origin !== new URL(baseUrl).origin) throw new Error("Waitloop pairing URL has an unexpected origin.");
+  if (typeof value.expiresAt !== "number" || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= Date.now()) {
+    throw new Error("Waitloop returned an invalid pairing expiry.");
+  }
+  const pollAfterMs = typeof value.pollAfterMs === "number" && Number.isFinite(value.pollAfterMs)
+    ? Math.max(500, Math.min(5000, Math.floor(value.pollAfterMs)))
+    : 1000;
+  return {
+    version: 1,
+    pairingId: value.pairingId,
+    code: value.code,
+    pairingUrl: pairingUrl.toString(),
+    expiresAt: value.expiresAt,
+    pollAfterMs,
+  };
+}
+
 async function ensureConfig(): Promise<WaitloopConfig> {
   const current = await loadConfig();
   if (current) return current;
@@ -51,39 +85,119 @@ async function ensureConfig(): Promise<WaitloopConfig> {
   return created;
 }
 
-export async function pairDevice(input: { bootstrapToken?: string } = {}): Promise<{ deviceId: string; scopes: string[] }> {
-  const config = await ensureConfig();
-  const bootstrapToken = input.bootstrapToken || process.env.WAITLOOP_BOOTSTRAP_TOKEN || config.accessToken;
-  if (!bootstrapToken && !isLocalServer(config.url)) {
-    throw new Error("Pairing requires WAITLOOP_BOOTSTRAP_TOKEN or --bootstrap-token until browser approval is implemented.");
-  }
-
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json",
-  };
-  if (bootstrapToken) headers.authorization = `Bearer ${bootstrapToken}`;
-
+function requestTimeout(): { controller: AbortController; clear: () => void } {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
+  return { controller, clear: () => clearTimeout(timeout) };
+}
+
+async function saveCredential(config: WaitloopConfig, body: DeviceCredentialResponseV1): Promise<void> {
+  const next: WaitloopConfig = { ...config, deviceToken: body.deviceToken };
+  delete next.ingestToken;
+  await saveConfig(next);
+}
+
+async function bootstrapPair(config: WaitloopConfig, bootstrapToken: string): Promise<{ deviceId: string; scopes: string[]; mode: "bootstrap" }> {
+  const timeout = requestTimeout();
   try {
     const response = await fetch(`${config.url}/api/v1/devices/bootstrap`, {
       method: "POST",
-      headers,
+      headers: {
+        authorization: `Bearer ${bootstrapToken}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
       body: JSON.stringify({ version: 1, deviceId: config.deviceId }),
-      signal: controller.signal,
+      signal: timeout.controller.signal,
     });
     if (!response.ok) throw new Error(`Pairing failed: ${await responseMessage(response)}`);
 
-    const body = parseBootstrapResponse(await response.json(), config.deviceId);
-    const next: WaitloopConfig = { ...config, deviceToken: body.deviceToken };
-    // A successfully paired device no longer needs the Worker-wide lifecycle secret.
-    delete next.ingestToken;
-    await saveConfig(next);
-    return { deviceId: body.deviceId, scopes: body.scopes };
+    const body = parseCredentialResponse(await response.json(), config.deviceId);
+    await saveCredential(config, body);
+    return { deviceId: body.deviceId, scopes: body.scopes, mode: "bootstrap" };
   } finally {
-    clearTimeout(timeout);
+    timeout.clear();
   }
+}
+
+function pairingVerifier(): { verifier: string; verifierHash: string } {
+  const verifier = randomBytes(32).toString("base64url");
+  const verifierHash = createHash("sha256").update(verifier).digest("hex");
+  return { verifier, verifierHash };
+}
+
+async function createPublicPairing(config: WaitloopConfig, verifierHash: string): Promise<PairingCreateResponseV1> {
+  const timeout = requestTimeout();
+  try {
+    const response = await fetch(`${config.url}/api/v1/pairings`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1, deviceId: config.deviceId, verifierHash }),
+      signal: timeout.controller.signal,
+    });
+    if (!response.ok) throw new Error(`Could not create pairing request: ${await responseMessage(response)}`);
+    return parsePairingCreateResponse(await response.json(), config.url);
+  } finally {
+    timeout.clear();
+  }
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function exchangePublicPairing(
+  config: WaitloopConfig,
+  pairing: PairingCreateResponseV1,
+  verifier: string,
+): Promise<DeviceCredentialResponseV1> {
+  while (Date.now() < pairing.expiresAt) {
+    const timeout = requestTimeout();
+    try {
+      const response = await fetch(`${config.url}/api/v1/pairings/${encodeURIComponent(pairing.pairingId)}/exchange`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ version: 1, verifier }),
+        signal: timeout.controller.signal,
+      });
+
+      if (response.status === 202) {
+        // Explicit user approval has not happened yet.
+      } else if (response.ok) {
+        return parseCredentialResponse(await response.json(), config.deviceId);
+      } else {
+        throw new Error(`Pairing exchange failed: ${await responseMessage(response)}`);
+      }
+    } finally {
+      timeout.clear();
+    }
+
+    await sleep(pairing.pollAfterMs);
+  }
+
+  throw new Error("Pairing request expired before it was approved. Run `waitloop pair` again.");
+}
+
+export async function pairDevice(input: {
+  bootstrapToken?: string;
+  onPairingCreated?: (pairing: PairingCreatedV1) => void;
+} = {}): Promise<{ deviceId: string; scopes: string[]; mode: "public" | "bootstrap" }> {
+  const config = await ensureConfig();
+  const bootstrapToken = input.bootstrapToken || process.env.WAITLOOP_BOOTSTRAP_TOKEN;
+  if (bootstrapToken) return bootstrapPair(config, bootstrapToken);
+
+  const { verifier, verifierHash } = pairingVerifier();
+  const pairing = await createPublicPairing(config, verifierHash);
+  input.onPairingCreated?.({
+    pairingId: pairing.pairingId,
+    code: pairing.code,
+    pairingUrl: pairing.pairingUrl,
+    expiresAt: pairing.expiresAt,
+  });
+
+  const body = await exchangePublicPairing(config, pairing, verifier);
+  await saveCredential(config, body);
+  return { deviceId: body.deviceId, scopes: body.scopes, mode: "public" };
 }
 
 export async function unpairDevice(): Promise<{ paired: boolean; revoked: boolean }> {
@@ -107,7 +221,6 @@ export async function unpairDevice(): Promise<{ paired: boolean; revoked: boolea
       throw new Error(`Could not revoke the device credential; local credential was kept. ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    // 401 means the credential is already invalid remotely, which is safe to remove locally.
     if (!response.ok && response.status !== 401) {
       throw new Error(`Could not revoke the device credential; local credential was kept. ${await responseMessage(response)}`);
     }
