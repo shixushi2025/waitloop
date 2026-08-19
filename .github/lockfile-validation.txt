@@ -1,0 +1,1 @@
+Temporary file used only to validate frozen-lockfile CI. It will not be merged.
