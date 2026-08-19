@@ -25,6 +25,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function waitingStateProjection(state: unknown): unknown {
+  if (!isRecord(state) || !Array.isArray(state.players)) {
+    return { version: 1, waiting: true };
+  }
+
+  const players = state.players.map((player) => {
+    if (!isRecord(player) || typeof player.id !== "string") return { id: "unknown", role: "pending", remaining: 0 };
+    return { id: player.id, role: "pending", remaining: 0 };
+  });
+
+  // Connected-agent lobbies deliberately expose no dealt cards or landlord
+  // assignment before the MCP seat becomes ready. Do not spread the original
+  // state here: future game-specific fields must not accidentally leak through.
+  return {
+    version: 1,
+    role: "pending",
+    landlordId: null,
+    myHand: [],
+    players,
+    currentPlayerId: null,
+    lastPlay: null,
+    passesSinceLastPlay: 0,
+    history: [],
+  };
+}
+
 function cardIdsForMove(move: LegalMove<unknown>): string[] | null {
   if (!isRecord(move.meta) || move.meta.type !== "play" || !Array.isArray(move.meta.cards)) return null;
 
@@ -58,12 +84,14 @@ function playableMoves(snapshot: GameRoomSnapshotV1): Array<{ move: LegalMove<un
 
 export function toHumanGameSnapshot(snapshot: GameRoomSnapshotV1): HumanGameSnapshotV1 {
   const { legalMoves, ...rest } = snapshot;
+  const waiting = snapshot.roomPhase === "waiting_for_players";
   return {
     ...rest,
+    state: waiting ? waitingStateProjection(snapshot.state) : snapshot.state,
     controls: {
       version: 1,
-      canPass: legalMoves.some((move) => move.id === "pass"),
-      canHint: legalMoves.some((move) => move.id !== "pass"),
+      canPass: !waiting && legalMoves.some((move) => move.id === "pass"),
+      canHint: !waiting && legalMoves.some((move) => move.id !== "pass"),
     },
   };
 }
