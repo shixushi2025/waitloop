@@ -35,5 +35,8 @@ jobs:
       - name: Typecheck and test
         run: pnpm check
 
+      - name: Validate browser JavaScript
+        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+
       - name: Validate Worker bundle
         run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
