@@ -16,6 +16,7 @@
         <a class="brand" href="/">waitloop<span aria-hidden="true">_</span></a>
         <nav class="nav" aria-label="Primary navigation">
           <a href="/">home</a>
+          <a href="/agent.md">agents</a>
           <a href="https://github.com/shixushi2025/waitloop">github</a>
         </nav>
       </header>
@@ -23,7 +24,7 @@
       <section class="game-intro">
         <p class="eyebrow">games / doudizhu / alpha</p>
         <h1>Dou Dizhu,<br />without the casino.</h1>
-        <p class="lede">Rules and hidden hands stay server-side. Bots are local rule players; hosted AI calls a model; connected agents join through an MCP seat.</p>
+        <p class="lede">Rules and hidden hands stay server-side. Landlord is chosen randomly for the current alpha; connected-agent rooms wait in a lobby until MCP is actually connected.</p>
       </section>
 
       <section class="attention" id="attention" hidden aria-live="assertive">
@@ -63,7 +64,7 @@
               <div class="start-actions">
                 <button class="command-button" id="new-connected-agent-game" type="button"><span>&gt;</span> you + connected agent + bot</button>
               </div>
-              <small>Creates an MCP seat for Codex, Claude Code, Cursor, DSH, or another compatible agent.</small>
+              <small>Creates a lobby. The game starts only after the room-scoped MCP seat actually connects.</small>
             </div>
 
             <p class="create-error" id="create-error" hidden aria-live="polite"></p>
@@ -71,16 +72,35 @@
         </div>
 
         <div id="game-view" hidden>
-          <section class="mcp-setup" id="mcp-setup" hidden aria-label="MCP seat setup">
+          <section class="mcp-setup" id="mcp-setup" hidden aria-label="Connected agent setup">
             <div class="mcp-setup-head">
               <div>
-                <p class="section-label">connected_agent_seat/</p>
-                <strong>Connect one agent to this room.</strong>
+                <p class="section-label">connected_agent_lobby/</p>
+                <strong>Connect one agent. No hard turn timer.</strong>
               </div>
-              <button class="text-button" id="copy-mcp" type="button">copy config</button>
+              <span class="mcp-state" id="mcp-claim-status">waiting</span>
             </div>
-            <p class="mcp-note">The seat token authorizes only the connected-agent seat in this room. It is shown once; do not commit or share it.</p>
-            <pre class="mcp-config" id="mcp-config"></pre>
+
+            <p class="mcp-note">Recommended: give the join command to the agent that should occupy this seat. The room stays in the lobby until an authenticated MCP request arrives.</p>
+
+            <div class="join-command-row">
+              <code id="join-command">waitloop join WL-XXXXXXXXXX</code>
+              <button class="text-button" id="copy-join" type="button">copy</button>
+            </div>
+            <a class="join-link" id="join-link" href="/agent.md">room join instructions</a>
+
+            <div class="mcp-advanced">
+              <button class="text-button" id="show-mcp" type="button">raw MCP configuration</button>
+              <span>for agents without the Waitloop CLI</span>
+            </div>
+
+            <div id="mcp-config-wrap" hidden>
+              <div class="mcp-config-head">
+                <span>room-scoped credential · do not commit or share</span>
+                <button class="text-button" id="copy-mcp" type="button">copy config</button>
+              </div>
+              <pre class="mcp-config" id="mcp-config"></pre>
+            </div>
           </section>
 
           <dl class="status-grid game-status">
@@ -88,10 +108,12 @@
             <dd id="role-value">-</dd>
             <dt>turn</dt>
             <dd id="turn-value">-</dd>
-            <dt>revision</dt>
-            <dd id="revision-value">-</dd>
+            <dt>phase</dt>
+            <dd id="room-phase-value">-</dd>
             <dt>status</dt>
             <dd id="game-status-value">-</dd>
+            <dt>revision</dt>
+            <dd id="revision-value">-</dd>
           </dl>
 
           <div class="rule" aria-hidden="true"></div>
@@ -99,11 +121,18 @@
           <section class="game-section">
             <p class="section-label">players/</p>
             <div class="player-list" id="players"></div>
+            <small class="turn-help"><span>&gt;</span> marks the authoritative current turn. Connected agents show elapsed thinking time only; Waitloop does not force a move.</small>
           </section>
 
-          <section class="game-section">
-            <p class="section-label">last_move/</p>
-            <div class="last-move" id="last-move">none</div>
+          <section class="game-section table-grid">
+            <div>
+              <p class="section-label">current_trick/</p>
+              <div class="last-move" id="current-trick">none</div>
+            </div>
+            <div>
+              <p class="section-label">activity/</p>
+              <div class="activity-list" id="activity"></div>
+            </div>
           </section>
 
           <section class="game-section">

@@ -10,6 +10,7 @@ import { createConfig, getConfigPath, loadConfig, redactConfig, saveConfig } fro
 import { installCodex, readLatestCodexState, runCodexHook, uninstallCodex } from "./codex.js";
 import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } from "./cursor.js";
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
+import { commandJoin } from "./join.js";
 import type { LocalTurnState } from "./lifecycle.js";
 import { pairDevice, unpairDevice } from "./pairing.js";
 import { getCliVersion } from "./version.js";
@@ -26,6 +27,7 @@ Tiny games while your coding agent runs.
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
   waitloop pair [--no-open] [--bootstrap-token TOKEN]
+  waitloop join WL-XXXXXXXXXX [--url URL] [--json]
   waitloop unpair
   waitloop doctor
   waitloop install <claude-code|cursor|codex|all>
@@ -127,9 +129,7 @@ async function commandInit(args: string[]): Promise<void> {
     const result = await installTarget(agent.id);
     console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} ${agent.label}`);
     console.log(`  ${result.path}`);
-    if (agent.id === "codex") {
-      console.log("  review/trust the new hook in Codex with /hooks");
-    }
+    if (agent.id === "codex") console.log("  review/trust the new hook in Codex with /hooks");
   }
 }
 
@@ -275,6 +275,7 @@ async function main(): Promise<void> {
 
   if (command === "init") return commandInit(args.slice(1));
   if (command === "pair") return commandPair(args.slice(1));
+  if (command === "join") return commandJoin(args[1], args.slice(2));
   if (command === "unpair") return commandUnpair();
   if (command === "doctor") return commandDoctor();
   if (command === "install") return commandInstall(args[1]);

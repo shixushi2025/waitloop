@@ -4,6 +4,7 @@ export type GameParticipantKindV1 =
   | "hosted-agent"
   | "connected-agent";
 
+export type GameSeatStatusV1 = "ready" | "waiting" | "connecting" | "connected";
 export type HostedAgentIdV1 = "deepseek" | "openai";
 
 export interface GameParticipantV1 {
@@ -14,6 +15,14 @@ export interface GameParticipantV1 {
   hostedAgentId?: HostedAgentIdV1;
   provider?: "deepseek" | "openai";
   model?: string;
+}
+
+export interface GameSeatRuntimeV1 {
+  version: 1;
+  playerId: string;
+  status: GameSeatStatusV1;
+  statusChangedAt: number;
+  connectedAt?: number;
 }
 
 export interface HostedAgentRuntimeStatsV1 {

@@ -10,6 +10,7 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.2",
+    "candidateVersion": "0.1.0-alpha.3",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -22,6 +23,7 @@
     "sourceInstallCommand": "npm install -g ./packages/cli",
     "initializeCommand": "waitloop init --url https://waitloop.run",
     "pairCommand": "waitloop pair",
+    "joinCommand": "waitloop join <join-code>",
     "doctorCommand": "waitloop doctor",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml"
   },
@@ -36,6 +38,7 @@
     "scope": "one game room and one player seat",
     "tools": ["get_turn", "play_move"],
     "requires": ["Authorization: Bearer <seat-token>", "X-Waitloop-Room: <room-id>"],
+    "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false
   },
   "integrations": {

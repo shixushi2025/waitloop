@@ -1,3 +1,5 @@
+import { historyDelta, recentHistory } from "./game-history.js";
+
 const VIEWER_ID = "you";
 const params = new URLSearchParams(window.location.search);
 const linkedSessionId = params.get("session");
@@ -15,8 +17,10 @@ const roleValue = document.querySelector("#role-value");
 const turnValue = document.querySelector("#turn-value");
 const revisionValue = document.querySelector("#revision-value");
 const gameStatusValue = document.querySelector("#game-status-value");
+const roomPhaseValue = document.querySelector("#room-phase-value");
 const playersElement = document.querySelector("#players");
-const lastMoveElement = document.querySelector("#last-move");
+const currentTrickElement = document.querySelector("#current-trick");
+const activityElement = document.querySelector("#activity");
 const handElement = document.querySelector("#hand");
 const selectionSummary = document.querySelector("#selection-summary");
 const playSelectedButton = document.querySelector("#play-selected");
@@ -29,12 +33,19 @@ const attentionTitle = document.querySelector("#attention-title");
 const attentionDetail = document.querySelector("#attention-detail");
 const resumeButton = document.querySelector("#resume-button");
 const mcpSetup = document.querySelector("#mcp-setup");
+const joinCommand = document.querySelector("#join-command");
+const copyJoinButton = document.querySelector("#copy-join");
+const joinLink = document.querySelector("#join-link");
+const showMcpButton = document.querySelector("#show-mcp");
+const mcpConfigWrap = document.querySelector("#mcp-config-wrap");
 const mcpConfig = document.querySelector("#mcp-config");
 const copyMcpButton = document.querySelector("#copy-mcp");
+const mcpClaimStatus = document.querySelector("#mcp-claim-status");
 
 let roomId = params.get("room");
 let snapshot = null;
 let roomRefreshTimer = null;
+let turnClockTimer = null;
 let sessionSocket = null;
 let attentionPauseRequested = false;
 let mcpConfigText = "";
@@ -44,6 +55,9 @@ let selectionRevision = -1;
 let selectedCardIds = new Set();
 let hintCursor = 0;
 let selectedHintLabel = "";
+let presentationActive = false;
+let presentationGeneration = 0;
+let currentJoinCode = roomId ? sessionStorage.getItem(`waitloop.join.${roomId}`) : null;
 
 function isElement(value) {
   return value instanceof HTMLElement;
@@ -67,9 +81,22 @@ function isGameSnapshot(value) {
   );
 }
 
+function phaseOf(current) {
+  if (typeof current?.roomPhase === "string") return current.roomPhase;
+  if (current?.status === "finished") return "finished";
+  if (current?.status === "paused") return "paused";
+  return "playing";
+}
+
 function participantFor(current, playerId) {
   return Array.isArray(current?.participants)
     ? current.participants.find((participant) => participant?.id === playerId) ?? null
+    : null;
+}
+
+function seatFor(current, playerId) {
+  return Array.isArray(current?.seatStates)
+    ? current.seatStates.find((seat) => seat?.playerId === playerId) ?? null
     : null;
 }
 
@@ -107,29 +134,74 @@ function setCreateButtonsDisabled(disabled) {
   }
 }
 
+function formatElapsed(startedAt) {
+  if (!Number.isFinite(startedAt) || startedAt <= 0) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
 function promptFor(current) {
+  const phase = phaseOf(current);
+  if (phase === "waiting_for_players") {
+    const agent = (current.participants ?? []).find((participant) => participant?.kind === "connected-agent");
+    const seat = agent ? seatFor(current, agent.id) : null;
+    if (seat?.status === "connecting") return "agent credential claimed · waiting for MCP connection";
+    return "waiting for connected agent · no cards are active yet";
+  }
   if (current.status === "finished") {
     return current.state.winnerId === VIEWER_ID
       ? "you won · return to work when ready"
       : `${playerLabel(current, current.state.winnerId)} won`;
   }
   if (current.status === "paused") return "game paused · work has priority";
+  if (presentationActive) return "replaying opponent actions";
   if (current.currentPlayerId === VIEWER_ID) return "your turn · select cards, then play";
 
   const participant = participantFor(current, current.currentPlayerId);
-  if (participant?.kind === "connected-agent") return `${participant.label} turn · waiting for MCP move`;
+  if (participant?.kind === "connected-agent") {
+    const elapsed = formatElapsed(current.turnStartedAt);
+    const slow = Number.isFinite(current.turnStartedAt) && Date.now() - current.turnStartedAt >= 60_000;
+    return `${participant.label} turn${elapsed ? ` · ${elapsed}` : ""}${slow ? " · taking a little longer" : ""}`;
+  }
   if (participant?.kind === "hosted-agent") return `${participant.label} is thinking`;
   return `${playerLabel(current, current.currentPlayerId)} is moving`;
+}
+
+function playerRuntimeText(current, playerId) {
+  const participant = participantFor(current, playerId);
+  const seat = seatFor(current, playerId);
+  if (phaseOf(current) === "waiting_for_players") {
+    if (participant?.kind === "connected-agent") {
+      if (seat?.status === "connecting") return "CONNECTING";
+      if (seat?.status === "connected") return "READY";
+      return "WAITING";
+    }
+    return "READY";
+  }
+
+  if (current.currentPlayerId === playerId && participant?.kind === "connected-agent") {
+    const elapsed = formatElapsed(current.turnStartedAt);
+    const slow = Number.isFinite(current.turnStartedAt) && Date.now() - current.turnStartedAt >= 60_000;
+    return `THINKING${elapsed ? ` · ${elapsed}` : ""}${slow ? " · SLOW" : ""}`;
+  }
+  if (current.currentPlayerId === playerId) return "TURN";
+  if (seat?.status === "connected") return "CONNECTED";
+  return "READY";
 }
 
 function renderPlayers(current) {
   if (!isElement(playersElement)) return;
   playersElement.replaceChildren();
+  const waiting = phaseOf(current) === "waiting_for_players";
 
   for (const player of current.state.players ?? []) {
     const participant = participantFor(current, player.id);
     const row = document.createElement("div");
-    row.className = `player${current.currentPlayerId === player.id ? " current" : ""}`;
+    const isTurn = !waiting && current.currentPlayerId === player.id;
+    row.className = `player${isTurn ? " current" : ""}`;
 
     const name = document.createElement("span");
     name.className = "name";
@@ -138,31 +210,78 @@ function renderPlayers(current) {
 
     const role = document.createElement("span");
     role.className = "role";
-    role.textContent = participant?.kind ? `${player.role} · ${participant.kind}` : player.role;
+    role.textContent = waiting ? `pending · ${participant?.kind ?? "player"}` : `${player.role} · ${participant?.kind ?? "player"}`;
 
     const count = document.createElement("span");
     count.className = "count";
-    count.textContent = `${player.remaining} cards`;
+    count.textContent = waiting ? "-- cards" : `${player.remaining} cards`;
 
-    row.append(name, role, count);
+    const runtime = document.createElement("span");
+    runtime.className = "runtime";
+    runtime.textContent = playerRuntimeText(current, player.id);
+
+    row.append(name, role, count, runtime);
     playersElement.append(row);
   }
 }
 
-function renderLastMove(current) {
-  if (!isElement(lastMoveElement)) return;
+function actionText(current, entry) {
+  const name = playerLabel(current, entry?.playerId);
+  if (entry?.type === "pass") return `${name}  pass`;
+  const cards = Array.isArray(entry?.cards) ? entry.cards.map((card) => rankLabel(card.rank)).join(" ") : "";
+  return `${name}  ${entry?.pattern?.kind ?? "play"}  ${cards}`.trim();
+}
+
+function renderCurrentTrick(current) {
+  if (!isElement(currentTrickElement)) return;
+  currentTrickElement.classList.remove("replaying");
+  if (phaseOf(current) === "waiting_for_players") {
+    currentTrickElement.textContent = "waiting · table opens when the agent connects";
+    return;
+  }
   const last = current.state.lastPlay;
   if (!last) {
-    lastMoveElement.textContent = "none · lead any legal pattern";
+    currentTrickElement.textContent = "open trick · leader may play any legal pattern";
+    return;
+  }
+  currentTrickElement.textContent = actionText(current, last);
+}
+
+function renderActivity(current) {
+  if (!isElement(activityElement)) return;
+  activityElement.replaceChildren();
+  const history = Array.isArray(current.state.history) ? current.state.history : [];
+  const items = recentHistory(current, 6);
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "activity-empty";
+    empty.textContent = phaseOf(current) === "waiting_for_players" ? "game has not started" : "no actions yet";
+    activityElement.append(empty);
     return;
   }
 
-  const cards = (last.cards ?? []).map((card) => rankLabel(card.rank)).join(" ");
-  lastMoveElement.textContent = `${playerLabel(current, last.playerId)}  ${last.pattern?.kind ?? "play"}  ${cards}`;
+  const offset = history.length - items.length;
+  items.forEach((entry, index) => {
+    const row = document.createElement("div");
+    row.className = "activity-row";
+    const number = document.createElement("span");
+    number.className = "activity-number";
+    number.textContent = String(offset + index + 1).padStart(2, "0");
+    const text = document.createElement("span");
+    text.textContent = actionText(current, entry);
+    row.append(number, text);
+    activityElement.append(row);
+  });
 }
 
 function isHumanTurn(current = snapshot) {
-  return Boolean(current && current.status === "playing" && current.currentPlayerId === VIEWER_ID);
+  return Boolean(
+    current &&
+    !presentationActive &&
+    phaseOf(current) === "playing" &&
+    current.status === "playing" &&
+    current.currentPlayerId === VIEWER_ID,
+  );
 }
 
 function selectedCards(current = snapshot) {
@@ -193,8 +312,15 @@ function syncSelection(current) {
 function renderHand(current) {
   if (!isElement(handElement)) return;
   handElement.replaceChildren();
-  const selectable = isHumanTurn(current);
+  if (phaseOf(current) === "waiting_for_players") {
+    const note = document.createElement("span");
+    note.className = "hand-waiting";
+    note.textContent = "cards unlock when the connected-agent seat is ready";
+    handElement.append(note);
+    return;
+  }
 
+  const selectable = isHumanTurn(current);
   for (const card of current.state.myHand ?? []) {
     const token = document.createElement("button");
     token.type = "button";
@@ -223,6 +349,15 @@ function renderActions(current) {
   if (!isElement(selectionSummary)) return;
   selectionSummary.classList.remove("valid", "invalid");
 
+  if (phaseOf(current) === "waiting_for_players") {
+    setActionDisabled(playSelectedButton, true);
+    setActionDisabled(passMoveButton, true);
+    setActionDisabled(hintMoveButton, true);
+    setActionDisabled(clearSelectionButton, true);
+    selectionSummary.textContent = "waiting for connected agent · no turn timer";
+    return;
+  }
+
   const turn = isHumanTurn(current);
   const cards = selectedCards(current);
   const canPass = current.controls?.canPass === true;
@@ -231,13 +366,16 @@ function renderActions(current) {
   setActionDisabled(playSelectedButton, !turn || cards.length === 0);
   setActionDisabled(passMoveButton, !turn || !canPass);
   setActionDisabled(hintMoveButton, !turn || !canHint);
-  setActionDisabled(clearSelectionButton, cards.length === 0);
+  setActionDisabled(clearSelectionButton, cards.length === 0 || presentationActive);
 
+  if (presentationActive) {
+    selectionSummary.textContent = "showing opponent actions";
+    return;
+  }
   if (!turn) {
     selectionSummary.textContent = current.status === "paused" ? "paused" : "no input required";
     return;
   }
-
   if (cards.length === 0) {
     selectionSummary.textContent = "select cards from hand";
     return;
@@ -267,6 +405,65 @@ async function readJsonResponse(response) {
   }
 }
 
+function renderNow(current) {
+  roomId = current.roomId;
+  updateUrl();
+  syncSelection(current);
+  const phase = phaseOf(current);
+
+  if (isElement(roomLabel)) roomLabel.textContent = `room / ${roomId.slice(0, 18)}`;
+  if (isElement(gameStart)) gameStart.hidden = true;
+  if (isElement(gameView)) gameView.hidden = false;
+  if (isElement(roleValue)) roleValue.textContent = phase === "waiting_for_players" ? "pending" : current.state.role ?? "-";
+  if (isElement(turnValue)) turnValue.textContent = phase === "waiting_for_players" ? "waiting" : playerLabel(current, current.currentPlayerId);
+  if (isElement(revisionValue)) revisionValue.textContent = String(current.revision);
+  if (isElement(gameStatusValue)) gameStatusValue.textContent = current.status;
+  if (isElement(roomPhaseValue)) roomPhaseValue.textContent = phase;
+  if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(current);
+
+  renderPlayers(current);
+  renderCurrentTrick(current);
+  renderActivity(current);
+  renderHand(current);
+  renderActions(current);
+  scheduleRoomRefresh(current);
+  scheduleTurnClock(current);
+  updateConnectedSetup(current);
+}
+
+async function playPresentation(entries, current, generation) {
+  if (!isElement(currentTrickElement) || entries.length === 0) return;
+  presentationActive = true;
+  renderActions(current);
+  for (const entry of entries) {
+    if (generation !== presentationGeneration) return;
+    currentTrickElement.classList.add("replaying");
+    currentTrickElement.textContent = `→ ${actionText(current, entry)}`;
+    if (isElement(gamePrompt)) gamePrompt.textContent = "replaying opponent actions";
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+  }
+  if (generation !== presentationGeneration) return;
+  presentationActive = false;
+  renderCurrentTrick(current);
+  renderActions(current);
+  if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(current);
+}
+
+function render(current) {
+  const previous = snapshot;
+  const delta = previous ? historyDelta(previous, current) : [];
+  snapshot = current;
+  presentationGeneration += 1;
+  presentationActive = false;
+  renderNow(current);
+
+  const opponentActions = delta.filter((entry) => entry?.playerId !== VIEWER_ID);
+  if (opponentActions.length > 0 && phaseOf(current) === "playing") {
+    const generation = presentationGeneration;
+    void playPresentation(opponentActions, current, generation);
+  }
+}
+
 async function refreshRoom({ quiet = false } = {}) {
   if (!roomId) return false;
   try {
@@ -275,11 +472,9 @@ async function refreshRoom({ quiet = false } = {}) {
       headers: { accept: "application/json" },
     });
     const body = await readJsonResponse(response);
-    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
-      throw new Error(body?.error?.message ?? "room unavailable");
-    }
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "room unavailable");
     render(body.snapshot);
-    if (!quiet) setConnection("live");
+    if (!quiet) setConnection(phaseOf(body.snapshot) === "waiting_for_players" ? "waiting for agent" : "live");
     return true;
   } catch (error) {
     if (!quiet) {
@@ -293,19 +488,29 @@ async function refreshRoom({ quiet = false } = {}) {
 function scheduleRoomRefresh(current) {
   window.clearTimeout(roomRefreshTimer);
   roomRefreshTimer = null;
-  if (!roomId || !current || current.status !== "playing") return;
+  if (!roomId || !current || current.status === "finished") return;
 
+  const phase = phaseOf(current);
   const participant = participantFor(current, current.currentPlayerId);
-  if (participant?.kind !== "connected-agent") return;
+  const needsPolling = phase === "waiting_for_players" || participant?.kind === "connected-agent";
+  if (!needsPolling) return;
 
   roomRefreshTimer = window.setTimeout(async () => {
-    const beforeRevision = snapshot?.revision;
     const ok = await refreshRoom({ quiet: true });
-    if (!ok) {
-      roomRefreshTimer = window.setTimeout(() => scheduleRoomRefresh(snapshot), 1500);
-      return;
-    }
-    if (snapshot?.revision === beforeRevision) scheduleRoomRefresh(snapshot);
+    if (!ok && snapshot) scheduleRoomRefresh(snapshot);
+  }, 1000);
+}
+
+function scheduleTurnClock(current) {
+  window.clearInterval(turnClockTimer);
+  turnClockTimer = null;
+  const participant = participantFor(current, current.currentPlayerId);
+  if (phaseOf(current) !== "playing" || participant?.kind !== "connected-agent") return;
+
+  turnClockTimer = window.setInterval(() => {
+    if (!snapshot) return;
+    renderPlayers(snapshot);
+    if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(snapshot);
   }, 1000);
 }
 
@@ -313,7 +518,6 @@ async function playSelection() {
   if (!roomId || !snapshot || !isHumanTurn(snapshot)) return;
   const cards = selectedCards(snapshot);
   if (cards.length === 0) return;
-
   const expectedRevision = snapshot.revision;
   try {
     setActionDisabled(playSelectedButton, true);
@@ -323,16 +527,10 @@ async function playSelection() {
       method: "POST",
       credentials: "same-origin",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        version: 1,
-        expectedRevision,
-        cardIds: cards.map((card) => card.id),
-      }),
+      body: JSON.stringify({ version: 1, expectedRevision, cardIds: cards.map((card) => card.id) }),
     });
     const body = await readJsonResponse(response);
-    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
-      throw new Error(body?.error?.message ?? "play rejected");
-    }
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "play rejected");
     render(body.snapshot);
     setConnection("live");
   } catch (error) {
@@ -358,9 +556,7 @@ async function passTurn() {
       body: JSON.stringify({ version: 1, expectedRevision: snapshot.revision }),
     });
     const body = await readJsonResponse(response);
-    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
-      throw new Error(body?.error?.message ?? "pass rejected");
-    }
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "pass rejected");
     render(body.snapshot);
     setConnection("live");
   } catch (error) {
@@ -380,9 +576,7 @@ async function requestHint() {
       body: JSON.stringify({ version: 1, expectedRevision, cursor: hintCursor }),
     });
     const body = await readJsonResponse(response);
-    if (!response.ok || !body?.hint || !Array.isArray(body.hint.cardIds)) {
-      throw new Error(body?.error?.message ?? "hint unavailable");
-    }
+    if (!response.ok || !body?.hint || !Array.isArray(body.hint.cardIds)) throw new Error(body?.error?.message ?? "hint unavailable");
 
     selectedCardIds = new Set(body.hint.cardIds);
     selectionRevision = expectedRevision;
@@ -402,56 +596,67 @@ async function requestHint() {
   }
 }
 
-function render(current) {
-  snapshot = current;
-  roomId = current.roomId;
-  updateUrl();
-  syncSelection(current);
-
-  if (isElement(roomLabel)) roomLabel.textContent = `room / ${roomId.slice(0, 18)}`;
-  if (isElement(gameStart)) gameStart.hidden = true;
-  if (isElement(gameView)) gameView.hidden = false;
-  if (isElement(roleValue)) roleValue.textContent = current.state.role ?? "-";
-  if (isElement(turnValue)) turnValue.textContent = playerLabel(current, current.currentPlayerId);
-  if (isElement(revisionValue)) revisionValue.textContent = String(current.revision);
-  if (isElement(gameStatusValue)) gameStatusValue.textContent = current.status;
-  if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(current);
-
-  renderPlayers(current);
-  renderLastMove(current);
-  renderHand(current);
-  renderActions(current);
-  scheduleRoomRefresh(current);
+function rememberJoinCode(code) {
+  currentJoinCode = code;
+  if (roomId && code) sessionStorage.setItem(`waitloop.join.${roomId}`, code);
 }
 
-function showMcpSetup(createdRoomId, seatToken) {
-  if (!isElement(mcpSetup) || !isElement(mcpConfig)) return;
-
-  const endpoint = `${window.location.origin}/mcp`;
-  const config = {
-    mcpServers: {
-      waitloop: {
-        type: "http",
-        url: endpoint,
-        headers: {
-          Authorization: `Bearer ${seatToken}`,
-          "X-Waitloop-Room": createdRoomId,
-        },
-      },
-    },
-  };
-
-  mcpConfigText = JSON.stringify(config, null, 2);
-  mcpConfig.textContent = mcpConfigText;
+function showConnectedSetup(code, joinUrl) {
+  if (!isElement(mcpSetup) || typeof code !== "string") return;
+  const command = `waitloop join ${code}`;
+  if (isElement(joinCommand)) joinCommand.textContent = command;
+  if (joinLink instanceof HTMLAnchorElement) {
+    joinLink.href = joinUrl ?? `/join/${encodeURIComponent(code)}`;
+    joinLink.textContent = joinUrl ?? `${window.location.origin}/join/${code}`;
+  }
+  if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "CLI recommended · raw MCP remains available";
+  if (isElement(mcpConfigWrap)) mcpConfigWrap.hidden = true;
   mcpSetup.hidden = false;
+}
+
+function updateConnectedSetup(current) {
+  if (!isElement(mcpSetup)) return;
+  const connected = (current.participants ?? []).some((participant) => participant?.kind === "connected-agent");
+  if (!connected) {
+    mcpSetup.hidden = true;
+    return;
+  }
+  if (currentJoinCode) showConnectedSetup(currentJoinCode, `/join/${encodeURIComponent(currentJoinCode)}`);
+  const agent = (current.participants ?? []).find((participant) => participant?.kind === "connected-agent");
+  const seat = agent ? seatFor(current, agent.id) : null;
+  if (isElement(mcpClaimStatus) && seat?.status === "connected") mcpClaimStatus.textContent = "agent connected · game started";
+  else if (isElement(mcpClaimStatus) && seat?.status === "connecting") mcpClaimStatus.textContent = "credential claimed · waiting for MCP client";
+}
+
+async function claimRawMcp() {
+  if (!currentJoinCode || !isElement(mcpConfig) || !isElement(mcpConfigWrap)) return;
+  if (showMcpButton instanceof HTMLButtonElement) showMcpButton.disabled = true;
+  try {
+    const response = await fetch(`/api/v1/join/${encodeURIComponent(currentJoinCode)}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1 }),
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !body?.mcp) throw new Error(body?.error?.message ?? "could not claim MCP seat");
+    const config = { mcpServers: { waitloop: body.mcp } };
+    mcpConfigText = JSON.stringify(config, null, 2);
+    mcpConfig.textContent = mcpConfigText;
+    mcpConfigWrap.hidden = false;
+    if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "room-scoped credential issued · connect this MCP config";
+    void refreshRoom({ quiet: true });
+  } catch (error) {
+    if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = error instanceof Error ? error.message : "MCP claim failed";
+  } finally {
+    if (showMcpButton instanceof HTMLButtonElement) showMcpButton.disabled = false;
+  }
 }
 
 async function loadRoom() {
   if (!roomId) return false;
+  currentJoinCode = sessionStorage.getItem(`waitloop.join.${roomId}`);
   const ok = await refreshRoom();
-  if (!ok) {
-    setCreateError("This browser does not have access to that room, or the room no longer exists.");
-  }
+  if (!ok) setCreateError("This browser does not have access to that room, or the room no longer exists.");
   return ok;
 }
 
@@ -462,16 +667,13 @@ async function createRoom(mode, hostedAgentId) {
   setConnection("creating room");
   if (isElement(mcpSetup)) mcpSetup.hidden = true;
   mcpConfigText = "";
+  currentJoinCode = null;
   selectedCardIds.clear();
   selectionRevision = -1;
   hintCursor = 0;
   selectedHintLabel = "";
 
-  const payload = {
-    version: 1,
-    gameId: "doudizhu",
-    mode,
-  };
+  const payload = { version: 1, gameId: "doudizhu", mode };
   if (mode === "hosted-agent") payload.hostedAgentId = hostedAgentId;
 
   try {
@@ -485,11 +687,12 @@ async function createRoom(mode, hostedAgentId) {
     if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "could not create room");
 
     roomId = body.roomId;
-    render(body.snapshot);
-    if (mode === "connected-agent" && typeof body.agentSeatToken === "string") {
-      showMcpSetup(body.roomId, body.agentSeatToken);
+    if (mode === "connected-agent" && typeof body.joinCode === "string") {
+      rememberJoinCode(body.joinCode);
+      showConnectedSetup(body.joinCode, typeof body.joinUrl === "string" ? body.joinUrl : undefined);
     }
-    setConnection("live");
+    render(body.snapshot);
+    setConnection(phaseOf(body.snapshot) === "waiting_for_players" ? "waiting for agent" : "live");
   } catch (error) {
     const message = error instanceof Error ? error.message : "create failed";
     setConnection("create failed");
@@ -519,7 +722,6 @@ async function setPaused(paused) {
 
 function handleAgentSnapshot(agent) {
   if (!isElement(attention) || !isElement(attentionTitle) || !isElement(attentionDetail)) return;
-
   const interrupts = agent.state === "waiting" || agent.state === "completed" || agent.state === "failed";
   if (!interrupts) {
     if (agent.state === "running" && attentionPauseRequested) {
@@ -527,9 +729,7 @@ function handleAgentSnapshot(agent) {
       attentionTitle.textContent = "agent running again";
       attentionDetail.textContent = "game remains paused until you resume it";
       if (resumeButton instanceof HTMLButtonElement) resumeButton.hidden = false;
-    } else {
-      attention.hidden = true;
-    }
+    } else attention.hidden = true;
     return;
   }
 
@@ -537,7 +737,6 @@ function handleAgentSnapshot(agent) {
   attentionTitle.textContent = agent.state === "waiting" ? "agent needs attention" : `agent ${agent.state}`;
   attentionDetail.textContent = "game paused · work comes first";
   if (resumeButton instanceof HTMLButtonElement) resumeButton.hidden = true;
-
   if (!attentionPauseRequested) {
     attentionPauseRequested = true;
     void setPaused(true);
@@ -552,9 +751,7 @@ function connectAgentSession() {
     if (typeof event.data !== "string") return;
     try {
       const message = JSON.parse(event.data);
-      if (message?.version === 1 && message?.type === "agent.snapshot" && message.snapshot) {
-        handleAgentSnapshot(message.snapshot);
-      }
+      if (message?.version === 1 && message?.type === "agent.snapshot" && message.snapshot) handleAgentSnapshot(message.snapshot);
     } catch {
       // Ignore malformed lifecycle messages.
     }
@@ -563,7 +760,6 @@ function connectAgentSession() {
 
 async function loadHostedAgents() {
   if (!isElement(hostedAgentActions) || !isElement(hostedAgentStatus)) return;
-
   try {
     const response = await fetch("/api/v1/hosted-agents", { headers: { accept: "application/json" } });
     const body = await readJsonResponse(response);
@@ -584,14 +780,12 @@ async function loadHostedAgents() {
     button.type = "button";
     button.className = "command-button";
     button.title = typeof agent.model === "string" ? agent.model : agent.label;
-
     const prompt = document.createElement("span");
     prompt.textContent = ">";
     button.append(prompt, document.createTextNode(` you + ${agent.label} + bot`));
     button.addEventListener("click", () => void createRoom("hosted-agent", agent.id));
     hostedAgentActions.append(button);
   }
-
   hostedAgentStatus.textContent = "Hosted by Waitloop. Only that seat's visible game state is sent to the model provider.";
 }
 
@@ -601,6 +795,16 @@ playSelectedButton?.addEventListener("click", () => void playSelection());
 passMoveButton?.addEventListener("click", () => void passTurn());
 hintMoveButton?.addEventListener("click", () => void requestHint());
 clearSelectionButton?.addEventListener("click", clearSelection);
+showMcpButton?.addEventListener("click", () => void claimRawMcp());
+copyJoinButton?.addEventListener("click", async () => {
+  if (!currentJoinCode) return;
+  try {
+    await navigator.clipboard.writeText(`waitloop join ${currentJoinCode}`);
+    if (copyJoinButton instanceof HTMLButtonElement) copyJoinButton.textContent = "copied";
+  } catch {
+    if (copyJoinButton instanceof HTMLButtonElement) copyJoinButton.textContent = "copy failed";
+  }
+});
 copyMcpButton?.addEventListener("click", async () => {
   if (!mcpConfigText) return;
   try {
@@ -619,25 +823,21 @@ resumeButton?.addEventListener("click", () => {
 document.addEventListener("keydown", (event) => {
   if (!snapshot || !isHumanTurn(snapshot)) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-
   if (event.key === "Enter" && selectedCardIds.size > 0) {
     event.preventDefault();
     void playSelection();
     return;
   }
-
   if (event.key.toLowerCase() === "h" && snapshot.controls?.canHint === true) {
     event.preventDefault();
     void requestHint();
     return;
   }
-
   if (event.key.toLowerCase() === "p" && snapshot.controls?.canPass === true) {
     event.preventDefault();
     void passTurn();
     return;
   }
-
   if (event.key === "Escape") {
     event.preventDefault();
     clearSelection();
