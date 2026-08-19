@@ -29,25 +29,24 @@ https://waitloop.run/skills/waitloop/SKILL.md
 https://waitloop.run/mcp
 ```
 
-`agent.md` is the canonical installation/integration guide. `agent.json` declares current support and explicitly marks unpublished/planned components so an installer agent does not invent them. `SKILL.md` is credential-free agent guidance. The `/mcp` endpoint is room-scoped and must not be configured globally without a specific game room and seat credential.
+`agent.md` is the canonical installation/integration guide. `agent.json` declares current support and explicitly marks planned components so an installer agent does not invent them. `SKILL.md` is credential-free agent guidance. The `/mcp` endpoint is room-scoped and must not be configured globally without a specific game room and seat credential.
 
 Do not confuse the public `/agent.md` with repository-root [`AGENTS.md`](AGENTS.md): `AGENTS.md` contains instructions for coding agents developing this repository; `/agent.md` tells external agents how to integrate with the deployed Waitloop product.
 
 ## CLI distribution
 
-The CLI package is prepared as:
+The public alpha CLI is published as:
 
 ```text
 @waitloop/cli@0.1.0-alpha.1
 ```
 
-The npm package has not yet been marked public in `agent.json`; that flag remains `false` until the first registry publication is actually verified. Once published, alpha installs use:
+Install the current alpha channel with:
 
 ```bash
 npm install -g @waitloop/cli@alpha
+waitloop --version
 ```
-
-Until then, `/agent.md` instructs installer agents to use the source-install fallback rather than pretending the npm package already exists.
 
 The release pipeline validates the final `npm pack` tarball, packaged `waitloop --version`, exact release tag, and publishes through `.github/workflows/publish-cli.yml`. See [`docs/cli-release.md`](docs/cli-release.md).
 
