@@ -32,11 +32,18 @@ MCP is not lifecycle detection. Hooks report lifecycle state; MCP controls a gam
 
 After installing the Codex lifecycle hook, the user must review/trust the Waitloop hook in Codex's `/hooks` UI.
 
-## Install the CLI — current alpha
+## Install the CLI
 
-`@waitloop/cli` exists in the repository but is not yet a public npm release. Do not run an invented `npm install -g @waitloop/cli` command until the manifest says the package is published.
+Always read the `cli` object in https://waitloop.run/agent.json first.
 
-For the current source install, use Node.js 20+ and pnpm 10:
+If `cli.published` is `true`, prefer the registry install command from the manifest. The alpha channel is intended to be:
+
+```bash
+npm install -g @waitloop/cli@alpha
+waitloop --version
+```
+
+If `cli.published` is `false`, do **not** assume the npm package exists. Use the source fallback instead:
 
 ```bash
 git clone https://github.com/shixushi2025/waitloop.git
@@ -46,6 +53,8 @@ pnpm build:cli
 npm install -g ./packages/cli
 waitloop --version
 ```
+
+Current release candidate: `@waitloop/cli@0.1.0-alpha.1`.
 
 Then initialize against the public service:
 
@@ -196,8 +205,8 @@ Use this order:
 
 1. Read https://waitloop.run/agent.json and this document.
 2. Detect the user's actual installed harnesses. Do not install unrelated adapters.
-3. Ensure Node.js/pnpm prerequisites exist before source-installing the alpha CLI.
-4. Install the CLI from source only while the manifest says `published: false`.
+3. Read `cli.published` from the manifest.
+4. If published, use `cli.installCommand`; otherwise use the documented source-install fallback.
 5. Run `waitloop init --url https://waitloop.run`.
 6. Run `waitloop pair` and let the user explicitly approve the browser pairing request.
 7. Install only the matching lifecycle adapter(s) with `waitloop install ...`.
