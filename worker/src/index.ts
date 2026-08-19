@@ -5,13 +5,15 @@ import { AgentSession } from "./agent-session";
 import { DeviceRegistry } from "./device-registry";
 import { GameRoom } from "./game-room";
 import { handleWaitloopMcp } from "./mcp";
+import { PairingRequest } from "./pairing-request";
 
-export { AgentSession, DeviceRegistry, GameRoom };
+export { AgentSession, DeviceRegistry, GameRoom, PairingRequest };
 
 interface Env {
   ASSETS: Fetcher;
   AGENT_SESSIONS: DurableObjectNamespace<AgentSession>;
   DEVICE_AUTH: DurableObjectNamespace<DeviceRegistry>;
+  PAIRINGS: DurableObjectNamespace<PairingRequest>;
   GAME_ROOMS: DurableObjectNamespace<GameRoom>;
   WAITLOOP_INGEST_TOKEN?: string;
   WAITLOOP_ACCESS_TOKEN?: string;
