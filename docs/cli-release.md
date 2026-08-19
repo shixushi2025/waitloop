@@ -6,7 +6,7 @@ Waitloop publishes the local integration CLI as the public scoped package:
 @waitloop/cli
 ```
 
-The first release candidate is:
+The first published release is:
 
 ```text
 0.1.0-alpha.1
@@ -25,15 +25,15 @@ A CLI release is not ready unless all of these agree:
 - `packages/cli/package.json` package name and version;
 - `apps/web/public/agent.json` CLI package name, version, dist-tag, and install command;
 - `waitloop --version` from the built package;
-- the GitHub Release tag `cli-v<version>`.
+- the GitHub Release tag `cli-v<version>` for normal post-bootstrap releases.
 
-CI enforces the first three. The publish workflow enforces the release tag.
+CI enforces the package/manifest/binary invariants. The normal publish workflow enforces the release tag.
 
 The package is restricted to the built `dist/` output plus package README/LICENSE. `pnpm check:cli-package` runs `npm pack --dry-run --json`, checks the tarball contents, and executes the built CLI's `--version` command.
 
 ## Publish workflow
 
-The workflow is:
+The normal workflow is:
 
 ```text
 .github/workflows/publish-cli.yml
@@ -41,7 +41,7 @@ The workflow is:
 
 It runs only for a published GitHub Release whose tag starts with `cli-v`.
 
-For `0.1.0-alpha.1`, the release tag must be exactly:
+For `0.1.0-alpha.1`, the canonical release tag is:
 
 ```text
 cli-v0.1.0-alpha.1
@@ -57,7 +57,9 @@ The workflow:
 6. validates browser JavaScript;
 7. validates the npm tarball and CLI version;
 8. verifies the release tag matches `package.json`;
-9. publishes with public access, provenance, and the version-derived dist-tag.
+9. checks whether that exact npm version already exists;
+10. publishes only when necessary;
+11. verifies the expected version is visible from npm.
 
 Pre-release identifiers determine the npm dist-tag. For example:
 
@@ -68,55 +70,20 @@ Pre-release identifiers determine the npm dist-tag. For example:
 0.1.0         -> latest
 ```
 
-## One-time first publish bootstrap
+## First publish bootstrap — completed
 
-npm trusted publishing is configured on an existing package, so the first publication may need a one-time traditional publish credential.
+The first publication was bootstrapped with a temporary granular npm credential because Trusted Publishing is configured after the npm package exists.
 
-Before the first release:
-
-1. confirm the npm account/organization controls the `@waitloop` scope;
-2. confirm `@waitloop/cli` can be created under that scope;
-3. create a granular npm access token with only the permissions needed to publish this package and with the required 2FA publishing behavior;
-4. add it temporarily to this GitHub repository as the Actions secret `NPM_TOKEN`;
-5. publish the GitHub Release `cli-v0.1.0-alpha.1`.
-
-The workflow accepts `NPM_TOKEN` only as a bootstrap fallback. It should not remain the long-term publishing mechanism.
-
-If the first publish fails because the scope/package cannot be created, do not rename the package casually in the workflow. Decide the canonical CLI package name first, then update `package.json`, `agent.json`, documentation, and CI together.
-
-## Switch to npm Trusted Publishing
-
-After the package exists on npm, configure its Trusted Publisher to GitHub Actions with:
+Verified result:
 
 ```text
-GitHub user/organization: shixushi2025
-Repository:              waitloop
-Workflow filename:       publish-cli.yml
-Allowed action:          npm publish
-Environment:             none (unless a GitHub environment is deliberately added later)
+@waitloop/cli@0.1.0-alpha.1
+npm dist-tag: alpha
 ```
 
-The workflow already grants `id-token: write` and uses a supported Node/npm version. Once trusted publishing is configured, npm can authenticate the publish with short-lived OIDC credentials and generate provenance from the public GitHub repository.
+The temporary bootstrap workflow path was removed from `main` after publication. Normal future publishing goes through a GitHub Release.
 
-After one successful OIDC publication:
-
-1. delete the GitHub `NPM_TOKEN` secret;
-2. optionally configure npm package publishing access to disallow traditional tokens;
-3. keep the workflow filename stable unless the npm Trusted Publisher configuration is updated at the same time.
-
-## Mark the public Agent manifest as published
-
-Before the first npm publication, `apps/web/public/agent.json` intentionally contains:
-
-```json
-{
-  "cli": {
-    "published": false
-  }
-}
-```
-
-After the first npm publish is verified, change it to:
+`apps/web/public/agent.json` is now marked:
 
 ```json
 {
@@ -126,9 +93,27 @@ After the first npm publish is verified, change it to:
 }
 ```
 
-and deploy the Worker/static assets. `/agent.md` tells installer agents to use npm only when this flag is true; otherwise they use the source-install fallback.
+so installer agents can use the npm package directly.
 
-This one-time flag avoids telling an automated agent to install a package before it really exists.
+## Switch to npm Trusted Publishing
+
+Configure the npm package Trusted Publisher to GitHub Actions with:
+
+```text
+GitHub user/organization: shixushi2025
+Repository:              waitloop
+Workflow filename:       publish-cli.yml
+Environment:             none
+```
+
+The workflow already grants `id-token: write` and uses a supported Node/npm version. Once trusted publishing is configured, npm can authenticate publication with short-lived OIDC credentials and generate provenance from the public GitHub repository.
+
+After Trusted Publishing is configured:
+
+1. remove the `NODE_AUTH_TOKEN` / `NPM_TOKEN` fallback from `publish-cli.yml`;
+2. delete the GitHub repository secret `NPM_TOKEN`;
+3. optionally configure npm package publishing access to disallow traditional publish tokens;
+4. keep the workflow filename stable unless the npm Trusted Publisher configuration is updated at the same time.
 
 ## Preparing the next version
 
