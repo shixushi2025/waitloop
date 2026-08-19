@@ -67,7 +67,7 @@ export function detectAgents(): AgentDetection[] {
       label: "Codex",
       installed: codexPath !== null,
       detail: codexPath ?? "not detected",
-      integration: "planned",
+      integration: "available",
     },
     {
       id: "cursor",

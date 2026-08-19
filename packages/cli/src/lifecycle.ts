@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { DEFAULT_WAITLOOP_URL, loadConfig } from "./config.js";
 
-export type LifecycleAgent = "claude-code" | "cursor";
+export type LifecycleAgent = "claude-code" | "cursor" | "codex";
 export type AgentState = "running" | "waiting" | "completed" | "failed";
 
 export interface LocalTurnState {
@@ -57,7 +57,7 @@ export function latestStatePath(agent: LifecycleAgent): string {
 
 function parseState(value: unknown): LocalTurnState | null {
   if (!isRecord(value) || value.version !== 1) return null;
-  if (value.agent !== "claude-code" && value.agent !== "cursor") return null;
+  if (value.agent !== "claude-code" && value.agent !== "cursor" && value.agent !== "codex") return null;
   if (typeof value.waitloopSessionId !== "string" || value.waitloopSessionId.length === 0) return null;
   if (value.state !== "running" && value.state !== "waiting" && value.state !== "completed" && value.state !== "failed") {
     return null;
@@ -159,7 +159,8 @@ async function sendAgentEvent(agent: LifecycleAgent, waitloopSessionId: string, 
 }
 
 function sessionPrefix(agent: LifecycleAgent): string {
-  return agent === "claude-code" ? "claude" : "cursor";
+  if (agent === "claude-code") return "claude";
+  return agent;
 }
 
 export async function startTurn(agent: LifecycleAgent, nativeSessionId: string): Promise<LocalTurnState> {

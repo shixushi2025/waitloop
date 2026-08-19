@@ -7,13 +7,14 @@ import { stdin as input, stdout as output } from "node:process";
 import { detectAgents } from "./agents.js";
 import { installClaudeCode, uninstallClaudeCode } from "./claude-code.js";
 import { createConfig, getConfigPath, loadConfig, redactConfig, saveConfig } from "./config.js";
+import { installCodex, readLatestCodexState, runCodexHook, uninstallCodex } from "./codex.js";
 import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } from "./cursor.js";
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
 import type { LocalTurnState } from "./lifecycle.js";
 
 const VERSION = "0.0.0";
 
-type InstallTarget = "claude-code" | "cursor";
+type InstallTarget = "claude-code" | "cursor" | "codex";
 
 function help(): void {
   console.log(`waitloop ${VERSION}
@@ -23,12 +24,12 @@ Tiny games while your coding agent runs.
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
   waitloop doctor
-  waitloop install <claude-code|cursor|all>
-  waitloop uninstall <claude-code|cursor|all>
+  waitloop install <claude-code|cursor|codex|all>
+  waitloop uninstall <claude-code|cursor|codex|all>
   waitloop status
   waitloop open [--print]
   waitloop config
-  waitloop hook <claude-code|cursor>
+  waitloop hook <claude-code|cursor|codex>
   waitloop --version
 `);
 }
@@ -70,11 +71,15 @@ async function promptYesNo(question: string, defaultYes = true): Promise<boolean
 }
 
 async function installTarget(target: InstallTarget): Promise<{ changed: boolean; path: string }> {
-  return target === "claude-code" ? installClaudeCode() : installCursor();
+  if (target === "claude-code") return installClaudeCode();
+  if (target === "cursor") return installCursor();
+  return installCodex();
 }
 
 async function uninstallTarget(target: InstallTarget): Promise<{ changed: boolean; path: string }> {
-  return target === "claude-code" ? uninstallClaudeCode() : uninstallCursor();
+  if (target === "claude-code") return uninstallClaudeCode();
+  if (target === "cursor") return uninstallCursor();
+  return uninstallCodex();
 }
 
 async function commandInit(args: string[]): Promise<void> {
@@ -99,7 +104,8 @@ async function commandInit(args: string[]): Promise<void> {
   const detections = printAgents();
   const available = detections.filter(
     (item): item is typeof item & { id: InstallTarget } =>
-      item.installed && item.integration === "available" && (item.id === "claude-code" || item.id === "cursor"),
+      item.installed && item.integration === "available" &&
+      (item.id === "claude-code" || item.id === "cursor" || item.id === "codex"),
   );
   if (available.length === 0) {
     console.log("\nNo installable lifecycle adapter was detected. Run `waitloop doctor` after installing an agent.");
@@ -116,6 +122,9 @@ async function commandInit(args: string[]): Promise<void> {
     const result = await installTarget(agent.id);
     console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} ${agent.label}`);
     console.log(`  ${result.path}`);
+    if (agent.id === "codex") {
+      console.log("  review/trust the new hook in Codex with /hooks");
+    }
   }
 }
 
@@ -147,9 +156,9 @@ async function commandDoctor(): Promise<void> {
 }
 
 function parseInstallTargets(target: string | undefined): InstallTarget[] {
-  if (target === "all") return ["claude-code", "cursor"];
-  if (target === "claude-code" || target === "cursor") return [target];
-  throw new Error("Target must be `claude-code`, `cursor`, or `all`.");
+  if (target === "all") return ["claude-code", "cursor", "codex"];
+  if (target === "claude-code" || target === "cursor" || target === "codex") return [target];
+  throw new Error("Target must be `claude-code`, `cursor`, `codex`, or `all`.");
 }
 
 async function commandInstall(target: string | undefined): Promise<void> {
@@ -157,6 +166,7 @@ async function commandInstall(target: string | undefined): Promise<void> {
     const result = await installTarget(item);
     console.log(`${result.changed ? "installed" : "already installed"} ${item}`);
     console.log(result.path);
+    if (item === "codex") console.log("review/trust the new hook in Codex with /hooks");
   }
 }
 
@@ -169,7 +179,7 @@ async function commandUninstall(target: string | undefined): Promise<void> {
 }
 
 async function latestStates(): Promise<LocalTurnState[]> {
-  const states = await Promise.all([readLatestClaudeState(), readLatestCursorState()]);
+  const states = await Promise.all([readLatestClaudeState(), readLatestCursorState(), readLatestCodexState()]);
   return states.filter((state): state is LocalTurnState => state !== null).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -239,6 +249,7 @@ async function main(): Promise<void> {
   }
   if (command === "hook" && args[1] === "claude-code") return runClaudeCodeHook();
   if (command === "hook" && args[1] === "cursor") return runCursorHook();
+  if (command === "hook" && args[1] === "codex") return runCodexHook();
 
   throw new Error(`Unknown command: ${args.join(" ")}`);
 }
