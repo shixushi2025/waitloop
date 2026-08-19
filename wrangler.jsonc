@@ -20,6 +20,10 @@
         "class_name": "DeviceRegistry"
       },
       {
+        "name": "PAIRINGS",
+        "class_name": "PairingRequest"
+      },
+      {
         "name": "GAME_ROOMS",
         "class_name": "GameRoom"
       }
@@ -31,6 +35,10 @@
       "storage": "sqlite"
     },
     "DeviceRegistry": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "PairingRequest": {
       "type": "durable-object",
       "storage": "sqlite"
     },
