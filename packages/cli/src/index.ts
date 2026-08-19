@@ -11,6 +11,7 @@ import { installCodex, readLatestCodexState, runCodexHook, uninstallCodex } from
 import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } from "./cursor.js";
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
 import type { LocalTurnState } from "./lifecycle.js";
+import { pairDevice, unpairDevice } from "./pairing.js";
 
 const VERSION = "0.0.0";
 
@@ -23,6 +24,8 @@ Tiny games while your coding agent runs.
 
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
+  waitloop pair [--bootstrap-token TOKEN]
+  waitloop unpair
   waitloop doctor
   waitloop install <claude-code|cursor|codex|all>
   waitloop uninstall <claude-code|cursor|codex|all>
@@ -98,7 +101,8 @@ async function commandInit(args: string[]): Promise<void> {
   console.log(`config    ${getConfigPath()}`);
   console.log(`server    ${config.url}`);
   console.log(`device    ${config.deviceId}`);
-  console.log(`ingest    ${config.ingestToken ? "configured" : "not configured"}`);
+  console.log(`paired    ${config.deviceToken ? "yes" : "no"}`);
+  console.log(`ingest    ${config.ingestToken ? "legacy token configured" : "no legacy token"}`);
   console.log("");
 
   const detections = printAgents();
@@ -128,6 +132,26 @@ async function commandInit(args: string[]): Promise<void> {
   }
 }
 
+async function commandPair(args: string[]): Promise<void> {
+  const bootstrapToken = optionValue(args, "--bootstrap-token");
+  const pairInput: Parameters<typeof pairDevice>[0] = {};
+  if (bootstrapToken !== undefined) pairInput.bootstrapToken = bootstrapToken;
+  const result = await pairDevice(pairInput);
+  console.log("paired");
+  console.log(`device    ${result.deviceId}`);
+  console.log(`scopes    ${result.scopes.join(", ")}`);
+  console.log("credential stored privately; raw token was not printed");
+}
+
+async function commandUnpair(): Promise<void> {
+  const result = await unpairDevice();
+  if (!result.paired) {
+    console.log("not paired");
+    return;
+  }
+  console.log(result.revoked ? "device credential revoked and removed" : "remote credential was already invalid; local credential removed");
+}
+
 async function checkHealth(url: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2_000);
@@ -147,9 +171,11 @@ async function commandDoctor(): Promise<void> {
   if (!config) {
     console.log(`config    missing · ${getConfigPath()}`);
     console.log("server    not checked");
+    console.log("pairing   not initialized");
   } else {
     console.log(`config    ok · ${getConfigPath()}`);
     console.log(`server    ${config.url} · ${await checkHealth(config.url)}`);
+    console.log(`pairing   ${config.deviceToken ? "device credential configured" : "not paired"}`);
   }
   console.log("");
   printAgents();
@@ -237,6 +263,8 @@ async function main(): Promise<void> {
   }
 
   if (command === "init") return commandInit(args.slice(1));
+  if (command === "pair") return commandPair(args.slice(1));
+  if (command === "unpair") return commandUnpair();
   if (command === "doctor") return commandDoctor();
   if (command === "install") return commandInstall(args[1]);
   if (command === "uninstall") return commandUninstall(args[1]);

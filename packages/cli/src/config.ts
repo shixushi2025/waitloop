@@ -9,6 +9,7 @@ export interface WaitloopConfig {
   version: 1;
   url: string;
   deviceId: string;
+  deviceToken?: string;
   ingestToken?: string;
   accessToken?: string;
 }
@@ -58,6 +59,9 @@ export async function loadConfig(path = getConfigPath()): Promise<WaitloopConfig
     url: normalizeUrl(parsed.url),
     deviceId: parsed.deviceId,
   };
+  if (typeof parsed.deviceToken === "string" && parsed.deviceToken.length > 0) {
+    config.deviceToken = parsed.deviceToken;
+  }
   if (typeof parsed.ingestToken === "string" && parsed.ingestToken.length > 0) {
     config.ingestToken = parsed.ingestToken;
   }
@@ -78,6 +82,7 @@ export async function saveConfig(config: WaitloopConfig, path = getConfigPath())
 export function createConfig(input: {
   previous?: WaitloopConfig | null;
   url?: string;
+  deviceToken?: string;
   ingestToken?: string;
   accessToken?: string;
 }): WaitloopConfig {
@@ -87,6 +92,8 @@ export function createConfig(input: {
     deviceId: input.previous?.deviceId ?? `device-${randomUUID()}`,
   };
 
+  const deviceToken = input.deviceToken ?? input.previous?.deviceToken;
+  if (deviceToken) config.deviceToken = deviceToken;
   const ingestToken = input.ingestToken ?? input.previous?.ingestToken;
   if (ingestToken) config.ingestToken = ingestToken;
   const accessToken = input.accessToken ?? input.previous?.accessToken;
@@ -99,7 +106,8 @@ export function redactConfig(config: WaitloopConfig): Record<string, unknown> {
     version: config.version,
     url: config.url,
     deviceId: config.deviceId,
-    ingestToken: config.ingestToken ? "configured" : "not configured",
-    accessToken: config.accessToken ? "configured" : "not configured",
+    deviceToken: config.deviceToken ? "configured" : "not configured",
+    ingestToken: config.ingestToken ? "configured (legacy)" : "not configured",
+    accessToken: config.accessToken ? "configured (alpha)" : "not configured",
   };
 }

@@ -110,12 +110,16 @@ export async function readLatestAgentState(agent: LifecycleAgent): Promise<Local
   return readStateFile(latestStatePath(agent));
 }
 
-async function runtimeConfig(): Promise<{ url: string; ingestToken?: string }> {
+async function runtimeConfig(): Promise<{ url: string; credential?: string }> {
   const config = await loadConfig();
   const url = (process.env.WAITLOOP_URL || config?.url || DEFAULT_WAITLOOP_URL).replace(/\/$/, "");
-  const token = process.env.WAITLOOP_INGEST_TOKEN || config?.ingestToken;
-  const result: { url: string; ingestToken?: string } = { url };
-  if (token) result.ingestToken = token;
+  const credential =
+    process.env.WAITLOOP_DEVICE_TOKEN ||
+    config?.deviceToken ||
+    process.env.WAITLOOP_INGEST_TOKEN ||
+    config?.ingestToken;
+  const result: { url: string; credential?: string } = { url };
+  if (credential) result.credential = credential;
   return result;
 }
 
@@ -125,7 +129,7 @@ async function sendAgentEvent(agent: LifecycleAgent, waitloopSessionId: string, 
     "content-type": "application/json",
     accept: "application/json",
   };
-  if (runtime.ingestToken) headers.authorization = `Bearer ${runtime.ingestToken}`;
+  if (runtime.credential) headers.authorization = `Bearer ${runtime.credential}`;
 
   const configuredTimeout = Number(process.env.WAITLOOP_HOOK_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? Math.min(configuredTimeout, 10_000) : 1_000;
