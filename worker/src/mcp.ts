@@ -20,6 +20,11 @@ function errorResult(code: string, message: string) {
   };
 }
 
+function rpcValue(result: object): unknown {
+  if (!("value" in result)) throw new Error("Successful game RPC result is missing a value.");
+  return result.value;
+}
+
 function sameOriginOrAbsent(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
@@ -66,7 +71,7 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
       async () => {
         const result = await room.getSnapshotBySeatToken(seatToken);
         if (!result.ok) return errorResult(result.error.code, result.error.message);
-        return textResult(result.value);
+        return textResult(rpcValue(result));
       },
     );
 
@@ -83,7 +88,7 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
       async ({ expectedRevision, moveId }) => {
         const result = await room.applyMoveBySeatToken(seatToken, expectedRevision, moveId);
         if (!result.ok) return errorResult(result.error.code, result.error.message);
-        return textResult(result.value);
+        return textResult(rpcValue(result));
       },
     );
 
