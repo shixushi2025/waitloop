@@ -42,7 +42,7 @@ interface PersistedGameRoomV1 {
   roomPhase?: GameRoomPhaseV1;
   seatStates?: Record<string, GameSeatRuntimeV1>;
   turnStartedAt?: number;
-  join?: GameJoinStateV1;
+  join?: GameJoinStateV1 | undefined;
 }
 
 interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
@@ -99,13 +99,13 @@ export interface InitializeGameRoomRequest {
   viewerTokens?: Record<string, string>;
   participants?: GameParticipantV1[];
   hostedAgents?: Record<string, HostedAgentDescriptorV1>;
-  waitForSeatPlayerId?: string;
+  waitForSeatPlayerId?: string | undefined;
   join?: {
     version: 1;
     codeHash: string;
     playerId: string;
     expiresAt: number;
-  };
+  } | undefined;
 }
 
 const STATE_KEY = "game-room-v1";
