@@ -18,7 +18,11 @@ const gameStatusValue = document.querySelector("#game-status-value");
 const playersElement = document.querySelector("#players");
 const lastMoveElement = document.querySelector("#last-move");
 const handElement = document.querySelector("#hand");
-const movesElement = document.querySelector("#moves");
+const selectionSummary = document.querySelector("#selection-summary");
+const playSelectedButton = document.querySelector("#play-selected");
+const passMoveButton = document.querySelector("#pass-move");
+const hintMoveButton = document.querySelector("#hint-move");
+const clearSelectionButton = document.querySelector("#clear-selection");
 const gamePrompt = document.querySelector("#game-prompt");
 const attention = document.querySelector("#attention");
 const attentionTitle = document.querySelector("#attention-title");
@@ -37,6 +41,9 @@ let attentionPauseRequested = false;
 let mcpConfigText = "";
 let hostedAgents = [];
 let createInFlight = false;
+let selectionRevision = -1;
+let selectedCardIds = new Set();
+let hintCursor = 0;
 
 function isElement(value) {
   return value instanceof HTMLElement;
@@ -106,7 +113,7 @@ function promptFor(current) {
       : `${playerLabel(current, current.state.winnerId)} won`;
   }
   if (current.status === "paused") return "game paused · work has priority";
-  if (current.currentPlayerId === VIEWER_ID) return "your turn · choose a legal move";
+  if (current.currentPlayerId === VIEWER_ID) return "your turn · select cards, then play";
 
   const participant = participantFor(current, current.currentPlayerId);
   if (participant?.kind === "connected-agent") return `${participant.label} turn · waiting for MCP move`;
@@ -153,17 +160,154 @@ function renderLastMove(current) {
   lastMoveElement.textContent = `${playerLabel(current, last.playerId)}  ${last.pattern?.kind ?? "play"}  ${cards}`;
 }
 
+function isHumanTurn(current = snapshot) {
+  return Boolean(current && current.status === "playing" && current.currentPlayerId === VIEWER_ID);
+}
+
+function playCardsFor(move) {
+  if (move?.meta?.type !== "play" || !Array.isArray(move.meta.cards)) return null;
+  return move.meta.cards.every((card) => card && typeof card.id === "string") ? move.meta.cards : null;
+}
+
+function cardSignature(cards) {
+  return cards.map((card) => card.id).sort().join("\u001f");
+}
+
+function selectedCards(current = snapshot) {
+  if (!current || !Array.isArray(current.state?.myHand)) return [];
+  return current.state.myHand.filter((card) => selectedCardIds.has(card.id));
+}
+
+function playableMoves(current = snapshot) {
+  if (!current || !Array.isArray(current.legalMoves)) return [];
+  return current.legalMoves.filter((move) => playCardsFor(move) !== null);
+}
+
+function findSelectedMove(current = snapshot) {
+  const cards = selectedCards(current);
+  if (cards.length === 0) return null;
+  const signature = cardSignature(cards);
+  return playableMoves(current).find((move) => cardSignature(playCardsFor(move)) === signature) ?? null;
+}
+
+function syncSelection(current) {
+  if (selectionRevision !== current.revision) {
+    selectedCardIds = new Set();
+    selectionRevision = current.revision;
+    hintCursor = 0;
+  }
+
+  const currentIds = new Set((current.state.myHand ?? []).map((card) => card.id));
+  for (const id of selectedCardIds) {
+    if (!currentIds.has(id)) selectedCardIds.delete(id);
+  }
+
+  if (!isHumanTurn(current) && selectedCardIds.size > 0) {
+    selectedCardIds.clear();
+    hintCursor = 0;
+  }
+}
+
 function renderHand(current) {
   if (!isElement(handElement)) return;
   handElement.replaceChildren();
+  const selectable = isHumanTurn(current);
 
   for (const card of current.state.myHand ?? []) {
-    const token = document.createElement("span");
-    token.className = "card-token";
+    const token = document.createElement("button");
+    token.type = "button";
+    token.className = `card-token${selectedCardIds.has(card.id) ? " selected" : ""}`;
     token.textContent = rankLabel(card.rank);
-    token.title = card.id;
+    token.title = selectable ? `${card.id} · click to ${selectedCardIds.has(card.id) ? "deselect" : "select"}` : card.id;
+    token.disabled = !selectable;
+    token.setAttribute("aria-pressed", selectedCardIds.has(card.id) ? "true" : "false");
+    token.addEventListener("click", () => {
+      if (!snapshot || !isHumanTurn(snapshot)) return;
+      if (selectedCardIds.has(card.id)) selectedCardIds.delete(card.id);
+      else selectedCardIds.add(card.id);
+      hintCursor = 0;
+      renderHand(snapshot);
+      renderActions(snapshot);
+    });
     handElement.append(token);
   }
+}
+
+function setActionDisabled(button, disabled) {
+  if (button instanceof HTMLButtonElement) button.disabled = disabled;
+}
+
+function renderActions(current) {
+  if (!isElement(selectionSummary)) return;
+  selectionSummary.classList.remove("valid", "invalid");
+
+  const turn = isHumanTurn(current);
+  const cards = selectedCards(current);
+  const selectedMove = cards.length > 0 ? findSelectedMove(current) : null;
+  const passMove = current.legalMoves.find((move) => move.id === "pass") ?? null;
+  const hints = playableMoves(current);
+
+  setActionDisabled(playSelectedButton, !turn || !selectedMove);
+  setActionDisabled(passMoveButton, !turn || !passMove);
+  setActionDisabled(hintMoveButton, !turn || hints.length === 0);
+  setActionDisabled(clearSelectionButton, cards.length === 0);
+
+  if (!turn) {
+    selectionSummary.textContent = current.status === "paused" ? "paused" : "no input required";
+    return;
+  }
+
+  if (cards.length === 0) {
+    selectionSummary.textContent = "select cards from hand";
+    return;
+  }
+
+  const labels = cards.map((card) => rankLabel(card.rank)).join(" ");
+  if (selectedMove) {
+    selectionSummary.classList.add("valid");
+    selectionSummary.textContent = `${labels} · ${selectedMove.label}`;
+    return;
+  }
+
+  selectionSummary.classList.add("invalid");
+  selectionSummary.textContent = `${labels} · not a legal play`;
+}
+
+function clearSelection() {
+  selectedCardIds.clear();
+  hintCursor = 0;
+  if (snapshot) {
+    renderHand(snapshot);
+    renderActions(snapshot);
+  }
+}
+
+function hintMoves(current = snapshot) {
+  return playableMoves(current).slice().sort((a, b) => {
+    const kindA = a?.meta?.pattern?.kind;
+    const kindB = b?.meta?.pattern?.kind;
+    const penaltyA = kindA === "rocket" ? 2 : kindA === "bomb" ? 1 : 0;
+    const penaltyB = kindB === "rocket" ? 2 : kindB === "bomb" ? 1 : 0;
+    return penaltyA - penaltyB;
+  });
+}
+
+function selectHint() {
+  if (!snapshot || !isHumanTurn(snapshot)) return;
+  const moves = hintMoves(snapshot);
+  if (moves.length === 0) return;
+
+  const index = hintCursor % moves.length;
+  const move = moves[index];
+  const cards = playCardsFor(move);
+  if (!cards) return;
+
+  selectedCardIds = new Set(cards.map((card) => card.id));
+  selectionRevision = snapshot.revision;
+  hintCursor = (index + 1) % moves.length;
+  renderHand(snapshot);
+  renderActions(snapshot);
+  if (isElement(gamePrompt)) gamePrompt.textContent = `hint ${index + 1}/${moves.length} · ${move.label}`;
 }
 
 async function playMove(moveId) {
@@ -192,40 +336,11 @@ async function playMove(moveId) {
   }
 }
 
-function renderMoves(current) {
-  if (!isElement(movesElement)) return;
-  movesElement.replaceChildren();
-
-  if (current.status !== "playing" || current.currentPlayerId !== VIEWER_ID) {
-    const empty = document.createElement("span");
-    empty.className = "last-move";
-    empty.textContent = current.status === "paused" ? "paused" : "no input required";
-    movesElement.append(empty);
-    return;
-  }
-
-  current.legalMoves.forEach((move, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `move-button${move.id === "pass" ? " pass" : ""}`;
-
-    const number = document.createElement("span");
-    number.className = "move-index";
-    number.textContent = String(index + 1).padStart(2, "0");
-
-    const label = document.createElement("span");
-    label.textContent = move.label;
-
-    button.append(number, label);
-    button.addEventListener("click", () => void playMove(move.id));
-    movesElement.append(button);
-  });
-}
-
 function render(current) {
   snapshot = current;
   roomId = current.roomId;
   updateUrl();
+  syncSelection(current);
 
   if (isElement(roomLabel)) roomLabel.textContent = `room / ${roomId.slice(0, 18)}`;
   if (isElement(gameStart)) gameStart.hidden = true;
@@ -239,7 +354,7 @@ function render(current) {
   renderPlayers(current);
   renderLastMove(current);
   renderHand(current);
-  renderMoves(current);
+  renderActions(current);
 }
 
 function showMcpSetup(createdRoomId, seatToken) {
@@ -319,6 +434,9 @@ async function createRoom(mode, hostedAgentId) {
   setConnection("creating room");
   if (isElement(mcpSetup)) mcpSetup.hidden = true;
   mcpConfigText = "";
+  selectedCardIds.clear();
+  selectionRevision = -1;
+  hintCursor = 0;
 
   const payload = {
     version: 1,
@@ -450,6 +568,15 @@ async function loadHostedAgents() {
 
 newBotGameButton?.addEventListener("click", () => void createRoom("bots"));
 newConnectedAgentGameButton?.addEventListener("click", () => void createRoom("connected-agent"));
+playSelectedButton?.addEventListener("click", () => {
+  const move = findSelectedMove();
+  if (move) void playMove(move.id);
+});
+passMoveButton?.addEventListener("click", () => {
+  if (snapshot?.legalMoves?.some((move) => move.id === "pass")) void playMove("pass");
+});
+hintMoveButton?.addEventListener("click", selectHint);
+clearSelectionButton?.addEventListener("click", clearSelection);
 copyMcpButton?.addEventListener("click", async () => {
   if (!mcpConfigText) return;
   try {
@@ -466,12 +593,34 @@ resumeButton?.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!snapshot || snapshot.currentPlayerId !== VIEWER_ID || snapshot.status !== "playing") return;
+  if (!snapshot || !isHumanTurn(snapshot)) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-  const index = Number(event.key) - 1;
-  if (!Number.isInteger(index) || index < 0 || index >= 9) return;
-  const move = snapshot.legalMoves[index];
-  if (move) void playMove(move.id);
+
+  if (event.key === "Enter") {
+    const move = findSelectedMove(snapshot);
+    if (move) {
+      event.preventDefault();
+      void playMove(move.id);
+    }
+    return;
+  }
+
+  if (event.key.toLowerCase() === "h") {
+    event.preventDefault();
+    selectHint();
+    return;
+  }
+
+  if (event.key.toLowerCase() === "p" && snapshot.legalMoves.some((move) => move.id === "pass")) {
+    event.preventDefault();
+    void playMove("pass");
+    return;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    clearSelection();
+  }
 });
 
 if (roomId) void loadRoom();
