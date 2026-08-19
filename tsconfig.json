@@ -28,5 +28,6 @@
     "worker/**/*.ts",
     "integrations/**/*.ts",
     "vitest.config.ts"
-  ]
+  ],
+  "exclude": ["packages/cli"]
 }
