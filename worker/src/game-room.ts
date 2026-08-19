@@ -13,11 +13,22 @@ import {
 } from "./hosted-agent";
 import type {
   GameParticipantV1,
+  GameSeatRuntimeV1,
   HostedAgentDescriptorV1,
   HostedAgentRuntimeStatsV1,
 } from "./participants";
 
 export interface GameRoomEnv extends HostedAgentEnv {}
+
+export type GameRoomPhaseV1 = "waiting_for_players" | "playing" | "paused" | "finished";
+
+interface GameJoinStateV1 {
+  version: 1;
+  codeHash: string;
+  playerId: string;
+  expiresAt: number;
+  claimedAt?: number;
+}
 
 interface PersistedGameRoomV1 {
   version: 1;
@@ -28,6 +39,10 @@ interface PersistedGameRoomV1 {
   participants?: GameParticipantV1[];
   hostedAgents?: Record<string, HostedAgentDescriptorV1>;
   hostedAgentStats?: Record<string, HostedAgentRuntimeStatsV1>;
+  roomPhase?: GameRoomPhaseV1;
+  seatStates?: Record<string, GameSeatRuntimeV1>;
+  turnStartedAt?: number;
+  join?: GameJoinStateV1;
 }
 
 interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
@@ -35,6 +50,9 @@ interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
   participants: GameParticipantV1[];
   hostedAgents: Record<string, HostedAgentDescriptorV1>;
   hostedAgentStats: Record<string, HostedAgentRuntimeStatsV1>;
+  roomPhase: GameRoomPhaseV1;
+  seatStates: Record<string, GameSeatRuntimeV1>;
+  turnStartedAt: number;
 }
 
 interface SocketAttachmentV1 {
@@ -45,7 +63,21 @@ interface SocketAttachmentV1 {
 export type GameRoomSnapshotV1 = StoredGameSnapshot & {
   participants: GameParticipantV1[];
   hostedAgentStats: HostedAgentRuntimeStatsV1[];
+  roomPhase: GameRoomPhaseV1;
+  seatStates: GameSeatRuntimeV1[];
+  turnStartedAt: number;
 };
+
+export interface GameJoinInfoV1 {
+  version: 1;
+  roomId: string;
+  gameId: string;
+  phase: GameRoomPhaseV1;
+  playerId: string;
+  seatStatus: GameSeatRuntimeV1["status"];
+  expiresAt: number;
+  claimedAt?: number;
+}
 
 interface GameSocketMessageV1 {
   version: 1;
@@ -67,6 +99,13 @@ export interface InitializeGameRoomRequest {
   viewerTokens?: Record<string, string>;
   participants?: GameParticipantV1[];
   hostedAgents?: Record<string, HostedAgentDescriptorV1>;
+  waitForSeatPlayerId?: string;
+  join?: {
+    version: 1;
+    codeHash: string;
+    playerId: string;
+    expiresAt: number;
+  };
 }
 
 const STATE_KEY = "game-room-v1";
@@ -96,18 +135,45 @@ function constantTimeEqual(a: string, b: string): boolean {
   return difference === 0;
 }
 
+function phaseFromRoom(room: StoredGameRoom): GameRoomPhaseV1 {
+  if (room.status === "paused") return "paused";
+  if (room.status === "finished") return "finished";
+  return "playing";
+}
+
 function normalizeState(state: PersistedGameRoomV1): NormalizedGameRoomV1 {
+  const participants = [...(state.participants ?? [])];
+  const seatStates = { ...(state.seatStates ?? {}) };
+  for (const participant of participants) {
+    if (!seatStates[participant.id]) {
+      seatStates[participant.id] = {
+        version: 1,
+        playerId: participant.id,
+        status: "ready",
+        statusChangedAt: state.turnStartedAt ?? 0,
+      };
+    }
+  }
+
   return {
     ...state,
     viewerTokenHashes: { ...(state.viewerTokenHashes ?? {}) },
-    participants: [...(state.participants ?? [])],
+    participants,
     hostedAgents: { ...(state.hostedAgents ?? {}) },
     hostedAgentStats: { ...(state.hostedAgentStats ?? {}) },
+    roomPhase: state.roomPhase ?? phaseFromRoom(state.room),
+    seatStates,
+    turnStartedAt: state.turnStartedAt ?? 0,
   };
 }
 
 function fallbackMove(snapshot: StoredGameSnapshot) {
   return snapshot.legalMoves.find((candidate) => candidate.id !== "pass") ?? snapshot.legalMoves[0];
+}
+
+function synchronizePhase(state: NormalizedGameRoomV1): NormalizedGameRoomV1 {
+  if (state.roomPhase === "waiting_for_players") return state;
+  return { ...state, roomPhase: phaseFromRoom(state.room) };
 }
 
 export class GameRoom extends DurableObject<GameRoomEnv> {
@@ -128,11 +194,17 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
   }
 
   private snapshot(state: NormalizedGameRoomV1, viewerId: string): GameRoomSnapshotV1 {
-    const snapshot = getRegisteredGame(state.room.gameId).snapshot(state.room, viewerId);
+    const base = getRegisteredGame(state.room.gameId).snapshot(state.room, viewerId);
+    const waiting = state.roomPhase === "waiting_for_players";
     return {
-      ...snapshot,
+      ...base,
+      currentPlayerId: waiting ? null : base.currentPlayerId,
+      legalMoves: waiting ? [] : base.legalMoves,
       participants: state.participants.map((participant) => ({ ...participant })),
       hostedAgentStats: Object.values(state.hostedAgentStats).map((stats) => ({ ...stats })),
+      roomPhase: state.roomPhase,
+      seatStates: Object.values(state.seatStates).map((seat) => ({ ...seat })),
+      turnStartedAt: state.turnStartedAt,
     };
   }
 
@@ -194,7 +266,10 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
   }
 
   private async runAutomatedPlayers(state: NormalizedGameRoomV1): Promise<NormalizedGameRoomV1> {
+    if (state.roomPhase !== "playing") return state;
+
     let next = state;
+    const initialRevision = next.room.revision;
     const game = getRegisteredGame(next.room.gameId);
 
     for (let step = 0; step < MAX_AUTOMATED_MOVES && next.room.status === "playing"; step += 1) {
@@ -247,7 +322,8 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       };
     }
 
-    return next;
+    if (next.room.revision !== initialRevision) next = { ...next, turnStartedAt: Date.now() };
+    return synchronizePhase(next);
   }
 
   private async sendSnapshot(ws: WebSocket): Promise<void> {
@@ -305,7 +381,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       }
 
       const game = getRegisteredGame(request.gameId);
-      const room = game.create(request.roomId, request.gameInput);
+      let room = game.create(request.roomId, request.gameInput);
       game.snapshot(room, request.viewerId);
       for (const botId of request.botPlayerIds) game.snapshot(room, botId);
 
@@ -337,6 +413,28 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         if (seatTokenHashes[playerId]) throw new Error("Hosted agent seats cannot also be MCP-connected seats.");
       }
 
+      const now = Date.now();
+      const seatStates: Record<string, GameSeatRuntimeV1> = {};
+      for (const participant of participants) {
+        const waiting = request.waitForSeatPlayerId === participant.id;
+        seatStates[participant.id] = {
+          version: 1,
+          playerId: participant.id,
+          status: waiting ? "waiting" : "ready",
+          statusChangedAt: now,
+        };
+      }
+
+      if (request.join) {
+        game.snapshot(room, request.join.playerId);
+        if (request.join.playerId !== request.waitForSeatPlayerId) {
+          throw new Error("join.playerId must match waitForSeatPlayerId.");
+        }
+      }
+
+      const waitingForPlayers = typeof request.waitForSeatPlayerId === "string";
+      if (waitingForPlayers) room = game.pause(room);
+
       let state: NormalizedGameRoomV1 = {
         version: 1,
         room,
@@ -346,10 +444,130 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         participants: participants.map((participant) => ({ ...participant })),
         hostedAgents,
         hostedAgentStats: {},
+        roomPhase: waitingForPlayers ? "waiting_for_players" : phaseFromRoom(room),
+        seatStates,
+        turnStartedAt: now,
+        join: request.join ? { ...request.join } : undefined,
       };
       state = await this.runAutomatedPlayers(state);
       await this.writeState(state);
       return { ok: true, value: this.snapshot(state, request.viewerId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async getJoinInfo(joinCodeHash: string): Promise<GameRoomRpcResult<GameJoinInfoV1>> {
+    try {
+      const state = await this.readState();
+      if (!state || !state.join) return { ok: false, error: { code: "join_not_found", message: "Join code does not identify an active agent seat." } };
+      if (!constantTimeEqual(state.join.codeHash, joinCodeHash)) {
+        return { ok: false, error: { code: "join_not_found", message: "Join code does not identify an active agent seat." } };
+      }
+      const seat = state.seatStates[state.join.playerId];
+      if (!seat) return { ok: false, error: { code: "join_not_found", message: "Join seat is unavailable." } };
+
+      const value: GameJoinInfoV1 = {
+        version: 1,
+        roomId: state.room.roomId,
+        gameId: state.room.gameId,
+        phase: state.roomPhase,
+        playerId: state.join.playerId,
+        seatStatus: seat.status,
+        expiresAt: state.join.expiresAt,
+      };
+      if (state.join.claimedAt !== undefined) value.claimedAt = state.join.claimedAt;
+      return { ok: true, value };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async claimJoinSeat(joinCodeHash: string, seatToken: string): Promise<GameRoomRpcResult<GameJoinInfoV1>> {
+    try {
+      const state = await this.readState();
+      if (!state || !state.join || !constantTimeEqual(state.join.codeHash, joinCodeHash)) {
+        return { ok: false, error: { code: "join_not_found", message: "Join code does not identify an active agent seat." } };
+      }
+      if (Date.now() > state.join.expiresAt) {
+        return { ok: false, error: { code: "join_expired", message: "This join code has expired." } };
+      }
+      if (state.roomPhase !== "waiting_for_players") {
+        return { ok: false, error: { code: "seat_already_connected", message: "The connected-agent seat is already active." } };
+      }
+      if (state.join.claimedAt !== undefined) {
+        return { ok: false, error: { code: "join_already_claimed", message: "This join code has already issued a seat credential." } };
+      }
+      if (seatToken.length < 24 || seatToken.length > 256) throw new Error("Seat token has invalid length.");
+
+      const now = Date.now();
+      const playerId = state.join.playerId;
+      const next: NormalizedGameRoomV1 = {
+        ...state,
+        seatTokenHashes: {
+          ...state.seatTokenHashes,
+          [playerId]: await hashToken(seatToken),
+        },
+        seatStates: {
+          ...state.seatStates,
+          [playerId]: {
+            version: 1,
+            playerId,
+            status: "connecting",
+            statusChangedAt: now,
+          },
+        },
+        join: { ...state.join, claimedAt: now },
+      };
+      await this.writeState(next);
+      await this.broadcast(next);
+      return this.getJoinInfo(joinCodeHash);
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async connectSeatByToken(seatToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
+      const playerId = await this.resolveSeat(state, seatToken);
+      if (!playerId) return { ok: false, error: { code: "invalid_seat_token", message: "Seat token is invalid." } };
+
+      const seat = state.seatStates[playerId];
+      if (seat?.status === "connected" && state.roomPhase !== "waiting_for_players") {
+        return { ok: true, value: this.snapshot(state, playerId) };
+      }
+
+      const now = Date.now();
+      let next: NormalizedGameRoomV1 = {
+        ...state,
+        seatStates: {
+          ...state.seatStates,
+          [playerId]: {
+            version: 1,
+            playerId,
+            status: "connected",
+            statusChangedAt: now,
+            connectedAt: seat?.connectedAt ?? now,
+          },
+        },
+      };
+
+      if (next.roomPhase === "waiting_for_players") {
+        const game = getRegisteredGame(next.room.gameId);
+        next = {
+          ...next,
+          room: game.resume(next.room),
+          roomPhase: "playing",
+          turnStartedAt: now,
+        };
+        next = await this.runAutomatedPlayers(next);
+      }
+
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, playerId) };
     } catch (error) {
       return failure(error);
     }
@@ -403,7 +621,12 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       expectedRevision,
       moveId,
     });
-    return this.runAutomatedPlayers({ ...state, room: moved });
+    return this.runAutomatedPlayers({
+      ...state,
+      room: moved,
+      roomPhase: phaseFromRoom(moved),
+      turnStartedAt: Date.now(),
+    });
   }
 
   async applyMove(command: GameMoveCommandV1, viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
@@ -457,12 +680,32 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
+  private async pauseState(state: NormalizedGameRoomV1): Promise<NormalizedGameRoomV1> {
+    if (state.roomPhase === "waiting_for_players" || state.roomPhase === "finished") return state;
+    const game = getRegisteredGame(state.room.gameId);
+    const room = game.pause(state.room);
+    return { ...state, room, roomPhase: phaseFromRoom(room) };
+  }
+
+  private async resumeState(state: NormalizedGameRoomV1): Promise<NormalizedGameRoomV1> {
+    if (state.roomPhase === "waiting_for_players" || state.roomPhase === "finished") return state;
+    const game = getRegisteredGame(state.room.gameId);
+    const room = game.resume(state.room);
+    let next: NormalizedGameRoomV1 = {
+      ...state,
+      room,
+      roomPhase: phaseFromRoom(room),
+      turnStartedAt: Date.now(),
+    };
+    next = await this.runAutomatedPlayers(next);
+    return next;
+  }
+
   async pause(viewerId: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
-      const game = getRegisteredGame(state.room.gameId);
-      const next = { ...state, room: game.pause(state.room) };
+      const next = await this.pauseState(state);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, viewerId) };
@@ -477,8 +720,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
       const playerId = await this.resolveViewer(state, viewerToken);
       if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
-      const game = getRegisteredGame(state.room.gameId);
-      const next = { ...state, room: game.pause(state.room) };
+      const next = await this.pauseState(state);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, playerId) };
@@ -491,9 +733,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     try {
       const state = await this.readState();
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
-      const game = getRegisteredGame(state.room.gameId);
-      let next = { ...state, room: game.resume(state.room) };
-      next = await this.runAutomatedPlayers(next);
+      const next = await this.resumeState(state);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, viewerId) };
@@ -508,9 +748,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return { ok: false, error: { code: "room_not_found", message: "Game room is not initialized." } };
       const playerId = await this.resolveViewer(state, viewerToken);
       if (!playerId) return { ok: false, error: { code: "invalid_viewer_token", message: "Room viewer credential is invalid." } };
-      const game = getRegisteredGame(state.room.gameId);
-      let next = { ...state, room: game.resume(state.room) };
-      next = await this.runAutomatedPlayers(next);
+      const next = await this.resumeState(state);
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, playerId) };

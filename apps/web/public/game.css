@@ -129,7 +129,7 @@
 
 .player {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) auto auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(170px, auto) auto minmax(88px, auto);
   gap: 20px;
   align-items: baseline;
   padding: 11px 13px;
@@ -142,21 +142,82 @@
   color: var(--muted);
 }
 
+.player .runtime {
+  color: var(--faint);
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.player.current {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .player.current .name::before {
   content: "> ";
   color: var(--accent);
+}
+
+.player.current .runtime {
+  color: var(--accent);
+}
+
+.turn-help {
+  display: block;
+  margin-top: 9px;
+  color: var(--faint);
+  font: 11px/1.55 var(--mono);
+}
+
+.turn-help span {
+  color: var(--accent);
+}
+
+.table-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+  gap: 34px;
 }
 
 .last-move {
   min-height: 24px;
   color: var(--muted);
   font: 14px/1.6 var(--mono);
+  transition: opacity 120ms ease;
+}
+
+.last-move.replaying {
+  color: var(--text);
+}
+
+.activity-list {
+  display: grid;
+  gap: 5px;
+  min-height: 24px;
+  color: var(--muted);
+  font: 12px/1.55 var(--mono);
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 9px;
+}
+
+.activity-number,
+.activity-empty {
+  color: var(--faint);
 }
 
 .card-row {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
+}
+
+.hand-waiting {
+  color: var(--faint);
+  font: 12px/1.6 var(--mono);
 }
 
 .card-token {
@@ -271,8 +332,24 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card-token {
+  .card-token,
+  .last-move {
     transition: none;
+  }
+}
+
+@media (max-width: 800px) {
+  .table-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .player {
+    grid-template-columns: 1fr auto auto;
+  }
+
+  .player .role {
+    display: none;
   }
 }
 
@@ -301,10 +378,15 @@
 
   .player {
     grid-template-columns: 1fr auto;
+    gap: 10px 16px;
   }
 
-  .player .role {
+  .player .count {
     display: none;
+  }
+
+  .player .runtime {
+    grid-column: 2;
   }
 
   .game-actions {

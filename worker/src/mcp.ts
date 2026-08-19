@@ -37,9 +37,7 @@ function sameOriginOrAbsent(request: Request): boolean {
 }
 
 export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<Response> {
-  if (!sameOriginOrAbsent(request)) {
-    return new Response("Forbidden origin.", { status: 403 });
-  }
+  if (!sameOriginOrAbsent(request)) return new Response("Forbidden origin.", { status: 403 });
 
   const authorization = request.headers.get("authorization");
   const roomId = request.headers.get("x-waitloop-room");
@@ -50,10 +48,11 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
 
   const seatToken = authorization.slice("Bearer ".length);
   const room = env.GAME_ROOMS.getByName(roomId);
-  const authorized = await room.getSnapshotBySeatToken(seatToken);
-  if (!authorized.ok) {
-    return new Response("Invalid Waitloop room or seat token.", { status: 401 });
-  }
+
+  // The first authenticated MCP request is the connected seat's readiness signal.
+  // A waiting room begins only after this succeeds; subsequent requests are idempotent.
+  const connected = await room.connectSeatByToken(seatToken);
+  if (!connected.ok) return new Response("Invalid Waitloop room or seat token.", { status: 401 });
 
   const handler = createMcpHandler(() => {
     const server = new McpServer({

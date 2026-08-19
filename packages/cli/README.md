@@ -18,6 +18,32 @@ waitloop doctor
 
 `waitloop pair` creates a short-lived pairing request and normally opens a browser approval page. The resulting device credential is stored locally and is scoped to lifecycle reporting.
 
+## Join a connected-agent game seat
+
+A connected-agent room displays a room-specific code such as:
+
+```text
+WL-7K4P9Q2MZX
+```
+
+Claim the seat with:
+
+```bash
+waitloop join WL-7K4P9Q2MZX
+```
+
+The command exchanges the one-time join code for a room-scoped MCP credential, caches that credential privately under `~/.waitloop/joins`, and prints the temporary MCP configuration for the current agent/harness to use.
+
+For agent-driven setup, machine-readable output is available with:
+
+```bash
+waitloop join WL-7K4P9Q2MZX --json
+```
+
+The room stays in `waiting_for_players` until the claimed MCP credential is actually used. There is no hard casual-game turn timeout.
+
+Agents without this CLI can open the room-specific `/join/<code>` URL and claim the raw MCP configuration directly.
+
 ## Coding-agent integrations
 
 Install only the integrations you actually use:
@@ -50,6 +76,7 @@ waitloop uninstall all
 ```text
 waitloop init
 waitloop pair
+waitloop join WL-XXXXXXXXXX [--url URL] [--json]
 waitloop unpair
 waitloop doctor
 waitloop install <claude-code|cursor|codex|all>
@@ -79,7 +106,7 @@ Skill:
 https://waitloop.run/skills/waitloop/SKILL.md
 ```
 
-Game MCP is room-scoped and temporary. Do not configure `https://waitloop.run/mcp` globally without a specific room ID and `wlseat_...` seat credential.
+`/agent.md` is the stable product/integration guide. `/join/<code>` is temporary room-specific onboarding. Game MCP is room-scoped and temporary; do not configure `https://waitloop.run/mcp` globally without a specific room ID and seat credential.
 
 ## Privacy
 
