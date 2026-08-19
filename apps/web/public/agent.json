@@ -11,7 +11,7 @@
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.1",
     "distTag": "alpha",
-    "published": false,
+    "published": true,
     "registry": "https://registry.npmjs.org/",
     "packagePage": "https://www.npmjs.com/package/@waitloop/cli",
     "installCommand": "npm install -g @waitloop/cli@alpha",
