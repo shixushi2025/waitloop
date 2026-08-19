@@ -9,7 +9,12 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game seats.",
   "cli": {
     "packageName": "@waitloop/cli",
+    "version": "0.1.0-alpha.1",
+    "distTag": "alpha",
     "published": false,
+    "registry": "https://registry.npmjs.org/",
+    "packagePage": "https://www.npmjs.com/package/@waitloop/cli",
+    "installCommand": "npm install -g @waitloop/cli@alpha",
     "sourcePath": "packages/cli",
     "node": ">=20",
     "packageManager": "pnpm@10",
@@ -17,7 +22,8 @@
     "sourceInstallCommand": "npm install -g ./packages/cli",
     "initializeCommand": "waitloop init --url https://waitloop.run",
     "pairCommand": "waitloop pair",
-    "doctorCommand": "waitloop doctor"
+    "doctorCommand": "waitloop doctor",
+    "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml"
   },
   "skill": {
     "status": "available",
@@ -68,7 +74,7 @@
   },
   "endpoints": {
     "health": "https://waitloop.run/api/v1/health",
-    "pairingGuide": "https://waitloop.run/agent.md#install-the-cli--current-alpha",
+    "pairingGuide": "https://waitloop.run/agent.md#install-the-cli",
     "hostedAgents": "https://waitloop.run/api/v1/hosted-agents",
     "mcp": "https://waitloop.run/mcp"
   },
