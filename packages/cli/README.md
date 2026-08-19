@@ -1,112 +1,94 @@
 # @waitloop/cli
 
-The Waitloop CLI owns local configuration, scoped device credentials, and thin coding-agent lifecycle adapters. It intentionally does not read source files, prompts, transcripts, repository metadata, or tool payloads.
+Waitloop CLI connects local coding agents to [waitloop.run](https://waitloop.run) without sending prompts, source code, repository contents, tool payloads, or terminal output.
+
+## Install
+
+```bash
+npm install -g @waitloop/cli@alpha
+```
+
+Then initialize and pair this machine:
+
+```bash
+waitloop init --url https://waitloop.run
+waitloop pair
+waitloop doctor
+```
+
+`waitloop pair` creates a short-lived pairing request and normally opens a browser approval page. The resulting device credential is stored locally and is scoped to lifecycle reporting.
+
+## Coding-agent integrations
+
+Install only the integrations you actually use:
+
+```bash
+waitloop install claude-code
+waitloop install cursor
+waitloop install codex
+```
+
+Or install all currently supported detected integrations:
+
+```bash
+waitloop install all
+```
+
+Codex users must review/trust the Waitloop hook in Codex's `/hooks` UI after installation.
+
+Remove only Waitloop-owned hooks with:
+
+```bash
+waitloop uninstall claude-code
+waitloop uninstall cursor
+waitloop uninstall codex
+waitloop uninstall all
+```
 
 ## Commands
 
 ```text
 waitloop init
-waitloop pair [--bootstrap-token TOKEN]
+waitloop pair
 waitloop unpair
 waitloop doctor
 waitloop install <claude-code|cursor|codex|all>
 waitloop uninstall <claude-code|cursor|codex|all>
 waitloop status
-waitloop open
+waitloop open [--print]
 waitloop config
-waitloop hook <claude-code|cursor|codex>
 ```
 
-`waitloop init` creates `~/.waitloop/config.json`, generates a stable opaque device ID, detects supported coding agents, and can install all detected lifecycle adapters that are currently implemented.
+## Agent-facing documentation
 
-The device ID is identity metadata only. `waitloop pair` obtains a separate scoped `wldev_...` credential for lifecycle ingestion. In the current alpha, remote issuance uses privileged bootstrap authority; the final browser/account approval flow is still to be built.
-
-## Pairing
-
-Preferred alpha invocation:
-
-```bash
-WAITLOOP_BOOTSTRAP_TOKEN=... waitloop pair
-```
-
-The raw issued device credential is saved privately and is not printed. The server stores only its SHA-256 digest. Successful pairing removes any saved legacy lifecycle ingest token.
-
-```bash
-waitloop unpair
-```
-
-self-revokes the credential before removing it locally. Network/server failures keep the local credential so revocation can be retried.
-
-## Claude Code
-
-The installer merges Waitloop handlers into `~/.claude/settings.json` and never replaces unrelated hooks. The installed command is:
+Give an AI agent this canonical URL:
 
 ```text
-waitloop hook claude-code
+https://waitloop.run/agent.md
 ```
 
-Mapping:
+Machine-readable manifest:
 
 ```text
-UserPromptSubmit  -> running
-PermissionRequest -> waiting
-Notification      -> waiting
-Stop              -> completed
-StopFailure       -> failed
-SessionEnd        -> local cleanup
+https://waitloop.run/agent.json
 ```
 
-Claude hook input is consumed only for native session correlation and event type. Prompt text and other payload fields are ignored.
-
-## Cursor
-
-The installer merges Waitloop handlers into `~/.cursor/hooks.json`. The installed command is:
+Skill:
 
 ```text
-waitloop hook cursor
+https://waitloop.run/skills/waitloop/SKILL.md
 ```
 
-Mapping:
+Game MCP is room-scoped and temporary. Do not configure `https://waitloop.run/mcp` globally without a specific room ID and `wlseat_...` seat credential.
 
-```text
-beforeSubmitPrompt -> running
-stop/completed     -> completed
-stop/error         -> failed
-stop/aborted       -> failed
-sessionEnd         -> local cleanup
-```
+## Privacy
 
-Cursor's native conversation/generation ID is used only as a local correlation key and is hashed for the temporary local filename. It is never included in the canonical Waitloop event.
+Lifecycle events contain only minimal Waitloop metadata: event ID, opaque Waitloop session ID, agent kind, lifecycle state, and timestamp. Native agent session IDs are used only for local correlation and are not emitted to Waitloop.
 
-## Codex
+See the repository for the complete protocol and security design:
 
-The installer merges user-level hooks into `~/.codex/hooks.json` using:
+https://github.com/shixushi2025/waitloop
 
-```text
-waitloop hook codex
-```
+## License
 
-Mapping:
-
-```text
-UserPromptSubmit  -> running
-PermissionRequest -> waiting
-Stop              -> completed
-SessionEnd        -> local cleanup
-```
-
-The adapter ignores prompt text, turn IDs, cwd, transcript paths, tool payloads, and assistant output. Codex requires non-managed command hooks to be reviewed/trusted in `/hooks` after installation.
-
-## Local state
-
-Turn state lives under:
-
-```text
-~/.waitloop/state/claude-code/
-~/.waitloop/state/cursor/
-~/.waitloop/state/codex/
-```
-
-State files contain only the adapter ID, an opaque Waitloop session ID, state, and timestamps. Native agent session IDs are used only as local correlation keys and are hashed for filenames.
-
-Lifecycle delivery is best-effort and fail-open with a short timeout. Credential priority is device credential first, legacy ingest token second.
+MIT
