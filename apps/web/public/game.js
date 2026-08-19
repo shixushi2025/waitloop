@@ -34,8 +34,7 @@ const copyMcpButton = document.querySelector("#copy-mcp");
 
 let roomId = params.get("room");
 let snapshot = null;
-let roomSocket = null;
-let roomReconnectTimer = null;
+let roomRefreshTimer = null;
 let sessionSocket = null;
 let attentionPauseRequested = false;
 let mcpConfigText = "";
@@ -44,6 +43,7 @@ let createInFlight = false;
 let selectionRevision = -1;
 let selectedCardIds = new Set();
 let hintCursor = 0;
+let selectedHintLabel = "";
 
 function isElement(value) {
   return value instanceof HTMLElement;
@@ -62,7 +62,8 @@ function isGameSnapshot(value) {
     typeof value.revision === "number" &&
     typeof value.state === "object" &&
     value.state !== null &&
-    Array.isArray(value.legalMoves)
+    typeof value.controls === "object" &&
+    value.controls !== null
   );
 }
 
@@ -164,30 +165,9 @@ function isHumanTurn(current = snapshot) {
   return Boolean(current && current.status === "playing" && current.currentPlayerId === VIEWER_ID);
 }
 
-function playCardsFor(move) {
-  if (move?.meta?.type !== "play" || !Array.isArray(move.meta.cards)) return null;
-  return move.meta.cards.every((card) => card && typeof card.id === "string") ? move.meta.cards : null;
-}
-
-function cardSignature(cards) {
-  return cards.map((card) => card.id).sort().join("\u001f");
-}
-
 function selectedCards(current = snapshot) {
   if (!current || !Array.isArray(current.state?.myHand)) return [];
   return current.state.myHand.filter((card) => selectedCardIds.has(card.id));
-}
-
-function playableMoves(current = snapshot) {
-  if (!current || !Array.isArray(current.legalMoves)) return [];
-  return current.legalMoves.filter((move) => playCardsFor(move) !== null);
-}
-
-function findSelectedMove(current = snapshot) {
-  const cards = selectedCards(current);
-  if (cards.length === 0) return null;
-  const signature = cardSignature(cards);
-  return playableMoves(current).find((move) => cardSignature(playCardsFor(move)) === signature) ?? null;
 }
 
 function syncSelection(current) {
@@ -195,6 +175,7 @@ function syncSelection(current) {
     selectedCardIds = new Set();
     selectionRevision = current.revision;
     hintCursor = 0;
+    selectedHintLabel = "";
   }
 
   const currentIds = new Set((current.state.myHand ?? []).map((card) => card.id));
@@ -205,6 +186,7 @@ function syncSelection(current) {
   if (!isHumanTurn(current) && selectedCardIds.size > 0) {
     selectedCardIds.clear();
     hintCursor = 0;
+    selectedHintLabel = "";
   }
 }
 
@@ -218,14 +200,14 @@ function renderHand(current) {
     token.type = "button";
     token.className = `card-token${selectedCardIds.has(card.id) ? " selected" : ""}`;
     token.textContent = rankLabel(card.rank);
-    token.title = selectable ? `${card.id} · click to ${selectedCardIds.has(card.id) ? "deselect" : "select"}` : card.id;
+    token.title = selectable ? `click to ${selectedCardIds.has(card.id) ? "deselect" : "select"}` : "waiting for your turn";
     token.disabled = !selectable;
     token.setAttribute("aria-pressed", selectedCardIds.has(card.id) ? "true" : "false");
     token.addEventListener("click", () => {
       if (!snapshot || !isHumanTurn(snapshot)) return;
       if (selectedCardIds.has(card.id)) selectedCardIds.delete(card.id);
       else selectedCardIds.add(card.id);
-      hintCursor = 0;
+      selectedHintLabel = "";
       renderHand(snapshot);
       renderActions(snapshot);
     });
@@ -243,13 +225,12 @@ function renderActions(current) {
 
   const turn = isHumanTurn(current);
   const cards = selectedCards(current);
-  const selectedMove = cards.length > 0 ? findSelectedMove(current) : null;
-  const passMove = current.legalMoves.find((move) => move.id === "pass") ?? null;
-  const hints = playableMoves(current);
+  const canPass = current.controls?.canPass === true;
+  const canHint = current.controls?.canHint === true;
 
-  setActionDisabled(playSelectedButton, !turn || !selectedMove);
-  setActionDisabled(passMoveButton, !turn || !passMove);
-  setActionDisabled(hintMoveButton, !turn || hints.length === 0);
+  setActionDisabled(playSelectedButton, !turn || cards.length === 0);
+  setActionDisabled(passMoveButton, !turn || !canPass);
+  setActionDisabled(hintMoveButton, !turn || !canHint);
   setActionDisabled(clearSelectionButton, cards.length === 0);
 
   if (!turn) {
@@ -263,76 +244,161 @@ function renderActions(current) {
   }
 
   const labels = cards.map((card) => rankLabel(card.rank)).join(" ");
-  if (selectedMove) {
-    selectionSummary.classList.add("valid");
-    selectionSummary.textContent = `${labels} · ${selectedMove.label}`;
-    return;
-  }
-
-  selectionSummary.classList.add("invalid");
-  selectionSummary.textContent = `${labels} · not a legal play`;
+  selectionSummary.textContent = selectedHintLabel
+    ? `${labels} · hint: ${selectedHintLabel}`
+    : `${labels} · ${cards.length} selected`;
 }
 
 function clearSelection() {
   selectedCardIds.clear();
   hintCursor = 0;
+  selectedHintLabel = "";
   if (snapshot) {
     renderHand(snapshot);
     renderActions(snapshot);
   }
 }
 
-function hintMoves(current = snapshot) {
-  return playableMoves(current).slice().sort((a, b) => {
-    const kindA = a?.meta?.pattern?.kind;
-    const kindB = b?.meta?.pattern?.kind;
-    const penaltyA = kindA === "rocket" ? 2 : kindA === "bomb" ? 1 : 0;
-    const penaltyB = kindB === "rocket" ? 2 : kindB === "bomb" ? 1 : 0;
-    return penaltyA - penaltyB;
-  });
-}
-
-function selectHint() {
-  if (!snapshot || !isHumanTurn(snapshot)) return;
-  const moves = hintMoves(snapshot);
-  if (moves.length === 0) return;
-
-  const index = hintCursor % moves.length;
-  const move = moves[index];
-  const cards = playCardsFor(move);
-  if (!cards) return;
-
-  selectedCardIds = new Set(cards.map((card) => card.id));
-  selectionRevision = snapshot.revision;
-  hintCursor = (index + 1) % moves.length;
-  renderHand(snapshot);
-  renderActions(snapshot);
-  if (isElement(gamePrompt)) gamePrompt.textContent = `hint ${index + 1}/${moves.length} · ${move.label}`;
-}
-
-async function playMove(moveId) {
-  if (!roomId || !snapshot || snapshot.status !== "playing") return;
-
+async function readJsonResponse(response) {
   try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function refreshRoom({ quiet = false } = {}) {
+  if (!roomId) return false;
+  try {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}`, {
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
+      throw new Error(body?.error?.message ?? "room unavailable");
+    }
+    render(body.snapshot);
+    if (!quiet) setConnection("live");
+    return true;
+  } catch (error) {
+    if (!quiet) {
+      setConnection("room unavailable");
+      if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "room unavailable";
+    }
+    return false;
+  }
+}
+
+function scheduleRoomRefresh(current) {
+  window.clearTimeout(roomRefreshTimer);
+  roomRefreshTimer = null;
+  if (!roomId || !current || current.status !== "playing") return;
+
+  const participant = participantFor(current, current.currentPlayerId);
+  if (participant?.kind !== "connected-agent") return;
+
+  roomRefreshTimer = window.setTimeout(async () => {
+    const beforeRevision = snapshot?.revision;
+    const ok = await refreshRoom({ quiet: true });
+    if (!ok) {
+      roomRefreshTimer = window.setTimeout(() => scheduleRoomRefresh(snapshot), 1500);
+      return;
+    }
+    if (snapshot?.revision === beforeRevision) scheduleRoomRefresh(snapshot);
+  }, 1000);
+}
+
+async function playSelection() {
+  if (!roomId || !snapshot || !isHumanTurn(snapshot)) return;
+  const cards = selectedCards(snapshot);
+  if (cards.length === 0) return;
+
+  const expectedRevision = snapshot.revision;
+  try {
+    setActionDisabled(playSelectedButton, true);
     setConnection("opponents moving");
-    if (isElement(gamePrompt)) gamePrompt.textContent = "move sent · resolving table";
-    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/moves`, {
+    if (isElement(gamePrompt)) gamePrompt.textContent = "checking selected cards";
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/play`, {
       method: "POST",
       credentials: "same-origin",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
         version: 1,
-        expectedRevision: snapshot.revision,
-        moveId,
+        expectedRevision,
+        cardIds: cards.map((card) => card.id),
       }),
     });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body?.error?.message ?? "move rejected");
-    if (isGameSnapshot(body.snapshot)) render(body.snapshot);
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
+      throw new Error(body?.error?.message ?? "play rejected");
+    }
+    render(body.snapshot);
     setConnection("live");
   } catch (error) {
-    setConnection("move failed");
-    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "move failed";
+    setConnection("play rejected");
+    if (isElement(selectionSummary)) {
+      selectionSummary.classList.add("invalid");
+      selectionSummary.textContent = error instanceof Error ? error.message : "selected cards are not legal";
+    }
+    if (isElement(gamePrompt)) gamePrompt.textContent = "adjust your selection";
+    if (snapshot?.revision !== expectedRevision) void refreshRoom();
+  } finally {
+    if (snapshot) renderActions(snapshot);
+  }
+}
+
+async function passTurn() {
+  if (!roomId || !snapshot || !isHumanTurn(snapshot) || snapshot.controls?.canPass !== true) return;
+  try {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/pass`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1, expectedRevision: snapshot.revision }),
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) {
+      throw new Error(body?.error?.message ?? "pass rejected");
+    }
+    render(body.snapshot);
+    setConnection("live");
+  } catch (error) {
+    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "pass rejected";
+    void refreshRoom({ quiet: true });
+  }
+}
+
+async function requestHint() {
+  if (!roomId || !snapshot || !isHumanTurn(snapshot) || snapshot.controls?.canHint !== true) return;
+  const expectedRevision = snapshot.revision;
+  try {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/hint`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1, expectedRevision, cursor: hintCursor }),
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !body?.hint || !Array.isArray(body.hint.cardIds)) {
+      throw new Error(body?.error?.message ?? "hint unavailable");
+    }
+
+    selectedCardIds = new Set(body.hint.cardIds);
+    selectionRevision = expectedRevision;
+    hintCursor = Number.isSafeInteger(body.hint.index) ? body.hint.index + 1 : hintCursor + 1;
+    selectedHintLabel = typeof body.hint.label === "string" ? body.hint.label : "suggested play";
+    renderHand(snapshot);
+    renderActions(snapshot);
+    if (isElement(gamePrompt)) {
+      const position = Number.isSafeInteger(body.hint.index) && Number.isSafeInteger(body.hint.total)
+        ? `hint ${body.hint.index + 1}/${body.hint.total}`
+        : "hint";
+      gamePrompt.textContent = `${position} · ${selectedHintLabel}`;
+    }
+  } catch (error) {
+    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "hint unavailable";
+    void refreshRoom({ quiet: true });
   }
 }
 
@@ -355,6 +421,7 @@ function render(current) {
   renderLastMove(current);
   renderHand(current);
   renderActions(current);
+  scheduleRoomRefresh(current);
 }
 
 function showMcpSetup(createdRoomId, seatToken) {
@@ -381,50 +448,11 @@ function showMcpSetup(createdRoomId, seatToken) {
 
 async function loadRoom() {
   if (!roomId) return false;
-
-  try {
-    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}`, {
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
-    });
-    const body = await response.json();
-    if (!response.ok || !isGameSnapshot(body.snapshot)) throw new Error(body?.error?.message ?? "room unavailable");
-    render(body.snapshot);
-    connectRoomSocket();
-    return true;
-  } catch (error) {
-    setConnection("room unavailable");
+  const ok = await refreshRoom();
+  if (!ok) {
     setCreateError("This browser does not have access to that room, or the room no longer exists.");
-    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "room unavailable";
-    return false;
   }
-}
-
-function connectRoomSocket() {
-  if (!roomId) return;
-  if (roomSocket) roomSocket.close();
-
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  roomSocket = new WebSocket(`${protocol}//${window.location.host}/api/v1/rooms/${encodeURIComponent(roomId)}/ws`);
-
-  roomSocket.addEventListener("open", () => setConnection("live"));
-  roomSocket.addEventListener("message", (event) => {
-    if (typeof event.data !== "string") return;
-    try {
-      const message = JSON.parse(event.data);
-      if (message?.version === 1 && message?.type === "game.snapshot" && isGameSnapshot(message.snapshot)) {
-        render(message.snapshot);
-      }
-    } catch {
-      // The next authoritative snapshot repairs the view.
-    }
-  });
-  roomSocket.addEventListener("close", () => {
-    if (!roomId) return;
-    setConnection("reconnecting");
-    window.clearTimeout(roomReconnectTimer);
-    roomReconnectTimer = window.setTimeout(connectRoomSocket, 1500);
-  });
+  return ok;
 }
 
 async function createRoom(mode, hostedAgentId) {
@@ -437,6 +465,7 @@ async function createRoom(mode, hostedAgentId) {
   selectedCardIds.clear();
   selectionRevision = -1;
   hintCursor = 0;
+  selectedHintLabel = "";
 
   const payload = {
     version: 1,
@@ -452,15 +481,15 @@ async function createRoom(mode, hostedAgentId) {
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(payload),
     });
-    const body = await response.json();
-    if (!response.ok || !isGameSnapshot(body.snapshot)) throw new Error(body?.error?.message ?? "could not create room");
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "could not create room");
 
     roomId = body.roomId;
     render(body.snapshot);
     if (mode === "connected-agent" && typeof body.agentSeatToken === "string") {
       showMcpSetup(body.roomId, body.agentSeatToken);
     }
-    connectRoomSocket();
+    setConnection("live");
   } catch (error) {
     const message = error instanceof Error ? error.message : "create failed";
     setConnection("create failed");
@@ -481,10 +510,10 @@ async function setPaused(paused) {
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ version: 1 }),
     });
-    const body = await response.json();
-    if (response.ok && isGameSnapshot(body.snapshot)) render(body.snapshot);
+    const body = await readJsonResponse(response);
+    if (response.ok && isGameSnapshot(body?.snapshot)) render(body.snapshot);
   } catch {
-    // Attention notification remains visible even if game pause delivery fails.
+    // Agent attention remains visible even if pause delivery fails.
   }
 }
 
@@ -537,8 +566,8 @@ async function loadHostedAgents() {
 
   try {
     const response = await fetch("/api/v1/hosted-agents", { headers: { accept: "application/json" } });
-    const body = await response.json();
-    hostedAgents = response.ok && Array.isArray(body.agents) ? body.agents : [];
+    const body = await readJsonResponse(response);
+    hostedAgents = response.ok && Array.isArray(body?.agents) ? body.agents : [];
   } catch {
     hostedAgents = [];
   }
@@ -568,14 +597,9 @@ async function loadHostedAgents() {
 
 newBotGameButton?.addEventListener("click", () => void createRoom("bots"));
 newConnectedAgentGameButton?.addEventListener("click", () => void createRoom("connected-agent"));
-playSelectedButton?.addEventListener("click", () => {
-  const move = findSelectedMove();
-  if (move) void playMove(move.id);
-});
-passMoveButton?.addEventListener("click", () => {
-  if (snapshot?.legalMoves?.some((move) => move.id === "pass")) void playMove("pass");
-});
-hintMoveButton?.addEventListener("click", selectHint);
+playSelectedButton?.addEventListener("click", () => void playSelection());
+passMoveButton?.addEventListener("click", () => void passTurn());
+hintMoveButton?.addEventListener("click", () => void requestHint());
 clearSelectionButton?.addEventListener("click", clearSelection);
 copyMcpButton?.addEventListener("click", async () => {
   if (!mcpConfigText) return;
@@ -596,24 +620,21 @@ document.addEventListener("keydown", (event) => {
   if (!snapshot || !isHumanTurn(snapshot)) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
-  if (event.key === "Enter") {
-    const move = findSelectedMove(snapshot);
-    if (move) {
-      event.preventDefault();
-      void playMove(move.id);
-    }
+  if (event.key === "Enter" && selectedCardIds.size > 0) {
+    event.preventDefault();
+    void playSelection();
     return;
   }
 
-  if (event.key.toLowerCase() === "h") {
+  if (event.key.toLowerCase() === "h" && snapshot.controls?.canHint === true) {
     event.preventDefault();
-    selectHint();
+    void requestHint();
     return;
   }
 
-  if (event.key.toLowerCase() === "p" && snapshot.legalMoves.some((move) => move.id === "pass")) {
+  if (event.key.toLowerCase() === "p" && snapshot.controls?.canPass === true) {
     event.preventDefault();
-    void playMove("pass");
+    void passTurn();
     return;
   }
 
@@ -621,6 +642,10 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     clearSelection();
   }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && roomId) void refreshRoom({ quiet: true });
 });
 
 if (roomId) void loadRoom();
