@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "name": "waitloop",
+  "homepage": "https://waitloop.run",
+  "canonicalGuide": "https://waitloop.run/agent.md",
+  "manifest": "https://waitloop.run/agent.json",
+  "llms": "https://waitloop.run/llms.txt",
+  "source": "https://github.com/shixushi2025/waitloop",
+  "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game seats.",
+  "cli": {
+    "packageName": "@waitloop/cli",
+    "published": false,
+    "sourcePath": "packages/cli",
+    "node": ">=20",
+    "packageManager": "pnpm@10",
+    "buildCommand": "pnpm build:cli",
+    "sourceInstallCommand": "npm install -g ./packages/cli",
+    "initializeCommand": "waitloop init --url https://waitloop.run",
+    "pairCommand": "waitloop pair",
+    "doctorCommand": "waitloop doctor"
+  },
+  "skill": {
+    "status": "available",
+    "url": "https://waitloop.run/skills/waitloop/SKILL.md",
+    "credentialFree": true
+  },
+  "mcp": {
+    "status": "available",
+    "endpoint": "https://waitloop.run/mcp",
+    "scope": "one game room and one player seat",
+    "tools": ["get_turn", "play_move"],
+    "requires": ["Authorization: Bearer <seat-token>", "X-Waitloop-Room: <room-id>"],
+    "globalStaticConfiguration": false
+  },
+  "integrations": {
+    "claude-code": {
+      "lifecycle": "available",
+      "installer": "waitloop install claude-code",
+      "plugin": {
+        "status": "source-only",
+        "source": "https://github.com/shixushi2025/waitloop/tree/main/integrations/claude-code"
+      },
+      "skill": "available",
+      "mcp": "available"
+    },
+    "cursor": {
+      "lifecycle": "available",
+      "installer": "waitloop install cursor",
+      "plugin": "not-required",
+      "skill": "read-or-install-where-supported",
+      "mcp": "available-where-compatible"
+    },
+    "codex": {
+      "lifecycle": "available",
+      "installer": "waitloop install codex",
+      "postInstall": "Review and trust the Waitloop hook in Codex /hooks.",
+      "plugin": "not-required",
+      "skill": "available",
+      "mcp": "available"
+    },
+    "dsh": {
+      "lifecycle": "planned",
+      "installer": null,
+      "plugin": "planned",
+      "skill": "readable",
+      "mcp": "protocol-compatible-after-adapter"
+    }
+  },
+  "endpoints": {
+    "health": "https://waitloop.run/api/v1/health",
+    "pairingGuide": "https://waitloop.run/agent.md#install-the-cli--current-alpha",
+    "hostedAgents": "https://waitloop.run/api/v1/hosted-agents",
+    "mcp": "https://waitloop.run/mcp"
+  },
+  "privacy": {
+    "lifecycleData": ["version", "eventId", "sessionId", "agent", "state", "occurredAt"],
+    "forbiddenLifecycleData": ["prompt", "source code", "repository path", "cwd", "transcript", "tool input", "tool output", "assistant output", "native session id"],
+    "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
+    "gameSeatCredentials": "room/seat-scoped; never place in URLs or source control"
+  }
+}
