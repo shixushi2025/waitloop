@@ -1,0 +1,3 @@
+published @waitloop/cli@0.1.0-alpha.2
+dist-tag alpha
+auth oidc
