@@ -1,0 +1,80 @@
+name: publish-cli
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-cli-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'cli-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Use npm 11 for trusted publishing
+        run: npm install --global npm@11
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and test
+        run: pnpm check
+
+      - name: Validate browser JavaScript
+        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Validate CLI package contents
+        run: pnpm check:cli-package
+
+      - name: Validate release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
+          const expected = `cli-v${pkg.version}`;
+          if (process.env.RELEASE_TAG !== expected) {
+            console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
+            process.exit(1);
+          }
+          const prerelease = pkg.version.match(/-([0-9A-Za-z-]+)/)?.[1];
+          const distTag = prerelease ? prerelease.split('.')[0] : 'latest';
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${distTag}\n`);
+          console.log(`Publishing @waitloop/cli@${pkg.version} with dist-tag ${distTag}.`);
+          NODE
+
+      - name: Publish @waitloop/cli
+        working-directory: packages/cli
+        env:
+          # Bootstrap only: set this secret for the first publish if trusted publishing
+          # cannot be configured until the package exists. Remove it after npm OIDC
+          # trusted publishing is enabled for this workflow.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
