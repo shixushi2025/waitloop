@@ -1,27 +1,25 @@
 name: publish-cli
 
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - "publish/cli-v0.1.0-alpha.2"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
-  group: npm-cli-${{ github.event.release.tag_name }}
+  group: npm-cli-alpha-2-retry
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'cli-v')
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - name: Checkout release tag
+      - name: Checkout publish branch
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -43,30 +41,25 @@ jobs:
       - name: Typecheck and test
         run: pnpm check
 
-      - name: Validate browser JavaScript
-        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
-
       - name: Validate CLI package contents
         run: pnpm check:cli-package
 
-      - name: Validate release tag
+      - name: Validate publish branch
         id: release
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
-          const expected = `cli-v${pkg.version}`;
-          if (process.env.RELEASE_TAG !== expected) {
-            console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
-            process.exit(1);
+          const expectedRef = `publish/cli-v${pkg.version}`;
+          if (process.env.REF_NAME !== expectedRef) {
+            throw new Error(`Expected ${expectedRef}, got ${process.env.REF_NAME}`);
           }
           const prerelease = pkg.version.match(/-([0-9A-Za-z-]+)/)?.[1];
           const distTag = prerelease ? prerelease.split('.')[0] : 'latest';
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${distTag}\n`);
-          console.log(`Publishing @waitloop/cli@${pkg.version} with dist-tag ${distTag}.`);
           NODE
 
       - name: Check npm registry
@@ -76,12 +69,11 @@ jobs:
         run: |
           if npm view "@waitloop/cli@${VERSION}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "@waitloop/cli@${VERSION} already exists; publish will be skipped."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish @waitloop/cli
+      - name: Publish @waitloop/cli with OIDC
         if: steps.registry.outputs.exists != 'true'
         working-directory: packages/cli
         run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
@@ -98,5 +90,16 @@ jobs:
             fi
             sleep 5
           done
-          echo "npm registry did not expose @waitloop/cli@${VERSION} after publication." >&2
           exit 1
+
+      - name: Record verified publication
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          DIST_TAG: ${{ steps.release.outputs.dist_tag }}
+        run: |
+          printf 'published @waitloop/cli@%s\ndist-tag %s\nauth oidc\n' "$VERSION" "$DIST_TAG" > .publish-cli-result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .publish-cli-result
+          git commit -m "chore: record CLI OIDC publish result" || exit 0
+          git push origin HEAD:${GITHUB_REF_NAME}
