@@ -33,12 +33,20 @@ https://waitloop.run/mcp
 
 Do not confuse the public `/agent.md` with repository-root [`AGENTS.md`](AGENTS.md): `AGENTS.md` contains instructions for coding agents developing this repository; `/agent.md` tells external agents how to integrate with the deployed Waitloop product.
 
+Room-specific connected-agent onboarding uses:
+
+```text
+https://waitloop.run/join/<join-code>
+```
+
+`/join/<code>` is temporary room onboarding; it does not replace the stable `/agent.md` guide.
+
 ## CLI distribution
 
 The public alpha CLI is published as:
 
 ```text
-@waitloop/cli@0.1.0-alpha.1
+@waitloop/cli@0.1.0-alpha.3
 ```
 
 Install the current alpha channel with:
@@ -46,6 +54,12 @@ Install the current alpha channel with:
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
+```
+
+Connected-agent rooms can be claimed with:
+
+```bash
+waitloop join WL-XXXXXXXXXX
 ```
 
 The release pipeline validates the final `npm pack` tarball, packaged `waitloop --version`, exact release tag, and publishes through `.github/workflows/publish-cli.yml`. See [`docs/cli-release.md`](docs/cli-release.md).
@@ -56,7 +70,7 @@ The repository now contains an end-to-end Cloudflare implementation:
 
 - canonical coding-agent lifecycle events and `AgentSession` Durable Objects
 - lifecycle adapters for Claude Code, Cursor, and Codex
-- CLI install/pair/status/open flows
+- CLI install/pair/join/status/open flows
 - short-lived browser device pairing and scoped device credentials
 - a tested Dou Dizhu rules engine and legal-move generator
 - server-authoritative `GameRoom` Durable Objects with hidden-information projection
@@ -64,7 +78,12 @@ The repository now contains an end-to-end Cloudflare implementation:
 - four participant types: Human, Bot, Hosted Agent, Connected Agent
 - server-hosted DeepSeek and OpenAI game agents when provider secrets are configured
 - MCP-connected game seats with only `get_turn` and `play_move`
+- room-specific connected-agent join codes and `/join/<code>` onboarding
+- connected-agent lobbies that begin play only after the MCP seat actually connects
+- random landlord selection for the current pre-bidding Dou Dizhu alpha
+- explicit current-turn, current-trick, recent-activity, and soft elapsed-thinking UI
 - human card-selection endpoints that do not expose exhaustive `legalMoves[]` to the browser
+- lobby projections that do not expose dealt cards or landlord assignment before the connected seat is ready
 - CI validation including TypeScript, Vitest, browser JavaScript syntax, npm package contents/version, frozen installs, and `wrangler deploy --dry-run`
 
 The game entry is `/game.html` when the Worker is running locally or deployed.
@@ -95,6 +114,15 @@ you + connected agent + bot
 ```
 
 Bots are simple deterministic server players and never call a model. Hosted agents call a model from the Worker using only that seat's visible game state. Connected agents control one seat through a room-scoped MCP capability.
+
+Connected-agent rooms have two first-class connection paths:
+
+```text
+waitloop join <code>
+raw room-scoped MCP configuration
+```
+
+Casual rooms show elapsed connected-agent thinking time but do not force a move when a timer expires.
 
 ## Product principles
 
@@ -191,6 +219,7 @@ See [`docs/hosted-agents.md`](docs/hosted-agents.md) for the provider, privacy, 
 - [`docs/protocol.md`](docs/protocol.md) — lifecycle and game wire contracts
 - [`docs/security.md`](docs/security.md) — privacy/auth/security invariants
 - [`docs/game-system.md`](docs/game-system.md) — generic game architecture
+- [`docs/game-experience-v2.md`](docs/game-experience-v2.md) — room phases, connected-agent lobby, join codes, pacing, timing
 - [`docs/doudizhu-rules.md`](docs/doudizhu-rules.md) — exact current rule profile
 - [`docs/mcp.md`](docs/mcp.md) — seat-scoped MCP model and tool boundary
 - [`docs/hosted-agents.md`](docs/hosted-agents.md) — model-backed game players
