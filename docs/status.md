@@ -14,13 +14,20 @@ This file records what is actually implemented on `main`. It is intentionally na
 - developer-native design language
 - coding-agent repository instructions in `AGENTS.md`
 
-### Workspace
+### Workspace and validation
 
 - pnpm TypeScript monorepo
 - strict TypeScript configuration
 - Vitest configuration
 - Cloudflare Worker/static-assets setup
 - GitHub Actions typecheck/test workflow
+- a real GitHub Actions validation run has completed successfully with:
+  - dependency installation
+  - root TypeScript typecheck
+  - CLI TypeScript typecheck
+  - full Vitest suite
+
+The repository still needs a committed `pnpm-lock.yaml`; CI currently installs with `--no-frozen-lockfile` and intentionally does not enable pnpm cache until the lockfile is committed.
 
 ### Agent lifecycle
 
@@ -42,6 +49,8 @@ This file records what is actually implemented on `main`. It is intentionally na
 - stable opaque local device ID (metadata only; not authentication)
 - agent detection for Claude Code, Cursor, Codex, and DSH
 - `waitloop init`
+- `waitloop pair`
+- `waitloop unpair`
 - `waitloop doctor`
 - install/uninstall for Claude Code, Cursor, and Codex
 - `waitloop install/uninstall all`
@@ -51,6 +60,23 @@ This file records what is actually implemented on `main`. It is intentionally na
 - lifecycle hook delivery is best-effort/fail-open with a bounded timeout
 - hook installers merge safely and uninstall only Waitloop-owned handlers
 - Codex installer reminds the user to review/trust the non-managed command hook
+- lifecycle delivery prefers a scoped device credential and retains the old Worker-wide ingest token only as a migration fallback
+
+### Device credentials and alpha pairing
+
+- DeviceRegistry Durable Object
+- opaque `wldev_...` device credentials
+- raw device credentials are returned only at issuance
+- only SHA-256 credential digests are stored server-side
+- one current credential per device ID; issuing a replacement rotates the old credential
+- first scope: `agent:write`
+- `POST /api/v1/devices/bootstrap` for the temporary alpha bootstrap flow
+- `DELETE /api/v1/devices/current` for self-revocation
+- `waitloop pair` stores the scoped device credential privately and removes the legacy lifecycle ingest token after successful migration
+- `waitloop unpair` self-revokes before removing the local credential; network/server failures keep the local credential so revocation can be retried
+- `/api/v1/agent-events` accepts the scoped device credential while retaining the legacy ingest token only as a migration path
+
+This is the credential substrate for the final pairing experience. The public browser/account approval flow is not implemented yet; the current bootstrap endpoint deliberately requires privileged bootstrap authority outside localhost.
 
 ### Game core
 
@@ -100,17 +126,19 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - seat tokens hashed before Durable Object persistence
 - agent seat token is returned only when the room is created and is not placed in the room URL
 
-## Validation performed so far
+## Validation performed
 
-The CLI source has been checked with strict TypeScript options including `exactOptionalPropertyTypes`. Synthetic local hook tests have exercised Claude Code, Cursor, and Codex lifecycle delivery against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted Waitloop events.
+A temporary validation PR was used only to trigger the repository's `pull_request` workflow. It was closed without merge after the CI job completed successfully. The validated dependency graph installed successfully and the root/CLI TypeScript checks plus the full Vitest suite passed.
 
-This is not a substitute for a clean repository-wide CI run with the final lockfile.
+Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex adapters against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted Waitloop events.
 
 ## Still required before a public beta
 
-- clean CI confirmation on the complete dependency graph and a committed lockfile
-- real device/account pairing instead of alpha bearer tokens
-- authenticated browser WebSocket flow
+- committed `pnpm-lock.yaml` and restoration of lockfile-based pnpm cache/frozen installs
+- public browser/account approval pairing instead of the alpha bootstrap authority
+- account device list/revoke/rotation UX
+- authenticated browser session/WebSocket flow; long-lived device bearer tokens must not be put into browser URLs
+- dynamic MCP seat setup without copying room JSON by hand
 - room lifecycle/expiry cleanup
 - rate limiting
 - production CSP/CORS/auth hardening
@@ -118,18 +146,18 @@ This is not a substitute for a clean repository-wide CI run with the final lockf
 - full Dou Dizhu bidding and scoring
 - robust reconnect/recovery UX
 - publish/install/update flow for the CLI package
-- DSH adapter
-- dynamic MCP setup without copying room JSON by hand
+- DSH adapter once its lifecycle integration contract is fixed
 
 ## Next implementation order
 
-1. Validate/fix the current workspace in CI and commit a lockfile.
-2. Implement real device/account pairing so local agents no longer need Worker-wide alpha secrets.
-3. Finish agent setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
-4. Add DSH adapter once its local lifecycle contract is fixed.
-5. Deploy the first authenticated Cloudflare preview.
-6. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
-7. Only then add more games and Arena experiments.
+1. Commit `pnpm-lock.yaml`, switch CI to frozen installs, and restore pnpm dependency caching.
+2. Build the public short-lived pairing-request + browser/account approval flow on top of the existing DeviceRegistry credential model.
+3. Replace the current private browser token boundary with an authenticated browser session/ticket model for sessions, rooms, and WebSockets.
+4. Connect the current game seat/MCP setup to the installed local agent without copying JSON by hand.
+5. Add the DSH adapter once its lifecycle contract is fixed.
+6. Deploy the first authenticated Cloudflare preview.
+7. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
+8. Only then add more games and Arena experiments.
 
 ## v0.1 acceptance target
 
@@ -154,7 +182,7 @@ For agent participation, the parallel acceptance path is:
 ```text
 create a room with one agent seat
         ↓
-configure the seat-scoped MCP connection
+connect the seat-scoped MCP capability to the intended local agent
         ↓
 agent calls get_turn
         ↓
