@@ -19,8 +19,11 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
 ~/.waitloop/
 ├── config.json
 └── state/
-    └── claude-code/
-        ├── <hashed-claude-session>.json
+    ├── claude-code/
+    │   ├── <hashed-native-session>.json
+    │   └── latest.json
+    └── cursor/
+        ├── <hashed-native-session>.json
         └── latest.json
 ```
 
@@ -38,13 +41,14 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
 
 The device ID is an opaque **local identity**, not proof of authentication. A real account/device approval flow is still required before public beta.
 
-The Claude state files contain only:
+Local turn state contains only:
 
+- adapter ID (`claude-code` or `cursor`)
 - opaque Waitloop turn ID
 - lifecycle state
 - start/update timestamps
 
-The Claude session ID is hashed for the temporary filename and is never sent to Waitloop.
+Native Claude/Cursor session identifiers are hashed only for temporary local filenames and are never sent to Waitloop.
 
 ## Commands
 
@@ -63,7 +67,7 @@ Options:
 --yes
 ```
 
-Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install the Claude Code integration.
+Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install all detected lifecycle adapters that Waitloop currently supports.
 
 ### Diagnostics
 
@@ -73,20 +77,29 @@ waitloop doctor
 
 Checks local configuration, the Waitloop health endpoint, and best-effort agent detection.
 
-### Claude Code lifecycle integration
+### Install and uninstall adapters
 
 ```bash
 waitloop install claude-code
+waitloop install cursor
+waitloop install all
+
 waitloop uninstall claude-code
+waitloop uninstall cursor
+waitloop uninstall all
 ```
 
-The installer merges Waitloop handlers into `~/.claude/settings.json`; it does not replace existing handlers. Uninstall removes only handlers whose command is exactly:
+Installers merge only Waitloop-owned hook entries and preserve unrelated user hooks. Uninstallers remove only handlers whose command exactly matches the Waitloop command for that adapter.
+
+## Claude Code lifecycle integration
+
+The Claude installer writes to `~/.claude/settings.json` and installs:
 
 ```text
 waitloop hook claude-code
 ```
 
-Installed lifecycle mapping:
+Lifecycle mapping:
 
 ```text
 UserPromptSubmit                    running
@@ -97,9 +110,30 @@ StopFailure                         failed
 SessionEnd                          local cleanup
 ```
 
-The command hook receives Claude's complete hook JSON on stdin but reads only `session_id` and `hook_event_name`. Prompt text, current directory, transcript path, tool input, and tool output are ignored.
+The hook receives Claude's hook JSON on stdin but reads only `session_id` and `hook_event_name`. Prompt text, current directory, transcript path, tool input, and tool output are ignored.
 
-### Current turn
+## Cursor lifecycle integration
+
+The Cursor installer writes version-1 hooks to `~/.cursor/hooks.json` and installs:
+
+```text
+waitloop hook cursor
+```
+
+for these events:
+
+```text
+beforeSubmitPrompt   running
+stop/completed       completed
+stop/aborted|error   failed
+sessionEnd           local cleanup
+```
+
+The adapter uses `conversation_id` (or `generation_id` as a fallback) only as a local correlation key. That native ID is hashed before it is used in a local filename and is not included in the Waitloop network event. Prompt text, repository paths, output text, and any other Cursor hook fields are ignored.
+
+The hook returns an empty JSON object so Waitloop does not attempt to steer or block Cursor's agent loop.
+
+## Current turn
 
 ```bash
 waitloop status
@@ -107,7 +141,7 @@ waitloop open
 waitloop open --print
 ```
 
-`status` reads only the local `latest.json`. `open` opens the configured Waitloop URL and, when available, adds the opaque current Waitloop session ID as the `session` query parameter.
+`status` reads only adapter-local `latest.json` files. If multiple adapters have recent turns, all are shown newest first. `open` prefers a running/waiting turn and adds only its opaque Waitloop session ID as the `session` query parameter.
 
 ### Inspect configuration safely
 
@@ -116,6 +150,16 @@ waitloop config
 ```
 
 Token values are redacted; only whether each token is configured is shown.
+
+## Hook delivery behavior
+
+Lifecycle delivery is best-effort and fail-open. The default HTTP timeout is one second so a Waitloop outage does not become an agent outage. Development can override this with:
+
+```text
+WAITLOOP_HOOK_TIMEOUT_MS
+```
+
+The value is capped at ten seconds.
 
 ## Authentication roadmap
 
