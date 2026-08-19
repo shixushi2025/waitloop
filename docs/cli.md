@@ -22,7 +22,10 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
     ├── claude-code/
     │   ├── <hashed-native-session>.json
     │   └── latest.json
-    └── cursor/
+    ├── cursor/
+    │   ├── <hashed-native-session>.json
+    │   └── latest.json
+    └── codex/
         ├── <hashed-native-session>.json
         └── latest.json
 ```
@@ -43,12 +46,12 @@ The device ID is an opaque **local identity**, not proof of authentication. A re
 
 Local turn state contains only:
 
-- adapter ID (`claude-code` or `cursor`)
+- adapter ID (`claude-code`, `cursor`, or `codex`)
 - opaque Waitloop turn ID
 - lifecycle state
 - start/update timestamps
 
-Native Claude/Cursor session identifiers are hashed only for temporary local filenames and are never sent to Waitloop.
+Native agent session identifiers are hashed only for temporary local filenames and are never sent to Waitloop.
 
 ## Commands
 
@@ -82,10 +85,12 @@ Checks local configuration, the Waitloop health endpoint, and best-effort agent 
 ```bash
 waitloop install claude-code
 waitloop install cursor
+waitloop install codex
 waitloop install all
 
 waitloop uninstall claude-code
 waitloop uninstall cursor
+waitloop uninstall codex
 waitloop uninstall all
 ```
 
@@ -132,6 +137,29 @@ sessionEnd           local cleanup
 The adapter uses `conversation_id` (or `generation_id` as a fallback) only as a local correlation key. That native ID is hashed before it is used in a local filename and is not included in the Waitloop network event. Prompt text, repository paths, output text, and any other Cursor hook fields are ignored.
 
 The hook returns an empty JSON object so Waitloop does not attempt to steer or block Cursor's agent loop.
+
+## Codex lifecycle integration
+
+The Codex installer writes user-level hooks to `~/.codex/hooks.json` and installs:
+
+```text
+waitloop hook codex
+```
+
+for these events:
+
+```text
+UserPromptSubmit   running
+PermissionRequest  waiting
+Stop               completed
+SessionEnd         local cleanup
+```
+
+Waitloop uses only Codex's `session_id` and `hook_event_name` for local correlation. It does not read or emit prompt text, `turn_id`, working directory, transcript path, tool input, or the last assistant message.
+
+`UserPromptSubmit`, `PermissionRequest`, and `Stop` are installed as background hooks so lifecycle reporting cannot control or delay the agent loop. `SessionEnd` remains synchronous because Codex treats that event synchronously.
+
+Codex requires non-managed command hooks to be reviewed and trusted. After installing the adapter, use Codex's `/hooks` UI to review the exact Waitloop hook definition before expecting lifecycle events.
 
 ## Current turn
 
