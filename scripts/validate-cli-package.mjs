@@ -1,0 +1,58 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const packagePath = resolve(root, "packages/cli/package.json");
+const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+
+function fail(message) {
+  throw new Error(`CLI package validation failed: ${message}`);
+}
+
+if (packageJson.name !== "@waitloop/cli") fail("unexpected package name");
+if (typeof packageJson.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageJson.version)) {
+  fail("package version is not a valid release version");
+}
+if (packageJson.publishConfig?.access !== "public") fail("publishConfig.access must be public");
+if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org/") fail("publishConfig.registry must be npmjs");
+if (packageJson.repository?.url !== "https://github.com/shixushi2025/waitloop") {
+  fail("repository.url must exactly match the GitHub repository used for trusted publishing");
+}
+
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const packOutput = execFileSync(
+  npm,
+  ["pack", "--dry-run", "--json", "./packages/cli"],
+  { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+);
+
+const packed = JSON.parse(packOutput);
+if (!Array.isArray(packed) || packed.length !== 1 || !Array.isArray(packed[0]?.files)) {
+  fail("npm pack returned an unexpected manifest");
+}
+
+const files = new Set(packed[0].files.map((file) => file.path));
+for (const required of ["package.json", "README.md", "LICENSE", "dist/index.js"]) {
+  if (!files.has(required)) fail(`packed tarball is missing ${required}`);
+}
+for (const path of files) {
+  if (path.startsWith("src/") || path.includes(".waitloop") || path.includes("config.json")) {
+    fail(`unexpected file in package: ${path}`);
+  }
+}
+
+const builtIndex = resolve(root, "packages/cli/dist/index.js");
+const builtSource = readFileSync(builtIndex, "utf8");
+if (!builtSource.startsWith("#!/usr/bin/env node")) fail("dist/index.js is missing its executable shebang");
+
+const versionOutput = execFileSync(process.execPath, [builtIndex, "--version"], {
+  cwd: root,
+  encoding: "utf8",
+}).trim();
+if (versionOutput !== packageJson.version) {
+  fail(`waitloop --version returned ${versionOutput}; expected ${packageJson.version}`);
+}
+
+console.log(`@waitloop/cli@${packageJson.version} package validation passed (${files.size} files).`);
