@@ -111,9 +111,16 @@
             <div class="card-row" id="hand"></div>
           </section>
 
-          <section class="game-section">
-            <p class="section-label">legal_moves/</p>
-            <div class="move-list" id="moves"></div>
+          <section class="game-section action-section">
+            <p class="section-label">actions/</p>
+            <div class="selection-summary" id="selection-summary">select cards from hand</div>
+            <div class="game-actions">
+              <button class="command-button" id="play-selected" type="button" disabled><span>&gt;</span> play selected</button>
+              <button class="command-button secondary-action" id="pass-move" type="button" disabled>pass</button>
+              <button class="command-button secondary-action" id="hint-move" type="button" disabled>hint</button>
+              <button class="text-button clear-selection" id="clear-selection" type="button" disabled>clear</button>
+            </div>
+            <small class="action-help">click cards to select · enter to play · h for hint · p to pass · esc to clear</small>
           </section>
 
           <div class="prompt">
