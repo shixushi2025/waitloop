@@ -8,7 +8,7 @@ Source: https://github.com/shixushi2025/waitloop
 
 Waitloop is a developer-native waiting layer for coding agents. It reports only minimal lifecycle state, lets a human play a small game while an agent is working, and gives work priority again when the coding agent waits, completes, or fails.
 
-If you are an AI agent reading this file because a user asked you to install or configure Waitloop, follow this document instead of guessing platform-specific paths or inventing unpublished packages.
+If you are an AI agent reading this file because a user asked you to install or configure Waitloop, follow this document instead of guessing platform-specific paths or inventing unsupported integrations.
 
 ## Integration layers
 
@@ -34,16 +34,26 @@ After installing the Codex lifecycle hook, the user must review/trust the Waitlo
 
 ## Install the CLI
 
-Always read the `cli` object in https://waitloop.run/agent.json first.
+Read the `cli` object in https://waitloop.run/agent.json first. The public alpha CLI is currently:
 
-If `cli.published` is `true`, prefer the registry install command from the manifest. The alpha channel is intended to be:
+```text
+@waitloop/cli@0.1.0-alpha.1
+```
+
+Install the alpha channel from npm:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
 ```
 
-If `cli.published` is `false`, do **not** assume the npm package exists. Use the source fallback instead:
+Expected version:
+
+```text
+0.1.0-alpha.1
+```
+
+Use the source fallback only when npm installation is unavailable or when the user explicitly wants to develop Waitloop itself:
 
 ```bash
 git clone https://github.com/shixushi2025/waitloop.git
@@ -51,12 +61,9 @@ cd waitloop
 pnpm install --frozen-lockfile
 pnpm build:cli
 npm install -g ./packages/cli
-waitloop --version
 ```
 
-Current release candidate: `@waitloop/cli@0.1.0-alpha.1`.
-
-Then initialize against the public service:
+Initialize against the public service:
 
 ```bash
 waitloop init --url https://waitloop.run
@@ -205,13 +212,12 @@ Use this order:
 
 1. Read https://waitloop.run/agent.json and this document.
 2. Detect the user's actual installed harnesses. Do not install unrelated adapters.
-3. Read `cli.published` from the manifest.
-4. If published, use `cli.installCommand`; otherwise use the documented source-install fallback.
-5. Run `waitloop init --url https://waitloop.run`.
-6. Run `waitloop pair` and let the user explicitly approve the browser pairing request.
-7. Install only the matching lifecycle adapter(s) with `waitloop install ...`.
-8. If useful and supported, install the Waitloop skill from the canonical skill URL.
-9. Do not install a game MCP seat until a specific connected-agent room exists.
-10. Run `waitloop doctor` and report the result to the user.
+3. Install the CLI using `cli.installCommand` from the manifest.
+4. Run `waitloop init --url https://waitloop.run`.
+5. Run `waitloop pair` and let the user explicitly approve the browser pairing request.
+6. Install only the matching lifecycle adapter(s) with `waitloop install ...`.
+7. If useful and supported, install the Waitloop skill from the canonical skill URL.
+8. Do not install a game MCP seat until a specific connected-agent room exists.
+9. Run `waitloop doctor` and report the result to the user.
 
 Never weaken another agent's security settings, disable hook trust prompts, expose credentials, or overwrite unrelated hook/MCP configuration just to make Waitloop work.
