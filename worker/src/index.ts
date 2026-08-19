@@ -4,13 +4,20 @@ import { parseWaitloopAgentEvent } from "@waitloop/protocol";
 import { AgentSession } from "./agent-session";
 import { DeviceRegistry } from "./device-registry";
 import { GameRoom } from "./game-room";
+import {
+  getHostedAgent,
+  listHostedAgents,
+  type HostedAgentEnv,
+} from "./hosted-agent";
 import { handleWaitloopMcp } from "./mcp";
 import { handlePairingApi } from "./pairing-api";
 import { PairingRequest } from "./pairing-request";
+import type { GameParticipantV1 } from "./participants";
+import { isHostedAgentId } from "./participants";
 
 export { AgentSession, DeviceRegistry, GameRoom, PairingRequest };
 
-interface Env {
+interface Env extends HostedAgentEnv {
   ASSETS: Fetcher;
   AGENT_SESSIONS: DurableObjectNamespace<AgentSession>;
   DEVICE_AUTH: DurableObjectNamespace<DeviceRegistry>;
@@ -27,6 +34,7 @@ interface ApiErrorBody {
 
 const MAX_JSON_BODY_BYTES = 16 * 1024;
 const DEVICE_REGISTRY_NAME = "registry-v1";
+const ROOM_COOKIE_MAX_AGE_SECONDS = 6 * 60 * 60;
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -45,7 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function rpcValue(result: object): unknown {
-  if (!("value" in result)) throw new Error("Successful game RPC result is missing a value.");
+  if (!("value" in result)) throw new Error("Successful RPC result is missing a value.");
   return result.value;
 }
 
@@ -72,8 +80,48 @@ function newDeviceToken(): string {
   return `wldev_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
+function newSeatToken(): string {
+  return `wlseat_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+function newViewerToken(): string {
+  return `wlview_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
 function validDeviceId(value: string): boolean {
   return /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
+function roomCookieName(roomId: string): string {
+  return `wl_room_${roomId.replace(/[^A-Za-z0-9]/g, "_")}`;
+}
+
+function readCookie(request: Request, name: string): string | null {
+  const header = request.headers.get("cookie");
+  if (!header) return null;
+  for (const item of header.split(";")) {
+    const index = item.indexOf("=");
+    if (index < 0) continue;
+    if (item.slice(0, index).trim() === name) return item.slice(index + 1).trim();
+  }
+  return null;
+}
+
+function roomViewerToken(request: Request, roomId: string): string | null {
+  const value = readCookie(request, roomCookieName(roomId));
+  return value?.startsWith("wlview_") ? value : null;
+}
+
+function roomCookie(roomId: string, viewerToken: string, url: URL): string {
+  const parts = [
+    `${roomCookieName(roomId)}=${viewerToken}`,
+    `Path=/api/v1/rooms/${roomId}`,
+    `Max-Age=${ROOM_COOKIE_MAX_AGE_SECONDS}`,
+    "HttpOnly",
+    "SameSite=Strict",
+  ];
+  if (url.protocol === "https:") parts.push("Secure");
+  return parts.join("; ");
 }
 
 async function authorizeAgentMutation(request: Request, env: Env, url: URL): Promise<Response | null> {
@@ -184,21 +232,15 @@ async function handleDeviceBootstrap(request: Request, env: Env, url: URL): Prom
   }
 
   const deviceToken = newDeviceToken();
-  const tokenHash = await sha256Hex(deviceToken);
   await deviceRegistry(env).issue({
     version: 1,
     deviceId,
-    tokenHash,
+    tokenHash: await sha256Hex(deviceToken),
     scopes: ["agent:write"],
     createdAt: Date.now(),
   });
 
-  return json({
-    version: 1,
-    deviceId,
-    deviceToken,
-    scopes: ["agent:write"],
-  }, { status: 201 });
+  return json({ version: 1, deviceId, deviceToken, scopes: ["agent:write"] }, { status: 201 });
 }
 
 async function handleCurrentDevice(request: Request, env: Env): Promise<Response> {
@@ -231,67 +273,114 @@ async function handleSessionRoute(
 }
 
 function gameRpcError(code: string, message: string): Response {
-  const status = code === "room_not_found" ? 404 : code === "viewer_not_in_room" || code === "player_not_in_room" ? 403 : 409;
+  const forbidden = code === "viewer_not_in_room" || code === "player_not_in_room" || code === "invalid_viewer_token" || code === "invalid_seat_token";
+  const status = code === "room_not_found" ? 404 : forbidden ? 403 : 409;
   return apiError(status, code, message);
 }
 
-function newSeatToken(): string {
-  return `wlseat_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+type RoomMode = "bots" | "hosted-agent" | "connected-agent";
+
+function roomMode(value: Record<string, unknown>): RoomMode | null {
+  if (value.mode === "bots" || value.mode === "hosted-agent" || value.mode === "connected-agent") return value.mode;
+  // Backward compatibility for the first alpha web client.
+  if (typeof value.agentPlayerId === "string") return "connected-agent";
+  if (Array.isArray(value.botPlayerIds)) return "bots";
+  return null;
 }
 
 async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<Response> {
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
-  const authError = authorizePrivateAccess(request, env, url);
-  if (authError) return authError;
 
   const body = await readJson(request);
   if (!body.ok) return body.response;
-  if (!isRecord(body.value) || body.value.version !== 1) {
-    return apiError(400, "invalid_room_request", "Room request must be a version 1 object.");
+  if (!isRecord(body.value) || body.value.version !== 1 || body.value.gameId !== "doudizhu") {
+    return apiError(400, "invalid_room_request", "A version 1 doudizhu room request is required.");
   }
 
-  const { gameId, playerIds, landlordId, viewerId, botPlayerIds, agentPlayerId } = body.value;
-  if (gameId !== "doudizhu") return apiError(400, "unknown_game", "Only doudizhu is available in this alpha.");
-  if (typeof viewerId !== "string" || viewerId.length === 0) {
-    return apiError(400, "invalid_viewer", "viewerId is required.");
-  }
-  if (!Array.isArray(botPlayerIds) || !botPlayerIds.every((id) => typeof id === "string")) {
-    return apiError(400, "invalid_bots", "botPlayerIds must be an array of strings.");
-  }
+  const mode = roomMode(body.value);
+  if (!mode) return apiError(400, "invalid_room_mode", "Choose bots, hosted-agent, or connected-agent.");
 
+  const viewerId = "you";
+  let playerIds: [string, string, string];
+  let botPlayerIds: string[];
+  let participants: GameParticipantV1[];
   const seatTokens: Record<string, string> = {};
+  const hostedAgents: Parameters<GameRoom["initialize"]>[0]["hostedAgents"] = {};
   let agentSeatToken: string | undefined;
-  if (agentPlayerId !== undefined) {
-    if (
-      typeof agentPlayerId !== "string" ||
-      !Array.isArray(playerIds) ||
-      !playerIds.includes(agentPlayerId) ||
-      botPlayerIds.includes(agentPlayerId)
-    ) {
-      return apiError(400, "invalid_agent_player", "agentPlayerId must identify a non-bot player in the room.");
+
+  if (mode === "bots") {
+    playerIds = [viewerId, "bot-a", "bot-b"];
+    botPlayerIds = ["bot-a", "bot-b"];
+    participants = [
+      { version: 1, id: viewerId, kind: "human", label: "you" },
+      { version: 1, id: "bot-a", kind: "bot", label: "bot a" },
+      { version: 1, id: "bot-b", kind: "bot", label: "bot b" },
+    ];
+  } else if (mode === "hosted-agent") {
+    if (!isHostedAgentId(body.value.hostedAgentId)) {
+      return apiError(400, "invalid_hosted_agent", "hostedAgentId must identify an available hosted agent.");
     }
+    const hostedAgent = getHostedAgent(env, body.value.hostedAgentId);
+    if (!hostedAgent) {
+      return apiError(503, "hosted_agent_unavailable", "That hosted agent is not configured on this deployment.");
+    }
+    const hostedPlayerId = `hosted-${hostedAgent.id}`;
+    playerIds = [viewerId, hostedPlayerId, "bot"];
+    botPlayerIds = ["bot"];
+    participants = [
+      { version: 1, id: viewerId, kind: "human", label: "you" },
+      {
+        version: 1,
+        id: hostedPlayerId,
+        kind: "hosted-agent",
+        label: hostedAgent.label,
+        hostedAgentId: hostedAgent.id,
+        provider: hostedAgent.provider,
+        model: hostedAgent.model,
+      },
+      { version: 1, id: "bot", kind: "bot", label: "bot" },
+    ];
+    hostedAgents[hostedPlayerId] = hostedAgent;
+  } else {
+    const connectedPlayerId = "connected-agent";
+    playerIds = [viewerId, connectedPlayerId, "bot"];
+    botPlayerIds = ["bot"];
+    participants = [
+      { version: 1, id: viewerId, kind: "human", label: "you" },
+      { version: 1, id: connectedPlayerId, kind: "connected-agent", label: "connected agent" },
+      { version: 1, id: "bot", kind: "bot", label: "bot" },
+    ];
     agentSeatToken = newSeatToken();
-    seatTokens[agentPlayerId] = agentSeatToken;
+    seatTokens[connectedPlayerId] = agentSeatToken;
   }
 
   const roomId = `room-${crypto.randomUUID()}`;
+  const viewerToken = newViewerToken();
   const result = await env.GAME_ROOMS.getByName(roomId).initialize({
     roomId,
-    gameId,
-    gameInput: { playerIds, landlordId },
+    gameId: "doudizhu",
+    gameInput: { playerIds, landlordId: viewerId },
     viewerId,
     botPlayerIds,
     seatTokens,
+    viewerTokens: { [viewerId]: viewerToken },
+    participants,
+    hostedAgents,
   });
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
 
   const response: Record<string, unknown> = {
     version: 1,
     roomId,
+    mode,
     snapshot: rpcValue(result),
   };
   if (agentSeatToken) response.agentSeatToken = agentSeatToken;
-  return json(response, { status: 201 });
+
+  return json(response, {
+    status: 201,
+    headers: { "set-cookie": roomCookie(roomId, viewerToken, url) },
+  });
 }
 
 async function handleRoomRoute(
@@ -300,17 +389,30 @@ async function handleRoomRoute(
   url: URL,
   route: { roomId: string; action: "snapshot" | "moves" | "ws" | "pause" | "resume" },
 ): Promise<Response> {
-  const authError = authorizePrivateAccess(request, env, url);
-  if (authError) return authError;
   const stub = env.GAME_ROOMS.getByName(route.roomId);
+  const viewerToken = roomViewerToken(request, route.roomId);
 
   if (route.action === "ws") {
     if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
+    if (viewerToken) {
+      const headers = new Headers(request.headers);
+      headers.set("x-waitloop-viewer-token", viewerToken);
+      return stub.fetch(new Request(request, { headers }));
+    }
+    const authError = authorizePrivateAccess(request, env, url);
+    if (authError) return authError;
     return stub.fetch(request);
   }
 
   if (route.action === "snapshot") {
     if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
+    if (viewerToken) {
+      const result = await stub.getSnapshotByViewerToken(viewerToken);
+      if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+      return json({ version: 1, snapshot: rpcValue(result) });
+    }
+    const authError = authorizePrivateAccess(request, env, url);
+    if (authError) return authError;
     const viewerId = url.searchParams.get("viewer");
     if (!viewerId) return apiError(400, "invalid_viewer", "viewer query parameter is required.");
     const result = await stub.getSnapshot(viewerId);
@@ -326,10 +428,21 @@ async function handleRoomRoute(
 
   if (route.action === "moves") {
     if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
-    const { playerId, expectedRevision, moveId } = body.value;
-    if (typeof playerId !== "string" || typeof moveId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
-      return apiError(400, "invalid_move", "playerId, expectedRevision, and moveId are required.");
+    const { expectedRevision, moveId } = body.value;
+    if (typeof moveId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
+      return apiError(400, "invalid_move", "expectedRevision and moveId are required.");
     }
+
+    if (viewerToken) {
+      const result = await stub.applyMoveByViewerToken(viewerToken, expectedRevision as number, moveId);
+      if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+      return json({ version: 1, snapshot: rpcValue(result) });
+    }
+
+    const authError = authorizePrivateAccess(request, env, url);
+    if (authError) return authError;
+    const playerId = body.value.playerId;
+    if (typeof playerId !== "string") return apiError(400, "invalid_move", "playerId is required for private access.");
     const command: GameMoveCommandV1 = {
       version: 1,
       roomId: route.roomId,
@@ -343,9 +456,19 @@ async function handleRoomRoute(
   }
 
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  if (viewerToken) {
+    const result = route.action === "pause"
+      ? await stub.pauseByViewerToken(viewerToken)
+      : await stub.resumeByViewerToken(viewerToken);
+    if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+    return json({ version: 1, snapshot: rpcValue(result) });
+  }
+
+  const authError = authorizePrivateAccess(request, env, url);
+  if (authError) return authError;
   const viewerId = body.value.viewerId;
   if (typeof viewerId !== "string" || viewerId.length === 0) {
-    return apiError(400, "invalid_viewer", "viewerId is required.");
+    return apiError(400, "invalid_viewer", "viewerId is required for private access.");
   }
   const result = route.action === "pause" ? await stub.pause(viewerId) : await stub.resume(viewerId);
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
@@ -366,6 +489,10 @@ export default {
     if (url.pathname === "/api/v1/health") {
       if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
       return json({ version: 1, service: "waitloop", status: "ok" });
+    }
+    if (url.pathname === "/api/v1/hosted-agents") {
+      if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
+      return json({ version: 1, agents: listHostedAgents(env) });
     }
     if (url.pathname === "/api/v1/agent-events") return handleAgentEvent(request, env, url);
     if (url.pathname === "/api/v1/devices/bootstrap") return handleDeviceBootstrap(request, env, url);
