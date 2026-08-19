@@ -5,6 +5,7 @@ import { AgentSession } from "./agent-session";
 import { DeviceRegistry } from "./device-registry";
 import { GameRoom } from "./game-room";
 import { handleWaitloopMcp } from "./mcp";
+import { handlePairingApi } from "./pairing-api";
 import { PairingRequest } from "./pairing-request";
 
 export { AgentSession, DeviceRegistry, GameRoom, PairingRequest };
@@ -351,9 +352,16 @@ async function handleRoomRoute(
   return json({ version: 1, snapshot: rpcValue(result) });
 }
 
+function isPairPage(pathname: string): boolean {
+  return /^\/pair\/pair_[A-Za-z0-9_-]{32,128}$/.test(pathname);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    const pairingResponse = await handlePairingApi(request, env, url);
+    if (pairingResponse) return pairingResponse;
 
     if (url.pathname === "/api/v1/health") {
       if (request.method !== "GET") return apiError(405, "method_not_allowed", "Only GET is allowed.");
@@ -370,6 +378,11 @@ export default {
 
     const roomRoute = parseRoomRoute(url.pathname);
     if (roomRoute) return handleRoomRoute(request, env, url, roomRoute);
+
+    if (request.method === "GET" && isPairPage(url.pathname)) {
+      const assetUrl = new URL("/pair.html", url);
+      return env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+    }
 
     if (url.pathname.startsWith("/api/")) {
       return apiError(404, "not_found", "The requested API endpoint does not exist.");
