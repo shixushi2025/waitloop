@@ -19,8 +19,8 @@ if (typeof packageJson.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]
 }
 if (packageJson.publishConfig?.access !== "public") fail("publishConfig.access must be public");
 if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org/") fail("publishConfig.registry must be npmjs");
-if (packageJson.repository?.url !== "https://github.com/shixushi2025/waitloop") {
-  fail("repository.url must exactly match the GitHub repository used for trusted publishing");
+if (packageJson.repository?.url !== "git+https://github.com/shixushi2025/waitloop.git") {
+  fail("repository.url must use the normalized canonical GitHub repository URL");
 }
 
 const prerelease = packageJson.version.match(/-([0-9A-Za-z-]+)/)?.[1];
