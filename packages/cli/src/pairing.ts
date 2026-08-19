@@ -97,7 +97,7 @@ async function saveCredential(config: WaitloopConfig, body: DeviceCredentialResp
   await saveConfig(next);
 }
 
-async function bootstrapPair(config: WaitloopConfig, bootstrapToken: string): Promise<{ deviceId: string; scopes: string[]; mode: "bootstrap" }> {
+async function bootstrapPair(config: WaitloopConfig, bootstrapToken: string): Promise<{ deviceId: string; scopes: string[] }> {
   const timeout = requestTimeout();
   try {
     const response = await fetch(`${config.url}/api/v1/devices/bootstrap`, {
@@ -114,7 +114,7 @@ async function bootstrapPair(config: WaitloopConfig, bootstrapToken: string): Pr
 
     const body = parseCredentialResponse(await response.json(), config.deviceId);
     await saveCredential(config, body);
-    return { deviceId: body.deviceId, scopes: body.scopes, mode: "bootstrap" };
+    return { deviceId: body.deviceId, scopes: body.scopes };
   } finally {
     timeout.clear();
   }
@@ -181,7 +181,7 @@ async function exchangePublicPairing(
 export async function pairDevice(input: {
   bootstrapToken?: string;
   onPairingCreated?: (pairing: PairingCreatedV1) => void;
-} = {}): Promise<{ deviceId: string; scopes: string[]; mode: "public" | "bootstrap" }> {
+} = {}): Promise<{ deviceId: string; scopes: string[] }> {
   const config = await ensureConfig();
   const bootstrapToken = input.bootstrapToken || process.env.WAITLOOP_BOOTSTRAP_TOKEN;
   if (bootstrapToken) return bootstrapPair(config, bootstrapToken);
@@ -197,7 +197,7 @@ export async function pairDevice(input: {
 
   const body = await exchangePublicPairing(config, pairing, verifier);
   await saveCredential(config, body);
-  return { deviceId: body.deviceId, scopes: body.scopes, mode: "public" };
+  return { deviceId: body.deviceId, scopes: body.scopes };
 }
 
 export async function unpairDevice(): Promise<{ paired: boolean; revoked: boolean }> {
