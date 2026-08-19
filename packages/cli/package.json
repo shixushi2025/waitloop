@@ -7,7 +7,7 @@
   "homepage": "https://waitloop.run",
   "repository": {
     "type": "git",
-    "url": "https://github.com/shixushi2025/waitloop",
+    "url": "git+https://github.com/shixushi2025/waitloop.git",
     "directory": "packages/cli"
   },
   "bugs": {
