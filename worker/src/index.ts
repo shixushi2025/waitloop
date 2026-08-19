@@ -41,6 +41,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function rpcValue(result: object): unknown {
+  if (!("value" in result)) throw new Error("Successful game RPC result is missing a value.");
+  return result.value;
+}
+
 function isLocalHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
@@ -280,7 +285,7 @@ async function handleCreateRoom(request: Request, env: Env, url: URL): Promise<R
   const response: Record<string, unknown> = {
     version: 1,
     roomId,
-    snapshot: result.value,
+    snapshot: rpcValue(result),
   };
   if (agentSeatToken) response.agentSeatToken = agentSeatToken;
   return json(response, { status: 201 });
@@ -307,7 +312,7 @@ async function handleRoomRoute(
     if (!viewerId) return apiError(400, "invalid_viewer", "viewer query parameter is required.");
     const result = await stub.getSnapshot(viewerId);
     if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-    return json({ version: 1, snapshot: result.value });
+    return json({ version: 1, snapshot: rpcValue(result) });
   }
 
   const body = await readJson(request);
@@ -331,7 +336,7 @@ async function handleRoomRoute(
     };
     const result = await stub.applyMove(command, playerId);
     if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-    return json({ version: 1, snapshot: result.value });
+    return json({ version: 1, snapshot: rpcValue(result) });
   }
 
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
@@ -341,7 +346,7 @@ async function handleRoomRoute(
   }
   const result = route.action === "pause" ? await stub.pause(viewerId) : await stub.resume(viewerId);
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
-  return json({ version: 1, snapshot: result.value });
+  return json({ version: 1, snapshot: rpcValue(result) });
 }
 
 export default {
