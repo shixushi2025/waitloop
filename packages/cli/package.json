@@ -1,20 +1,45 @@
 {
   "name": "@waitloop/cli",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "description": "Waitloop CLI and coding-agent lifecycle adapters.",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://waitloop.run",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shixushi2025/waitloop",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/shixushi2025/waitloop/issues"
+  },
+  "keywords": [
+    "waitloop",
+    "coding-agent",
+    "codex",
+    "claude-code",
+    "cursor",
+    "mcp"
+  ],
   "bin": {
     "waitloop": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run clean && npm run build"
   }
 }
