@@ -12,8 +12,9 @@ import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } 
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
 import type { LocalTurnState } from "./lifecycle.js";
 import { pairDevice, unpairDevice } from "./pairing.js";
+import { getCliVersion } from "./version.js";
 
-const VERSION = "0.0.0";
+const VERSION = getCliVersion();
 
 type InstallTarget = "claude-code" | "cursor" | "codex";
 
