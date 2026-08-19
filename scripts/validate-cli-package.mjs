@@ -8,13 +8,14 @@ const packagePath = resolve(root, "packages/cli/package.json");
 const manifestPath = resolve(root, "apps/web/public/agent.json");
 const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
 const agentManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 function fail(message) {
   throw new Error(`CLI package validation failed: ${message}`);
 }
 
 if (packageJson.name !== "@waitloop/cli") fail("unexpected package name");
-if (typeof packageJson.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageJson.version)) {
+if (typeof packageJson.version !== "string" || !VERSION_PATTERN.test(packageJson.version)) {
   fail("package version is not a valid release version");
 }
 if (packageJson.publishConfig?.access !== "public") fail("publishConfig.access must be public");
@@ -26,10 +27,18 @@ if (packageJson.repository?.url !== "git+https://github.com/shixushi2025/waitloo
 const prerelease = packageJson.version.match(/-([0-9A-Za-z-]+)/)?.[1];
 const expectedDistTag = prerelease ? prerelease.split(".")[0] : "latest";
 if (agentManifest.cli?.packageName !== packageJson.name) fail("agent.json CLI packageName is out of sync");
-if (agentManifest.cli?.version !== packageJson.version) fail("agent.json CLI version is out of sync");
+if (typeof agentManifest.cli?.version !== "string" || !VERSION_PATTERN.test(agentManifest.cli.version)) {
+  fail("agent.json published CLI version is invalid");
+}
 if (agentManifest.cli?.distTag !== expectedDistTag) fail("agent.json CLI distTag is out of sync");
 if (agentManifest.cli?.installCommand !== `npm install -g ${packageJson.name}@${expectedDistTag}`) {
   fail("agent.json CLI installCommand is out of sync");
+}
+if (agentManifest.cli?.published === false && agentManifest.cli.version !== packageJson.version) {
+  fail("an unpublished staged manifest must match the package candidate version");
+}
+if (agentManifest.cli?.candidateVersion !== undefined && agentManifest.cli.candidateVersion !== packageJson.version) {
+  fail("agent.json candidateVersion is out of sync with package.json");
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
