@@ -85,9 +85,6 @@ jobs:
       - name: Publish @waitloop/cli
         if: steps.registry.outputs.exists != 'true'
         working-directory: packages/cli
-        env:
-          # Bootstrap fallback. Remove this after npm Trusted Publishing is configured.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
 
       - name: Verify npm publication
