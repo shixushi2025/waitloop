@@ -3,25 +3,29 @@ name: publish-cli
 on:
   release:
     types: [published]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: npm-cli-${{ github.event.release.tag_name }}
+  group: npm-cli-${{ github.event_name }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'cli-v')
+    if: >-
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'cli-v')) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - name: Checkout release tag
+      - name: Checkout publish ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -49,17 +53,23 @@ jobs:
       - name: Validate CLI package contents
         run: pnpm check:cli-package
 
-      - name: Validate release tag
+      - name: Validate publish source
         id: release
         env:
+          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
           const expected = `cli-v${pkg.version}`;
-          if (process.env.RELEASE_TAG !== expected) {
-            console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
+          if (process.env.EVENT_NAME === 'release') {
+            if (process.env.RELEASE_TAG !== expected) {
+              console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
+              process.exit(1);
+            }
+          } else if (pkg.version !== '0.1.0-alpha.2') {
+            console.error(`Temporary main-branch OIDC validation is restricted to 0.1.0-alpha.2; found ${pkg.version}.`);
             process.exit(1);
           }
           const prerelease = pkg.version.match(/-([0-9A-Za-z-]+)/)?.[1];
@@ -81,7 +91,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish @waitloop/cli
+      - name: Publish @waitloop/cli with OIDC
         if: steps.registry.outputs.exists != 'true'
         working-directory: packages/cli
         run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
