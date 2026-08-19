@@ -7,14 +7,15 @@ The Waitloop CLI owns local configuration and thin coding-agent lifecycle adapte
 ```text
 waitloop init
 waitloop doctor
-waitloop install claude-code
-waitloop uninstall claude-code
+waitloop install <claude-code|cursor|all>
+waitloop uninstall <claude-code|cursor|all>
 waitloop status
 waitloop open
 waitloop config
+waitloop hook <claude-code|cursor>
 ```
 
-`waitloop init` creates `~/.waitloop/config.json`, generates a stable opaque device ID, detects supported coding agents, and can install the Claude Code lifecycle hooks.
+`waitloop init` creates `~/.waitloop/config.json`, generates a stable opaque device ID, detects supported coding agents, and can install all detected lifecycle adapters that are currently implemented.
 
 The current device ID is local identity only. Remote account/device approval is a later pairing layer; it must not be confused with authentication.
 
@@ -25,8 +26,6 @@ The installer merges Waitloop handlers into `~/.claude/settings.json` and never 
 ```text
 waitloop hook claude-code
 ```
-
-Claude sends lifecycle JSON to the command on stdin. Waitloop consumes only `session_id` and `hook_event_name`; other fields are ignored.
 
 Mapping:
 
@@ -39,4 +38,35 @@ StopFailure       -> failed
 SessionEnd        -> local cleanup
 ```
 
-Local turn state is stored under `~/.waitloop/state/claude-code/`. The files contain only an opaque Waitloop session ID, state, and timestamps.
+Claude hook input is consumed only for native session correlation and event type. Prompt text and other payload fields are ignored.
+
+## Cursor
+
+The installer merges Waitloop handlers into `~/.cursor/hooks.json`. The installed command is:
+
+```text
+waitloop hook cursor
+```
+
+Mapping:
+
+```text
+beforeSubmitPrompt -> running
+stop/completed     -> completed
+stop/error         -> failed
+stop/aborted       -> failed
+sessionEnd         -> local cleanup
+```
+
+Cursor's native conversation/generation ID is used only as a local correlation key and is hashed for the temporary local filename. It is never included in the canonical Waitloop event.
+
+## Local state
+
+Turn state lives under:
+
+```text
+~/.waitloop/state/claude-code/
+~/.waitloop/state/cursor/
+```
+
+State files contain only the adapter ID, an opaque Waitloop session ID, state, and timestamps. Lifecycle delivery is best-effort and fail-open with a short timeout.
