@@ -17,17 +17,19 @@ This file records what is actually implemented on `main`. It is intentionally na
 ### Workspace and validation
 
 - pnpm TypeScript monorepo
+- committed `pnpm-lock.yaml`
 - strict TypeScript configuration
 - Vitest configuration
 - Cloudflare Worker/static-assets setup
 - GitHub Actions typecheck/test workflow
-- a real GitHub Actions validation run has completed successfully with:
-  - dependency installation
+- pnpm dependency cache keyed by the committed lockfile
+- CI uses `pnpm install --frozen-lockfile`
+- two real GitHub Actions validation cycles have completed successfully; the latest validated:
+  - frozen lockfile dependency installation
+  - pnpm cache setup
   - root TypeScript typecheck
   - CLI TypeScript typecheck
   - full Vitest suite
-
-The repository still needs a committed `pnpm-lock.yaml`; CI currently installs with `--no-frozen-lockfile` and intentionally does not enable pnpm cache until the lockfile is committed.
 
 ### Agent lifecycle
 
@@ -76,7 +78,7 @@ The repository still needs a committed `pnpm-lock.yaml`; CI currently installs w
 - `waitloop unpair` self-revokes before removing the local credential; network/server failures keep the local credential so revocation can be retried
 - `/api/v1/agent-events` accepts the scoped device credential while retaining the legacy ingest token only as a migration path
 
-This is the credential substrate for the final pairing experience. The public browser/account approval flow is not implemented yet; the current bootstrap endpoint deliberately requires privileged bootstrap authority outside localhost.
+This is the credential substrate for the final pairing experience. The current remote bootstrap endpoint deliberately requires privileged bootstrap authority outside localhost. A short-lived browser approval flow still needs to be layered on top.
 
 ### Game core
 
@@ -128,15 +130,16 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 
 ## Validation performed
 
-A temporary validation PR was used only to trigger the repository's `pull_request` workflow. It was closed without merge after the CI job completed successfully. The validated dependency graph installed successfully and the root/CLI TypeScript checks plus the full Vitest suite passed.
+Temporary validation PRs are used only when a `pull_request` trigger is needed to inspect the exact GitHub Actions job. They are closed without merge; validation-only files never reach `main`.
+
+The current dependency graph has passed frozen-lockfile installation and the root/CLI TypeScript checks plus the full Vitest suite on GitHub-hosted runners.
 
 Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex adapters against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted Waitloop events.
 
 ## Still required before a public beta
 
-- committed `pnpm-lock.yaml` and restoration of lockfile-based pnpm cache/frozen installs
-- public browser/account approval pairing instead of the alpha bootstrap authority
-- account device list/revoke/rotation UX
+- short-lived browser/device approval pairing instead of the privileged alpha bootstrap authority
+- account-optional or account-backed device list/revoke/rotation UX, depending on the final identity model
 - authenticated browser session/WebSocket flow; long-lived device bearer tokens must not be put into browser URLs
 - dynamic MCP seat setup without copying room JSON by hand
 - room lifecycle/expiry cleanup
@@ -150,14 +153,13 @@ Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex ada
 
 ## Next implementation order
 
-1. Commit `pnpm-lock.yaml`, switch CI to frozen installs, and restore pnpm dependency caching.
-2. Build the public short-lived pairing-request + browser/account approval flow on top of the existing DeviceRegistry credential model.
-3. Replace the current private browser token boundary with an authenticated browser session/ticket model for sessions, rooms, and WebSockets.
-4. Connect the current game seat/MCP setup to the installed local agent without copying JSON by hand.
-5. Add the DSH adapter once its lifecycle contract is fixed.
-6. Deploy the first authenticated Cloudflare preview.
-7. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
-8. Only then add more games and Arena experiments.
+1. Build a short-lived pairing-request + explicit browser approval flow on top of the existing DeviceRegistry credential model; keep account identity optional at the protocol layer.
+2. Replace the current private browser token boundary with an authenticated browser session/ticket model for sessions, rooms, and WebSockets.
+3. Connect the current game seat/MCP setup to the installed local agent without copying JSON by hand.
+4. Add the DSH adapter once its lifecycle contract is fixed.
+5. Deploy the first authenticated Cloudflare preview.
+6. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
+7. Only then add more games and Arena experiments.
 
 ## v0.1 acceptance target
 
