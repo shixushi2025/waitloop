@@ -27,7 +27,7 @@ This file records what is actually implemented on `main`. It is intentionally na
 - CI runs root TypeScript typecheck
 - CI runs CLI TypeScript typecheck
 - CI runs the full Vitest suite
-- CI runs `wrangler deploy --dry-run --outdir .wrangler-dist` so Worker bundling/configuration and Durable Object exports are checked before Cloudflare deployment
+- CI runs `wrangler deploy --dry-run --outdir .wrangler-dist`
 
 ### Agent lifecycle
 
@@ -36,12 +36,11 @@ This file records what is actually implemented on `main`. It is intentionally na
 - duplicate/stale/terminal transition reducer
 - AgentSession Durable Object
 - real-time AgentSession WebSocket snapshots
-- minimal waiting status UI
 - Claude Code lifecycle adapter
 - Cursor lifecycle adapter
 - Codex lifecycle adapter
 - shared local lifecycle state layer for adapters
-- native Claude/Cursor/Codex session identifiers stay local and are hashed only for local temporary filenames
+- native Claude/Cursor/Codex session identifiers stay local and are hashed only for temporary local filenames
 
 ### Waitloop CLI
 
@@ -68,7 +67,6 @@ This file records what is actually implemented on `main`. It is intentionally na
 
 - DeviceRegistry Durable Object
 - PairingRequest Durable Object
-- PairingRequest is exported from the Worker entrypoint and declared in Wrangler configuration
 - opaque `wldev_...` device credentials
 - raw device credentials are returned only at issuance
 - only SHA-256 credential digests are stored server-side
@@ -84,11 +82,57 @@ This file records what is actually implemented on `main`. It is intentionally na
 - successful exchange issues one scoped device credential and stores it privately in local config
 - `waitloop pair` opens the browser automatically unless `--no-open` is used
 - `DELETE /api/v1/devices/current` supports self-revocation
-- `waitloop unpair` self-revokes before removing the local credential
-- `/api/v1/agent-events` accepts the scoped device credential while retaining the legacy ingest token only as a migration path
 - privileged `/api/v1/devices/bootstrap` remains as a development/recovery fallback
 
-The current browser approval model is intentionally account-optional. Possession of the high-entropy pairing URL is the approval capability for this alpha. A future account layer can require authentication before `approve` without changing the CLI verifier/device-credential protocol.
+The current browser approval model is account-optional. A future account layer can require authentication before approval without changing the CLI verifier/device-credential protocol.
+
+### Player model
+
+The game runtime now distinguishes four participant types:
+
+```text
+Human
+Bot
+Hosted Agent
+Connected Agent
+```
+
+- bots are zero-cost deterministic rule players;
+- hosted agents are server-side model calls such as DeepSeek or GPT;
+- connected agents are external MCP-controlled seats such as Codex, Claude Code, Cursor, or DSH.
+
+Participant metadata is attached to room snapshots so the UI can display the actual player type/name instead of an ambiguous generic `agent` label.
+
+### Hosted game agents
+
+- server-side Hosted Agent runner
+- DeepSeek provider support
+- OpenAI provider support
+- `GET /api/v1/hosted-agents` returns only providers configured on the deployment
+- default DeepSeek model: `deepseek-v4-flash`
+- default OpenAI model: `gpt-5.6`
+- model names are overrideable with Worker variables
+- provider API keys remain Worker secrets and are never exposed to the browser
+- only that seat's visible game state plus legal move IDs are sent to the provider
+- model output is restricted to selecting a server-generated `moveId`
+- invalid/model-error/timeout responses fall back to a deterministic legal move instead of blocking the room
+- per-hosted-seat runtime statistics track calls, input/output tokens, latency, fallback count, and last error
+
+See [`hosted-agents.md`](hosted-agents.md).
+
+### Browser game room authorization
+
+- public browser room creation no longer requires `WAITLOOP_ACCESS_TOKEN`
+- room creation issues a high-entropy `wlview_...` viewer credential
+- raw viewer credential is stored in a room-scoped HttpOnly cookie
+- only the viewer credential digest is persisted in the GameRoom Durable Object
+- room IDs may appear in URLs but are not authorization credentials
+- snapshot/move/pause/resume APIs validate the room viewer credential
+- browser WebSocket upgrades use the same HttpOnly room credential
+- cookies use `SameSite=Strict`, room-specific paths, and `Secure` on HTTPS deployments
+- legacy private-access paths remain available for development/admin compatibility
+
+This replaces the previous public `create failed` behavior caused by protecting all room APIs with the Worker-wide private access token.
 
 ### Game core
 
@@ -118,14 +162,15 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 
 - GameRoom Durable Object
 - generic game registry boundary
-- local-alpha room creation API
 - authoritative move application
-- simple server-side bot seats
 - WebSocket room snapshots
 - terminal/IDE-like Dou Dizhu web UI
-- `you + 2 bots` room mode
-- `you + agent + bot` room mode
-- one-time MCP seat setup output for the agent room
+- visible create errors instead of only a `create failed` header
+- `you + 2 bots`
+- `you + hosted AI + bot` for every configured hosted provider
+- `you + connected agent + bot`
+- dynamic Hosted Agent buttons based on server configuration
+- one-time MCP seat setup output for connected-agent rooms
 - linked coding-agent state can pause the game UI/runtime
 
 ### MCP
@@ -136,33 +181,32 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - `get_turn()`
 - `play_move(expectedRevision, moveId)`
 - seat tokens hashed before Durable Object persistence
-- agent seat token is returned only when the room is created and is not placed in the room URL
+- connected-agent seat token is returned only when the room is created and is not placed in the room URL
 
 ## Validation performed
 
-Temporary validation PRs are used only when a `pull_request` trigger is needed to inspect the exact GitHub Actions job. They are closed without merge; validation-only files never reach `main`.
+Temporary validation PRs are used only when a `pull_request` trigger is needed to inspect exact GitHub Actions jobs. They are closed without merge; validation-only files never reach `main`.
 
-The current dependency graph has passed:
+The current hosted-agent/public-room revision passed:
 
 - frozen-lockfile installation
 - pnpm cache restore
 - root TypeScript typecheck
 - CLI TypeScript typecheck
-- the full Vitest suite (43 tests at the latest validation)
+- full Vitest suite
 - Wrangler deploy dry-run bundling/configuration validation
 
-The Wrangler dry-run was added after Cloudflare correctly detected a configured `PairingRequest` Durable Object that had not yet been exported from `worker/src/index.ts`. The entrypoint/export mismatch was fixed and is now covered by CI.
-
-Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex adapters against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted Waitloop events.
+Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex adapters against a local HTTP receiver and confirmed that prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted lifecycle events.
 
 ## Still required before a public beta
 
-- rate limiting / abuse controls for public pairing creation and lifecycle ingestion
+- rate limiting / abuse controls for public pairing, room creation, hosted inference, and lifecycle ingestion
 - optional account-backed device list/revoke/rotation UX
-- authenticated browser session/ticket flow for private agent sessions, rooms, and WebSockets; long-lived device bearer tokens must not be put into browser URLs
+- authenticated browser session/ticket flow for private coding-agent lifecycle sessions; room access itself now uses scoped room credentials
 - dynamic MCP seat setup without copying room JSON by hand
 - room lifecycle/expiry cleanup
 - production CSP/CORS/auth hardening
+- hosted-agent cost budgets/quotas before broad public use
 - game state persistence migration tests
 - full Dou Dizhu bidding and scoring
 - robust reconnect/recovery UX
@@ -171,44 +215,28 @@ Synthetic lifecycle tests have also exercised Claude Code, Cursor, and Codex ada
 
 ## Next implementation order
 
-1. Replace the current private browser token boundary with a browser session/ticket model for sessions, rooms, and WebSockets.
-2. Connect the current game seat/MCP setup to the installed local agent without copying JSON by hand.
-3. Add rate limiting and pairing/lifecycle abuse controls before opening the service broadly.
-4. Add the DSH adapter once its lifecycle contract is fixed.
-5. Deploy and harden the first Cloudflare preview.
+1. Verify the new public room flow on the deployed Cloudflare Worker and configure at least one Hosted Agent secret.
+2. Connect the current MCP game seat to an installed local agent without copying JSON by hand.
+3. Add rate limiting, hosted-agent budgets, and room expiry before broad public exposure.
+4. Add browser access for linked coding-agent lifecycle sessions without a Worker-wide token.
+5. Add the DSH adapter once its lifecycle contract is fixed.
 6. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
-7. Only then add more games and Arena experiments.
+7. Add Agent Arena/private matches before online matchmaking.
 
 ## v0.1 acceptance target
-
-The first real release is not defined by the number of games. It is defined by one uninterrupted workflow:
 
 ```text
 coding agent starts
         ↓
 Waitloop reports running
         ↓
-user enters a small game
+user opens a public game room
+        ↓
+user plays against bots / hosted AI / a connected agent
         ↓
 agent needs attention or completes
         ↓
-game pauses immediately
+game pauses
         ↓
-work becomes the primary action again
-```
-
-For agent participation, the parallel acceptance path is:
-
-```text
-create a room with one agent seat
-        ↓
-connect the seat-scoped MCP capability to the intended local agent
-        ↓
-agent calls get_turn
-        ↓
-agent chooses a returned moveId
-        ↓
-agent calls play_move
-        ↓
-hidden hands remain inaccessible
+work becomes primary again
 ```
