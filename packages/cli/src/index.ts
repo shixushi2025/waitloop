@@ -24,7 +24,7 @@ Tiny games while your coding agent runs.
 
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
-  waitloop pair [--bootstrap-token TOKEN]
+  waitloop pair [--no-open] [--bootstrap-token TOKEN]
   waitloop unpair
   waitloop doctor
   waitloop install <claude-code|cursor|codex|all>
@@ -134,12 +134,23 @@ async function commandInit(args: string[]): Promise<void> {
 
 async function commandPair(args: string[]): Promise<void> {
   const bootstrapToken = optionValue(args, "--bootstrap-token");
-  const pairInput: Parameters<typeof pairDevice>[0] = {};
+  const noOpen = hasFlag(args, "--no-open");
+  const pairInput: Parameters<typeof pairDevice>[0] = {
+    onPairingCreated(pairing) {
+      console.log("pairing request created");
+      console.log(`code      ${pairing.code}`);
+      console.log(`expires   ${new Date(pairing.expiresAt).toLocaleTimeString()}`);
+      console.log(`url       ${pairing.pairingUrl}`);
+      console.log("waiting for browser approval...\n");
+      if (!noOpen) launchUrl(pairing.pairingUrl);
+    },
+  };
   if (bootstrapToken !== undefined) pairInput.bootstrapToken = bootstrapToken;
   const result = await pairDevice(pairInput);
   console.log("paired");
   console.log(`device    ${result.deviceId}`);
   console.log(`scopes    ${result.scopes.join(", ")}`);
+  console.log(`mode      ${result.mode}`);
   console.log("credential stored privately; raw token was not printed");
 }
 
