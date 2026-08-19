@@ -74,7 +74,7 @@ export function detectAgents(): AgentDetection[] {
       label: "Cursor",
       installed: cursorPath !== null,
       detail: cursorPath ?? "not detected",
-      integration: "planned",
+      integration: "available",
     },
     {
       id: "dsh",

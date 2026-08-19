@@ -7,9 +7,13 @@ import { stdin as input, stdout as output } from "node:process";
 import { detectAgents } from "./agents.js";
 import { installClaudeCode, uninstallClaudeCode } from "./claude-code.js";
 import { createConfig, getConfigPath, loadConfig, redactConfig, saveConfig } from "./config.js";
+import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } from "./cursor.js";
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
+import type { LocalTurnState } from "./lifecycle.js";
 
 const VERSION = "0.0.0";
+
+type InstallTarget = "claude-code" | "cursor";
 
 function help(): void {
   console.log(`waitloop ${VERSION}
@@ -19,12 +23,12 @@ Tiny games while your coding agent runs.
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
   waitloop doctor
-  waitloop install claude-code
-  waitloop uninstall claude-code
+  waitloop install <claude-code|cursor|all>
+  waitloop uninstall <claude-code|cursor|all>
   waitloop status
   waitloop open [--print]
   waitloop config
-  waitloop hook claude-code
+  waitloop hook <claude-code|cursor>
   waitloop --version
 `);
 }
@@ -65,6 +69,14 @@ async function promptYesNo(question: string, defaultYes = true): Promise<boolean
   }
 }
 
+async function installTarget(target: InstallTarget): Promise<{ changed: boolean; path: string }> {
+  return target === "claude-code" ? installClaudeCode() : installCursor();
+}
+
+async function uninstallTarget(target: InstallTarget): Promise<{ changed: boolean; path: string }> {
+  return target === "claude-code" ? uninstallClaudeCode() : uninstallCursor();
+}
+
 async function commandInit(args: string[]): Promise<void> {
   const previous = await loadConfig();
   const url = optionValue(args, "--url");
@@ -85,21 +97,26 @@ async function commandInit(args: string[]): Promise<void> {
   console.log("");
 
   const detections = printAgents();
-  const claude = detections.find((item) => item.id === "claude-code");
-  if (!claude?.installed) {
-    console.log("\nClaude Code was not detected. Run `waitloop install claude-code` after installing it.");
+  const available = detections.filter(
+    (item): item is typeof item & { id: InstallTarget } =>
+      item.installed && item.integration === "available" && (item.id === "claude-code" || item.id === "cursor"),
+  );
+  if (available.length === 0) {
+    console.log("\nNo installable lifecycle adapter was detected. Run `waitloop doctor` after installing an agent.");
     return;
   }
 
-  const install = hasFlag(args, "--yes") || await promptYesNo("Install the Claude Code lifecycle integration?");
+  const install = hasFlag(args, "--yes") || await promptYesNo("Install detected Waitloop lifecycle integrations?");
   if (!install) {
-    console.log("\nSkipped integration install. Run `waitloop install claude-code` when ready.");
+    console.log("\nSkipped integration install. Run `waitloop install <agent>` when ready.");
     return;
   }
 
-  const result = await installClaudeCode();
-  console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} Claude Code integration`);
-  console.log(`  ${result.path}`);
+  for (const agent of available) {
+    const result = await installTarget(agent.id);
+    console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} ${agent.label}`);
+    console.log(`  ${result.path}`);
+  }
 }
 
 async function checkHealth(url: string): Promise<string> {
@@ -129,32 +146,48 @@ async function commandDoctor(): Promise<void> {
   printAgents();
 }
 
+function parseInstallTargets(target: string | undefined): InstallTarget[] {
+  if (target === "all") return ["claude-code", "cursor"];
+  if (target === "claude-code" || target === "cursor") return [target];
+  throw new Error("Target must be `claude-code`, `cursor`, or `all`.");
+}
+
 async function commandInstall(target: string | undefined): Promise<void> {
-  if (target !== "claude-code") throw new Error("Only `waitloop install claude-code` is available in this alpha.");
-  const result = await installClaudeCode();
-  console.log(`${result.changed ? "installed" : "already installed"} claude-code`);
-  console.log(result.path);
+  for (const item of parseInstallTargets(target)) {
+    const result = await installTarget(item);
+    console.log(`${result.changed ? "installed" : "already installed"} ${item}`);
+    console.log(result.path);
+  }
 }
 
 async function commandUninstall(target: string | undefined): Promise<void> {
-  if (target !== "claude-code") throw new Error("Only `waitloop uninstall claude-code` is available in this alpha.");
-  const result = await uninstallClaudeCode();
-  console.log(`${result.changed ? "removed" : "not installed"} claude-code`);
-  console.log(result.path);
+  for (const item of parseInstallTargets(target)) {
+    const result = await uninstallTarget(item);
+    console.log(`${result.changed ? "removed" : "not installed"} ${item}`);
+    console.log(result.path);
+  }
+}
+
+async function latestStates(): Promise<LocalTurnState[]> {
+  const states = await Promise.all([readLatestClaudeState(), readLatestCursorState()]);
+  return states.filter((state): state is LocalTurnState => state !== null).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 async function commandStatus(): Promise<void> {
-  const latest = await readLatestClaudeState();
-  if (!latest) {
-    console.log("no recent Claude Code turn");
+  const states = await latestStates();
+  if (states.length === 0) {
+    console.log("no recent coding-agent turn");
     return;
   }
-  const elapsedMs = Math.max(0, latest.updatedAt - latest.startedAt);
-  const elapsed = Math.floor(elapsedMs / 1000);
-  console.log("agent      claude-code");
-  console.log(`status     ${latest.state}`);
-  console.log(`session    ${latest.waitloopSessionId}`);
-  console.log(`elapsed    ${elapsed}s`);
+  for (const [index, latest] of states.entries()) {
+    if (index > 0) console.log("");
+    const elapsedMs = Math.max(0, latest.updatedAt - latest.startedAt);
+    const elapsed = Math.floor(elapsedMs / 1000);
+    console.log(`agent      ${latest.agent}`);
+    console.log(`status     ${latest.state}`);
+    console.log(`session    ${latest.waitloopSessionId}`);
+    console.log(`elapsed    ${elapsed}s`);
+  }
 }
 
 function launchUrl(url: string): void {
@@ -169,9 +202,10 @@ function launchUrl(url: string): void {
 async function commandOpen(args: string[]): Promise<void> {
   const config = await loadConfig();
   if (!config) throw new Error("Run `waitloop init` first.");
-  const latest = await readLatestClaudeState();
+  const states = await latestStates();
+  const active = states.find((state) => state.state === "running" || state.state === "waiting") ?? states[0];
   const url = new URL(config.url);
-  if (latest) url.searchParams.set("session", latest.waitloopSessionId);
+  if (active) url.searchParams.set("session", active.waitloopSessionId);
   const value = url.toString();
   if (hasFlag(args, "--print")) console.log(value);
   else {
@@ -204,6 +238,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "hook" && args[1] === "claude-code") return runClaudeCodeHook();
+  if (command === "hook" && args[1] === "cursor") return runCursorHook();
 
   throw new Error(`Unknown command: ${args.join(" ")}`);
 }
