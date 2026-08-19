@@ -38,5 +38,12 @@ jobs:
       - name: Validate browser JavaScript
         run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
 
+      - name: Validate agent discovery files
+        run: |
+          test -s apps/web/public/agent.md
+          test -s apps/web/public/llms.txt
+          test -s apps/web/public/skills/waitloop/SKILL.md
+          node -e "JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))"
+
       - name: Validate Worker bundle
         run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
