@@ -30,7 +30,26 @@ This file records what is actually implemented on `main`. It is intentionally na
 - AgentSession Durable Object
 - real-time AgentSession WebSocket snapshots
 - minimal waiting status UI
-- first Claude Code hook adapter
+- Claude Code lifecycle adapter
+- Cursor lifecycle adapter
+- shared local lifecycle state layer for adapters
+- native Claude/Cursor session identifiers stay local and are hashed only for local temporary filenames
+
+### Waitloop CLI
+
+- local `~/.waitloop/config.json`
+- stable opaque local device ID (metadata only; not authentication)
+- agent detection for Claude Code, Cursor, Codex, and DSH
+- `waitloop init`
+- `waitloop doctor`
+- `waitloop install/uninstall claude-code`
+- `waitloop install/uninstall cursor`
+- `waitloop install/uninstall all`
+- `waitloop status`
+- `waitloop open`
+- redacted `waitloop config`
+- lifecycle hook delivery is best-effort/fail-open with a bounded timeout
+- hook installers merge safely and uninstall only Waitloop-owned handlers
 
 ### Game core
 
@@ -80,10 +99,16 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - seat tokens hashed before Durable Object persistence
 - agent seat token is returned only when the room is created and is not placed in the room URL
 
+## Validation performed so far
+
+The CLI source has been checked with strict TypeScript options including `exactOptionalPropertyTypes`. Synthetic local hook tests have exercised Claude Code and Cursor lifecycle delivery against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, and native agent session IDs were not present in emitted Waitloop events.
+
+This is not a substitute for a clean repository-wide CI run with the final lockfile.
+
 ## Still required before a public beta
 
 - clean CI confirmation on the complete dependency graph and a committed lockfile
-- device/account pairing instead of alpha bearer tokens
+- real device/account pairing instead of alpha bearer tokens
 - authenticated browser WebSocket flow
 - room lifecycle/expiry cleanup
 - rate limiting
@@ -91,20 +116,21 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 - game state persistence migration tests
 - full Dou Dizhu bidding and scoring
 - robust reconnect/recovery UX
-- install/update/uninstall CLI
-- packaged dynamic MCP setup for supported coding agents
+- publish/install/update flow for the CLI package
+- Codex adapter
+- DSH adapter
+- dynamic MCP setup without copying room JSON by hand
 
 ## Next implementation order
 
 1. Validate/fix the current workspace in CI and commit a lockfile.
-2. Build the Waitloop installer/pairing flow so browser/API auth no longer depends on development-only tokens.
-3. Finish Claude Code setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
-4. Add Cursor adapter.
-5. Add Codex adapter.
-6. Add DSH adapter.
-7. Deploy the first authenticated Cloudflare preview.
-8. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
-9. Only then add more games and Arena experiments.
+2. Implement real device/account pairing so local agents no longer need Worker-wide alpha secrets.
+3. Finish Claude Code/Cursor setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
+4. Add Codex adapter.
+5. Add DSH adapter.
+6. Deploy the first authenticated Cloudflare preview.
+7. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
+8. Only then add more games and Arena experiments.
 
 ## v0.1 acceptance target
 
