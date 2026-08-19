@@ -8,7 +8,7 @@ on:
       - "publish/cli-v*"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -77,7 +77,20 @@ jobs:
           console.log(`Publishing @waitloop/cli@${pkg.version} with dist-tag ${distTag}.`);
           NODE
 
+      - name: Check npm registry
+        id: registry
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if npm view "@waitloop/cli@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "@waitloop/cli@${VERSION} already exists; publish will be skipped."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish @waitloop/cli
+        if: steps.registry.outputs.exists != 'true'
         working-directory: packages/cli
         env:
           # Bootstrap only: set this secret for the first publish if trusted publishing
@@ -85,3 +98,31 @@ jobs:
           # trusted publishing is enabled for this workflow.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
+
+      - name: Verify npm publication
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            actual="$(npm view "@waitloop/cli@${VERSION}" version 2>/dev/null || true)"
+            if [ "$actual" = "$VERSION" ]; then
+              echo "Verified @waitloop/cli@${VERSION} on npm."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "npm registry did not expose @waitloop/cli@${VERSION} after publication." >&2
+          exit 1
+
+      - name: Record bootstrap result
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          DIST_TAG: ${{ steps.release.outputs.dist_tag }}
+        run: |
+          printf 'published @waitloop/cli@%s\ndist-tag %s\n' "$VERSION" "$DIST_TAG" > .publish-cli-result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .publish-cli-result
+          git commit -m "chore: record CLI publish result" || exit 0
+          git push origin HEAD:"${GITHUB_REF_NAME}"
