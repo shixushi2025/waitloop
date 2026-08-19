@@ -6,6 +6,8 @@ on:
   push:
     branches:
       - "publish/cli-v*"
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -19,7 +21,8 @@ jobs:
   publish:
     if: >-
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'cli-v')) ||
-      (github.event_name == 'push' && startsWith(github.ref_name, 'publish/cli-v'))
+      (github.event_name == 'push' && startsWith(github.ref_name, 'publish/cli-v')) ||
+      (github.event_name == 'pull_request' && startsWith(github.head_ref, 'publish/cli-v'))
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -58,7 +61,7 @@ jobs:
       - name: Validate publish ref
         id: release
         env:
-          RELEASE_SOURCE: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+          RELEASE_SOURCE: ${{ github.event_name == 'release' && github.event.release.tag_name || (github.event_name == 'pull_request' && github.head_ref || github.ref_name) }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
