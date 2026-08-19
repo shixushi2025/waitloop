@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packagePath = resolve(root, "packages/cli/package.json");
+const manifestPath = resolve(root, "apps/web/public/agent.json");
 const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+const agentManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
 function fail(message) {
   throw new Error(`CLI package validation failed: ${message}`);
@@ -19,6 +21,15 @@ if (packageJson.publishConfig?.access !== "public") fail("publishConfig.access m
 if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org/") fail("publishConfig.registry must be npmjs");
 if (packageJson.repository?.url !== "https://github.com/shixushi2025/waitloop") {
   fail("repository.url must exactly match the GitHub repository used for trusted publishing");
+}
+
+const prerelease = packageJson.version.match(/-([0-9A-Za-z-]+)/)?.[1];
+const expectedDistTag = prerelease ? prerelease.split(".")[0] : "latest";
+if (agentManifest.cli?.packageName !== packageJson.name) fail("agent.json CLI packageName is out of sync");
+if (agentManifest.cli?.version !== packageJson.version) fail("agent.json CLI version is out of sync");
+if (agentManifest.cli?.distTag !== expectedDistTag) fail("agent.json CLI distTag is out of sync");
+if (agentManifest.cli?.installCommand !== `npm install -g ${packageJson.name}@${expectedDistTag}`) {
+  fail("agent.json CLI installCommand is out of sync");
 }
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
