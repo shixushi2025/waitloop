@@ -33,6 +33,24 @@ https://waitloop.run/mcp
 
 Do not confuse the public `/agent.md` with repository-root [`AGENTS.md`](AGENTS.md): `AGENTS.md` contains instructions for coding agents developing this repository; `/agent.md` tells external agents how to integrate with the deployed Waitloop product.
 
+## CLI distribution
+
+The CLI package is prepared as:
+
+```text
+@waitloop/cli@0.1.0-alpha.1
+```
+
+The npm package has not yet been marked public in `agent.json`; that flag remains `false` until the first registry publication is actually verified. Once published, alpha installs use:
+
+```bash
+npm install -g @waitloop/cli@alpha
+```
+
+Until then, `/agent.md` instructs installer agents to use the source-install fallback rather than pretending the npm package already exists.
+
+The release pipeline validates the final `npm pack` tarball, packaged `waitloop --version`, exact release tag, and publishes through `.github/workflows/publish-cli.yml`. See [`docs/cli-release.md`](docs/cli-release.md).
+
 ## Current alpha
 
 The repository now contains an end-to-end Cloudflare implementation:
@@ -47,7 +65,8 @@ The repository now contains an end-to-end Cloudflare implementation:
 - four participant types: Human, Bot, Hosted Agent, Connected Agent
 - server-hosted DeepSeek and OpenAI game agents when provider secrets are configured
 - MCP-connected game seats with only `get_turn` and `play_move`
-- CI validation including TypeScript, Vitest, browser JavaScript syntax, frozen installs, and `wrangler deploy --dry-run`
+- human card-selection endpoints that do not expose exhaustive `legalMoves[]` to the browser
+- CI validation including TypeScript, Vitest, browser JavaScript syntax, npm package contents/version, frozen installs, and `wrangler deploy --dry-run`
 
 The game entry is `/game.html` when the Worker is running locally or deployed.
 
@@ -178,6 +197,7 @@ See [`docs/hosted-agents.md`](docs/hosted-agents.md) for the provider, privacy, 
 - [`docs/hosted-agents.md`](docs/hosted-agents.md) — model-backed game players
 - [`docs/pairing.md`](docs/pairing.md) — device pairing and scoped credentials
 - [`docs/cli.md`](docs/cli.md) — CLI and lifecycle adapters
+- [`docs/cli-release.md`](docs/cli-release.md) — npm package release and trusted-publishing procedure
 - [`docs/design.md`](docs/design.md) — visual/interaction language
 - [`docs/roadmap.md`](docs/roadmap.md) — implementation sequence and acceptance criteria
 - [`docs/status.md`](docs/status.md) — what is actually implemented now
@@ -187,12 +207,13 @@ See [`docs/hosted-agents.md`](docs/hosted-agents.md) for the provider, privacy, 
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
+pnpm check:cli-package
 pnpm dev
 ```
 
 The Worker is configured from `wrangler.jsonc`. Production secrets must never be committed to the repository.
 
-CI runs the dependency/type/test checks, validates browser JavaScript syntax, and executes a Wrangler deployment dry-run so Worker configuration and Durable Object exports are validated before Cloudflare deployment.
+CI runs the dependency/type/test checks, validates the npm CLI tarball and browser JavaScript syntax, and executes a Wrangler deployment dry-run so package contents, Worker configuration, and Durable Object exports are validated before release/deployment.
 
 ## Domain
 
