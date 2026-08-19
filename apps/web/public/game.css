@@ -71,12 +71,11 @@
 
 .command-button,
 .text-button,
-.move-button {
+.card-token {
   appearance: none;
-  border: 0;
   border-radius: 0;
   cursor: pointer;
-  font: 13px/1.4 var(--mono);
+  font-family: var(--mono);
 }
 
 .command-button {
@@ -85,6 +84,8 @@
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .command-button span {
@@ -94,14 +95,15 @@
 
 .command-button:hover,
 .command-button:focus-visible,
-.move-button:hover,
-.move-button:focus-visible {
+.card-token:hover:not(:disabled),
+.card-token:focus-visible {
   border-color: var(--accent);
   outline: none;
 }
 
 .command-button:disabled,
-.move-button:disabled {
+.card-token:disabled,
+.text-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -158,37 +160,74 @@
 }
 
 .card-token {
-  min-width: 36px;
-  padding: 7px 8px;
+  position: relative;
+  min-width: 38px;
+  padding: 8px 9px;
   border: 1px solid var(--line);
   background: var(--panel-2);
-  text-align: center;
-  font: 13px/1 var(--mono);
-}
-
-.move-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-  padding-bottom: 24px;
-}
-
-.move-button {
-  min-height: 42px;
-  padding: 9px 11px;
-  border: 1px solid var(--line);
-  background: transparent;
   color: var(--text);
-  text-align: left;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  transition: transform 90ms ease, border-color 90ms ease, background 90ms ease;
 }
 
-.move-button .move-index {
-  color: var(--muted);
-  margin-right: 9px;
+.card-token.selected {
+  transform: translateY(-5px);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
 }
 
-.move-button.pass {
+.card-token.selected::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+  left: 5px;
+  height: 1px;
+  background: var(--accent);
+}
+
+.action-section {
+  padding-bottom: 28px;
+}
+
+.selection-summary {
+  min-height: 24px;
+  margin-bottom: 12px;
   color: var(--muted);
+  font: 13px/1.6 var(--mono);
+}
+
+.selection-summary.valid {
+  color: var(--accent);
+}
+
+.selection-summary.invalid {
+  color: var(--warning);
+}
+
+.game-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.secondary-action {
+  background: transparent;
+  color: var(--muted);
+}
+
+.clear-selection {
+  margin-left: 4px;
+}
+
+.action-help {
+  display: block;
+  margin-top: 12px;
+  color: var(--faint);
+  font: 11px/1.5 var(--mono);
 }
 
 .attention {
@@ -224,8 +263,17 @@
 
 .text-button {
   padding: 0;
+  border: 0;
   background: transparent;
   color: var(--accent);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-token {
+    transition: none;
+  }
 }
 
 @media (max-width: 700px) {
@@ -259,8 +307,17 @@
     display: none;
   }
 
-  .move-list {
-    grid-template-columns: 1fr;
+  .game-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .game-actions .text-button {
+    align-self: flex-start;
+  }
+
+  .clear-selection {
+    margin-left: 0;
   }
 
   .attention {
