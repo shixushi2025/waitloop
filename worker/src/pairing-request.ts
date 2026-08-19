@@ -8,6 +8,7 @@ export interface PairingRequestStateV1 {
   createdAt: number;
   expiresAt: number;
   approvedAt?: number;
+  exchangedAt?: number;
 }
 
 export type PairingRequestPublicV1 = Omit<PairingRequestStateV1, "verifierHash">;
@@ -20,7 +21,12 @@ export type PairingExchangeResultV1 =
   | { ok: true; deviceId: string; expiresAt: number }
   | {
       ok: false;
-      code: "pairing_not_found" | "pairing_expired" | "pairing_pending" | "invalid_verifier";
+      code:
+        | "pairing_not_found"
+        | "pairing_expired"
+        | "pairing_pending"
+        | "pairing_consumed"
+        | "invalid_verifier";
     };
 
 export interface PairingRequestEnv {}
@@ -39,6 +45,15 @@ function validHash(value: string): boolean {
   return /^[0-9a-f]{64}$/.test(value);
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+  const length = Math.max(a.length, b.length);
+  let difference = a.length ^ b.length;
+  for (let index = 0; index < length; index += 1) {
+    difference |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+}
+
 function publicSnapshot(state: PairingRequestStateV1): PairingRequestPublicV1 {
   const result: PairingRequestPublicV1 = {
     version: 1,
@@ -48,6 +63,7 @@ function publicSnapshot(state: PairingRequestStateV1): PairingRequestPublicV1 {
     expiresAt: state.expiresAt,
   };
   if (state.approvedAt !== undefined) result.approvedAt = state.approvedAt;
+  if (state.exchangedAt !== undefined) result.exchangedAt = state.exchangedAt;
   return result;
 }
 
@@ -96,14 +112,18 @@ export class PairingRequest extends DurableObject<PairingRequestEnv> {
     const state = await this.ctx.storage.get<PairingRequestStateV1>(STATE_KEY);
     if (!state) return { ok: false, code: "pairing_not_found" };
     if (now > state.expiresAt) return { ok: false, code: "pairing_expired" };
-    if (!validHash(verifierHash) || verifierHash !== state.verifierHash) {
+    if (state.exchangedAt !== undefined) return { ok: false, code: "pairing_consumed" };
+    if (!validHash(verifierHash) || !constantTimeEqual(verifierHash, state.verifierHash)) {
       return { ok: false, code: "invalid_verifier" };
     }
     if (state.approvedAt === undefined) return { ok: false, code: "pairing_pending" };
+
+    const next: PairingRequestStateV1 = { ...state, exchangedAt: now };
+    await this.ctx.storage.put(STATE_KEY, next);
     return { ok: true, deviceId: state.deviceId, expiresAt: state.expiresAt };
   }
 
-  async alarm(): Promise<void> {
+  override async alarm(): Promise<void> {
     await this.ctx.storage.deleteAll();
   }
 }
