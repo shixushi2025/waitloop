@@ -23,7 +23,7 @@
       <section class="game-intro">
         <p class="eyebrow">games / doudizhu / alpha</p>
         <h1>Dou Dizhu,<br />without the casino.</h1>
-        <p class="lede">The server owns the rules and hidden hands. Start with two simple bots, or leave one seat for an MCP-connected agent.</p>
+        <p class="lede">Rules and hidden hands stay server-side. Bots are local rule players; hosted AI calls a model; connected agents join through an MCP seat.</p>
       </section>
 
       <section class="attention" id="attention" hidden aria-live="assertive">
@@ -37,16 +37,36 @@
       <section class="terminal game-terminal" aria-label="Dou Dizhu room">
         <div class="terminal-head">
           <span id="room-label">room / none</span>
-          <span id="connection-status">not connected</span>
+          <span id="connection-status">ready</span>
         </div>
 
         <div class="game-start" id="game-start">
-          <div>
-            <p>Choose the smallest useful setup. Both modes keep hidden cards server-side.</p>
-            <div class="start-actions">
-              <button class="command-button" id="new-bot-game" type="button"><span>&gt;</span> you + 2 bots</button>
-              <button class="command-button" id="new-agent-game" type="button"><span>&gt;</span> you + agent + bot</button>
+          <div class="game-start-content">
+            <p>Choose who sits at the other two seats.</p>
+
+            <div class="mode-block">
+              <p class="section-label">rules_only/</p>
+              <div class="start-actions">
+                <button class="command-button" id="new-bot-game" type="button"><span>&gt;</span> you + 2 bots</button>
+              </div>
+              <small>Two zero-cost server bots. No model calls.</small>
             </div>
+
+            <div class="mode-block">
+              <p class="section-label">hosted_ai/</p>
+              <div class="start-actions" id="hosted-agent-actions"></div>
+              <small id="hosted-agent-status">checking configured models...</small>
+            </div>
+
+            <div class="mode-block">
+              <p class="section-label">connected_agent/</p>
+              <div class="start-actions">
+                <button class="command-button" id="new-connected-agent-game" type="button"><span>&gt;</span> you + connected agent + bot</button>
+              </div>
+              <small>Creates an MCP seat for Codex, Claude Code, Cursor, DSH, or another compatible agent.</small>
+            </div>
+
+            <p class="create-error" id="create-error" hidden aria-live="polite"></p>
           </div>
         </div>
 
@@ -54,12 +74,12 @@
           <section class="mcp-setup" id="mcp-setup" hidden aria-label="MCP seat setup">
             <div class="mcp-setup-head">
               <div>
-                <p class="section-label">agent_seat/</p>
+                <p class="section-label">connected_agent_seat/</p>
                 <strong>Connect one agent to this room.</strong>
               </div>
               <button class="text-button" id="copy-mcp" type="button">copy config</button>
             </div>
-            <p class="mcp-note">The seat token authorizes only the <code>agent</code> seat in this room. It is shown once; do not commit or share it.</p>
+            <p class="mcp-note">The seat token authorizes only the connected-agent seat in this room. It is shown once; do not commit or share it.</p>
             <pre class="mcp-config" id="mcp-config"></pre>
           </section>
 
