@@ -16,6 +16,10 @@
         "class_name": "AgentSession"
       },
       {
+        "name": "DEVICE_AUTH",
+        "class_name": "DeviceRegistry"
+      },
+      {
         "name": "GAME_ROOMS",
         "class_name": "GameRoom"
       }
@@ -23,6 +27,10 @@
   },
   "exports": {
     "AgentSession": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "DeviceRegistry": {
       "type": "durable-object",
       "storage": "sqlite"
     },

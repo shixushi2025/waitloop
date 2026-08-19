@@ -2,14 +2,16 @@ import type { GameMoveCommandV1 } from "@waitloop/game-core";
 import { parseWaitloopAgentEvent } from "@waitloop/protocol";
 
 import { AgentSession } from "./agent-session";
+import { DeviceRegistry } from "./device-registry";
 import { GameRoom } from "./game-room";
 import { handleWaitloopMcp } from "./mcp";
 
-export { AgentSession, GameRoom };
+export { AgentSession, DeviceRegistry, GameRoom };
 
 interface Env {
   ASSETS: Fetcher;
   AGENT_SESSIONS: DurableObjectNamespace<AgentSession>;
+  DEVICE_AUTH: DurableObjectNamespace<DeviceRegistry>;
   GAME_ROOMS: DurableObjectNamespace<GameRoom>;
   WAITLOOP_INGEST_TOKEN?: string;
   WAITLOOP_ACCESS_TOKEN?: string;
@@ -21,6 +23,7 @@ interface ApiErrorBody {
 }
 
 const MAX_JSON_BODY_BYTES = 16 * 1024;
+const DEVICE_REGISTRY_NAME = "registry-v1";
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -47,15 +50,36 @@ function bearerToken(request: Request): string | null {
   return value?.startsWith("Bearer ") ? value.slice("Bearer ".length) : null;
 }
 
-function authorizeAgentMutation(request: Request, env: Env, url: URL): Response | null {
+function deviceRegistry(env: Env) {
+  return env.DEVICE_AUTH.getByName(DEVICE_REGISTRY_NAME);
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function newDeviceToken(): string {
+  return `wldev_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+function validDeviceId(value: string): boolean {
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
+async function authorizeAgentMutation(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (isLocalHostname(url.hostname)) return null;
-  if (!env.WAITLOOP_INGEST_TOKEN) {
-    return apiError(503, "ingest_not_configured", "Agent event ingestion is disabled.");
+  const token = bearerToken(request);
+  if (!token) return apiError(401, "unauthorized", "A lifecycle credential is required.");
+
+  if (token.startsWith("wldev_")) {
+    const authorization = await deviceRegistry(env).authorize(await sha256Hex(token), "agent:write");
+    if (authorization.ok) return null;
   }
-  if (bearerToken(request) !== env.WAITLOOP_INGEST_TOKEN) {
-    return apiError(401, "unauthorized", "A valid ingest token is required.");
-  }
-  return null;
+
+  if (env.WAITLOOP_INGEST_TOKEN && token === env.WAITLOOP_INGEST_TOKEN) return null;
+  return apiError(401, "unauthorized", "A valid lifecycle credential is required.");
 }
 
 function authorizePrivateAccess(request: Request, env: Env, url: URL): Response | null {
@@ -118,7 +142,7 @@ function parseRoomRoute(pathname: string): { roomId: string; action: "snapshot" 
 
 async function handleAgentEvent(request: Request, env: Env, url: URL): Promise<Response> {
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
-  const authError = authorizeAgentMutation(request, env, url);
+  const authError = await authorizeAgentMutation(request, env, url);
   if (authError) return authError;
 
   const body = await readJson(request);
@@ -134,6 +158,51 @@ async function handleAgentEvent(request: Request, env: Env, url: URL): Promise<R
     decision: result.decision,
     snapshot: result.snapshot,
   }, { status: result.accepted ? 200 : 409 });
+}
+
+async function handleDeviceBootstrap(request: Request, env: Env, url: URL): Promise<Response> {
+  if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  const authError = authorizePrivateAccess(request, env, url);
+  if (authError) return authError;
+
+  const body = await readJson(request);
+  if (!body.ok) return body.response;
+  if (!isRecord(body.value) || body.value.version !== 1 || typeof body.value.deviceId !== "string") {
+    return apiError(400, "invalid_device_request", "Device bootstrap requires a version 1 deviceId.");
+  }
+  const deviceId = body.value.deviceId;
+  if (!validDeviceId(deviceId)) {
+    return apiError(400, "invalid_device_id", "deviceId contains unsupported characters or is too long.");
+  }
+
+  const deviceToken = newDeviceToken();
+  const tokenHash = await sha256Hex(deviceToken);
+  await deviceRegistry(env).issue({
+    version: 1,
+    deviceId,
+    tokenHash,
+    scopes: ["agent:write"],
+    createdAt: Date.now(),
+  });
+
+  return json({
+    version: 1,
+    deviceId,
+    deviceToken,
+    scopes: ["agent:write"],
+  }, { status: 201 });
+}
+
+async function handleCurrentDevice(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "DELETE") return apiError(405, "method_not_allowed", "Only DELETE is allowed.");
+  const token = bearerToken(request);
+  if (!token || !token.startsWith("wldev_")) {
+    return apiError(401, "unauthorized", "A valid device credential is required.");
+  }
+
+  const result = await deviceRegistry(env).revoke(await sha256Hex(token));
+  if (!result.revoked) return apiError(401, "unauthorized", "The device credential is invalid or already revoked.");
+  return json({ version: 1, revoked: true, deviceId: result.deviceId });
 }
 
 async function handleSessionRoute(
@@ -284,6 +353,8 @@ export default {
       return json({ version: 1, service: "waitloop", status: "ok" });
     }
     if (url.pathname === "/api/v1/agent-events") return handleAgentEvent(request, env, url);
+    if (url.pathname === "/api/v1/devices/bootstrap") return handleDeviceBootstrap(request, env, url);
+    if (url.pathname === "/api/v1/devices/current") return handleCurrentDevice(request, env);
     if (url.pathname === "/api/v1/rooms") return handleCreateRoom(request, env, url);
     if (url.pathname === "/mcp") return handleWaitloopMcp(request, env);
 
