@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#0d0f0f" />
     <title>Waitloop</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="alternate" type="text/markdown" href="/agent.md" title="Waitloop agent integration guide" />
   </head>
   <body>
     <main class="shell">
@@ -14,6 +15,7 @@
         <a class="brand" href="/" aria-label="Waitloop home">waitloop<span aria-hidden="true">_</span></a>
         <nav class="nav" aria-label="Primary navigation">
           <a href="/game.html">play</a>
+          <a href="/agent.md">agents</a>
           <a href="https://github.com/shixushi2025/waitloop">github</a>
         </nav>
       </header>
@@ -69,10 +71,32 @@
         <article>
           <p class="section-label">works with/</p>
           <ul class="plain-list">
-            <li><span>claude code</span><small>first adapter</small></li>
-            <li><span>cursor</span><small>planned</small></li>
-            <li><span>codex</span><small>planned</small></li>
-            <li><span>dsh</span><small>planned</small></li>
+            <li><span>claude code</span><small>hooks + plugin</small></li>
+            <li><span>cursor</span><small>hooks</small></li>
+            <li><span>codex</span><small>hooks + mcp</small></li>
+            <li><span>dsh</span><small>adapter planned</small></li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="columns" aria-label="Agent integration discovery">
+        <article>
+          <p class="section-label">agent_install/</p>
+          <ul class="plain-list">
+            <li><a href="/agent.md">agent.md</a><small>canonical guide</small></li>
+            <li><a href="/agent.json">agent.json</a><small>machine manifest</small></li>
+            <li><a href="/skills/waitloop/SKILL.md">SKILL.md</a><small>agent skill</small></li>
+            <li><a href="/llms.txt">llms.txt</a><small>discovery</small></li>
+          </ul>
+        </article>
+
+        <article>
+          <p class="section-label">integration_layers/</p>
+          <ul class="plain-list">
+            <li><span>cli</span><small>pair + install + doctor</small></li>
+            <li><span>hooks</span><small>agent lifecycle</small></li>
+            <li><span>skill</span><small>agent instructions</small></li>
+            <li><span>mcp</span><small>room-scoped game seat</small></li>
           </ul>
         </article>
       </section>
