@@ -12,6 +12,27 @@ while (agent.running) {
 
 Waitloop is intentionally not an engagement product. The goal is to make agent latency less awkward without turning the distraction into the primary activity.
 
+## Agent-facing entrypoint
+
+Give an AI agent this URL when you want it to understand or install Waitloop:
+
+```text
+https://waitloop.run/agent.md
+```
+
+Related machine-readable resources:
+
+```text
+https://waitloop.run/agent.json
+https://waitloop.run/llms.txt
+https://waitloop.run/skills/waitloop/SKILL.md
+https://waitloop.run/mcp
+```
+
+`agent.md` is the canonical installation/integration guide. `agent.json` declares current support and explicitly marks unpublished/planned components so an installer agent does not invent them. `SKILL.md` is credential-free agent guidance. The `/mcp` endpoint is room-scoped and must not be configured globally without a specific game room and seat credential.
+
+Do not confuse the public `/agent.md` with repository-root [`AGENTS.md`](AGENTS.md): `AGENTS.md` contains instructions for coding agents developing this repository; `/agent.md` tells external agents how to integrate with the deployed Waitloop product.
+
 ## Current alpha
 
 The repository now contains an end-to-end Cloudflare implementation:
@@ -26,7 +47,7 @@ The repository now contains an end-to-end Cloudflare implementation:
 - four participant types: Human, Bot, Hosted Agent, Connected Agent
 - server-hosted DeepSeek and OpenAI game agents when provider secrets are configured
 - MCP-connected game seats with only `get_turn` and `play_move`
-- CI validation including TypeScript, Vitest, frozen installs, and `wrangler deploy --dry-run`
+- CI validation including TypeScript, Vitest, browser JavaScript syntax, frozen installs, and `wrangler deploy --dry-run`
 
 The game entry is `/game.html` when the Worker is running locally or deployed.
 
@@ -156,6 +177,7 @@ See [`docs/hosted-agents.md`](docs/hosted-agents.md) for the provider, privacy, 
 - [`docs/mcp.md`](docs/mcp.md) — seat-scoped MCP model and tool boundary
 - [`docs/hosted-agents.md`](docs/hosted-agents.md) — model-backed game players
 - [`docs/pairing.md`](docs/pairing.md) — device pairing and scoped credentials
+- [`docs/cli.md`](docs/cli.md) — CLI and lifecycle adapters
 - [`docs/design.md`](docs/design.md) — visual/interaction language
 - [`docs/roadmap.md`](docs/roadmap.md) — implementation sequence and acceptance criteria
 - [`docs/status.md`](docs/status.md) — what is actually implemented now
@@ -170,7 +192,7 @@ pnpm dev
 
 The Worker is configured from `wrangler.jsonc`. Production secrets must never be committed to the repository.
 
-CI runs the same dependency/type/test checks and additionally executes a Wrangler deployment dry-run so Worker configuration and Durable Object exports are validated before Cloudflare deployment.
+CI runs the dependency/type/test checks, validates browser JavaScript syntax, and executes a Wrangler deployment dry-run so Worker configuration and Durable Object exports are validated before Cloudflare deployment.
 
 ## Domain
 
