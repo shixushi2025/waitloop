@@ -1,0 +1,77 @@
+.pair-shell {
+  max-width: 900px;
+}
+
+.pair-hero {
+  padding: 110px 0 54px;
+  max-width: 760px;
+}
+
+.pair-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 28px 30px;
+  font: 13px/1.6 var(--mono);
+}
+
+.pair-action p {
+  margin: 0;
+  max-width: 520px;
+  color: var(--muted);
+}
+
+.approve-button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 12px 15px;
+  font: 13px/1 var(--mono);
+  cursor: pointer;
+}
+
+.approve-button span {
+  margin-right: 8px;
+  color: var(--accent);
+}
+
+.approve-button:hover:not(:disabled),
+.approve-button:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.approve-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pair-success {
+  color: var(--accent) !important;
+}
+
+.pair-error {
+  color: var(--danger) !important;
+}
+
+.pair-shell footer {
+  margin-top: 72px;
+}
+
+@media (max-width: 700px) {
+  .pair-hero {
+    padding: 78px 0 42px;
+  }
+
+  .pair-action {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 22px 18px;
+  }
+
+  .approve-button {
+    width: 100%;
+    text-align: left;
+  }
+}
