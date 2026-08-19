@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Approve a Waitloop device pairing request." />
+    <meta name="theme-color" content="#0d0f0f" />
+    <title>Pair device · Waitloop</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/pair.css" />
+  </head>
+  <body>
+    <main class="shell pair-shell">
+      <header class="topbar">
+        <a class="brand" href="/">waitloop<span aria-hidden="true">_</span></a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="https://github.com/shixushi2025/waitloop">github</a>
+        </nav>
+      </header>
+
+      <section class="pair-hero">
+        <p class="eyebrow">device / pairing</p>
+        <h1>Approve this<br />coding device.</h1>
+        <p class="lede">
+          This grants one local Waitloop installation permission to report coding-agent lifecycle state.
+          It does not grant access to source code, prompts, repositories, or game seats.
+        </p>
+      </section>
+
+      <section class="terminal" aria-live="polite">
+        <div class="terminal-head">
+          <span id="pairing-label">pairing / loading</span>
+          <span class="runtime" id="pairing-runtime">checking</span>
+        </div>
+
+        <dl class="status-grid">
+          <dt>code</dt>
+          <dd id="pairing-code">-</dd>
+          <dt>device</dt>
+          <dd id="device-id">-</dd>
+          <dt>scope</dt>
+          <dd>agent:write</dd>
+          <dt>expires</dt>
+          <dd id="expires-value">-</dd>
+        </dl>
+
+        <div class="rule" aria-hidden="true"></div>
+
+        <div class="pair-action">
+          <p id="pairing-message">Loading pairing request.</p>
+          <button class="approve-button" id="approve-button" type="button" disabled>
+            <span>&gt;</span> approve device
+          </button>
+        </div>
+
+        <div class="prompt">
+          <span aria-hidden="true">&gt;</span>
+          <span id="pairing-prompt">checking request</span>
+          <span class="cursor" aria-hidden="true"></span>
+        </div>
+      </section>
+
+      <footer>
+        <span>waitloop.run</span>
+        <span>minimal permission · explicit approval</span>
+      </footer>
+    </main>
+
+    <script type="module" src="/pair.js"></script>
+  </body>
+</html>
