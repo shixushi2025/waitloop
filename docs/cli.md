@@ -1,6 +1,6 @@
 # Waitloop CLI
 
-The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, agent detection, lifecycle hook installation, diagnostics, and opening the current waiting session.
+The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, device credentials, agent detection, lifecycle hook installation, diagnostics, and opening the current waiting session.
 
 It is deliberately thin. Game rules, room authority, MCP tools, and remote session state remain server-side.
 
@@ -11,7 +11,7 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
 - idempotent installs and safe uninstalls
 - platform adapters stay thin and map into the canonical Waitloop lifecycle protocol
 - local state is inspectable and removable
-- remote pairing/authentication can be added without changing the lifecycle event shape
+- scoped device credentials replace Worker-wide lifecycle secrets
 
 ## Local files
 
@@ -30,19 +30,20 @@ It is deliberately thin. Game rules, room authority, MCP tools, and remote sessi
         └── latest.json
 ```
 
-`config.json` is written with private-file permissions where the OS supports them. It currently contains:
+`config.json` is written with private-file permissions where the OS supports them. A paired alpha configuration looks like:
 
 ```json
 {
   "version": 1,
   "url": "https://waitloop.run",
   "deviceId": "device-opaque-uuid",
-  "ingestToken": "optional-alpha-secret",
-  "accessToken": "optional-alpha-secret"
+  "deviceToken": "wldev_..."
 }
 ```
 
-The device ID is an opaque **local identity**, not proof of authentication. A real account/device approval flow is still required before public beta.
+The device ID is only local/display identity. Authorization comes from the scoped `deviceToken`.
+
+Legacy `ingestToken` and alpha `accessToken` fields remain readable for migration/development. A successful device pairing removes the saved legacy lifecycle ingest token from the normal path.
 
 Local turn state contains only:
 
@@ -65,12 +66,47 @@ Options:
 
 ```text
 --url URL
---ingest-token TOKEN
---access-token TOKEN
+--ingest-token TOKEN       # legacy migration only
+--access-token TOKEN       # alpha/private bootstrap only
 --yes
 ```
 
 Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install all detected lifecycle adapters that Waitloop currently supports.
+
+### Pair a device
+
+The credential substrate is implemented now. Until the public browser/account approval flow exists, remote alpha environments use privileged bootstrap authority:
+
+```bash
+WAITLOOP_BOOTSTRAP_TOKEN=... waitloop pair
+```
+
+or, for development only:
+
+```bash
+waitloop pair --bootstrap-token TOKEN
+```
+
+Prefer the environment variable because command-line arguments can be retained by shell history/process inspection.
+
+`waitloop pair`:
+
+1. creates local config/device identity if necessary;
+2. calls `POST /api/v1/devices/bootstrap`;
+3. receives one `agent:write` device credential;
+4. stores the credential privately;
+5. never prints the raw credential;
+6. removes the saved legacy lifecycle ingest token after successful migration.
+
+The server persists only the SHA-256 digest of the raw device credential. See [`pairing.md`](pairing.md) for the authorization model and the planned short-lived browser approval flow.
+
+### Unpair
+
+```bash
+waitloop unpair
+```
+
+The CLI first self-revokes the remote device credential, then removes it locally. If Waitloop is unreachable or returns a server error, the local credential is retained so revocation can be retried instead of silently abandoning a still-valid remote credential. A `401` means it is already invalid remotely and is safe to remove locally.
 
 ### Diagnostics
 
@@ -78,7 +114,7 @@ Initialization creates or updates local config, preserves the existing device ID
 waitloop doctor
 ```
 
-Checks local configuration, the Waitloop health endpoint, and best-effort agent detection.
+Checks local configuration, the Waitloop health endpoint, pairing state, and best-effort agent detection.
 
 ### Install and uninstall adapters
 
@@ -177,7 +213,20 @@ waitloop open --print
 waitloop config
 ```
 
-Token values are redacted; only whether each token is configured is shown.
+Secret values are redacted; output shows only whether device, legacy ingest, and alpha access credentials are configured.
+
+## Lifecycle credential order
+
+Lifecycle delivery chooses credentials in this order:
+
+```text
+1. WAITLOOP_DEVICE_TOKEN
+2. config deviceToken
+3. WAITLOOP_INGEST_TOKEN       (legacy)
+4. config ingestToken          (legacy)
+```
+
+The device credential is scoped to lifecycle ingestion (`agent:write`). It does not grant room administration, browser private API access, or arbitrary MCP seat access.
 
 ## Hook delivery behavior
 
@@ -189,17 +238,16 @@ WAITLOOP_HOOK_TIMEOUT_MS
 
 The value is capped at ten seconds.
 
-## Authentication roadmap
+## Public pairing still to build
 
-The alpha still supports manually configured ingest/access tokens. That is intentionally not presented as finished pairing.
+The server/CLI device credential model is implemented, but the current remote issuance path is deliberately an **alpha bootstrap**, not the final user-facing pairing flow.
 
-The next pairing layer should:
+The next public flow will use:
 
-1. create a short-lived pairing request from the CLI;
-2. require explicit browser/account approval;
-3. issue a revocable device credential scoped to lifecycle ingestion and the user's own sessions;
-4. store only a hashed/derived verifier server-side when possible;
-5. support listing and revoking devices;
-6. remove the need to copy long-lived Worker-wide secrets into local config.
+1. short-lived pairing request from the CLI;
+2. explicit browser/account approval;
+3. a local high-entropy verifier kept out of the browser URL;
+4. one-time exchange for the same scoped/revocable device credential model;
+5. account device listing/revocation.
 
-Until that exists, `deviceId` is metadata only and must never be trusted as authorization.
+That work can be added without changing the agent lifecycle event protocol or the installed Claude/Cursor/Codex adapters.
