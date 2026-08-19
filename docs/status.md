@@ -32,8 +32,9 @@ This file records what is actually implemented on `main`. It is intentionally na
 - minimal waiting status UI
 - Claude Code lifecycle adapter
 - Cursor lifecycle adapter
+- Codex lifecycle adapter
 - shared local lifecycle state layer for adapters
-- native Claude/Cursor session identifiers stay local and are hashed only for local temporary filenames
+- native Claude/Cursor/Codex session identifiers stay local and are hashed only for local temporary filenames
 
 ### Waitloop CLI
 
@@ -42,14 +43,14 @@ This file records what is actually implemented on `main`. It is intentionally na
 - agent detection for Claude Code, Cursor, Codex, and DSH
 - `waitloop init`
 - `waitloop doctor`
-- `waitloop install/uninstall claude-code`
-- `waitloop install/uninstall cursor`
+- install/uninstall for Claude Code, Cursor, and Codex
 - `waitloop install/uninstall all`
 - `waitloop status`
 - `waitloop open`
 - redacted `waitloop config`
 - lifecycle hook delivery is best-effort/fail-open with a bounded timeout
 - hook installers merge safely and uninstall only Waitloop-owned handlers
+- Codex installer reminds the user to review/trust the non-managed command hook
 
 ### Game core
 
@@ -101,7 +102,7 @@ The alpha currently assigns the landlord explicitly when creating a room. A full
 
 ## Validation performed so far
 
-The CLI source has been checked with strict TypeScript options including `exactOptionalPropertyTypes`. Synthetic local hook tests have exercised Claude Code and Cursor lifecycle delivery against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, and native agent session IDs were not present in emitted Waitloop events.
+The CLI source has been checked with strict TypeScript options including `exactOptionalPropertyTypes`. Synthetic local hook tests have exercised Claude Code, Cursor, and Codex lifecycle delivery against a local HTTP receiver. Those checks confirmed that injected prompt text, repository paths, tool/output text, transcript paths, and native agent session/turn identifiers were not present in emitted Waitloop events.
 
 This is not a substitute for a clean repository-wide CI run with the final lockfile.
 
@@ -117,7 +118,6 @@ This is not a substitute for a clean repository-wide CI run with the final lockf
 - full Dou Dizhu bidding and scoring
 - robust reconnect/recovery UX
 - publish/install/update flow for the CLI package
-- Codex adapter
 - DSH adapter
 - dynamic MCP setup without copying room JSON by hand
 
@@ -125,12 +125,11 @@ This is not a substitute for a clean repository-wide CI run with the final lockf
 
 1. Validate/fix the current workspace in CI and commit a lockfile.
 2. Implement real device/account pairing so local agents no longer need Worker-wide alpha secrets.
-3. Finish Claude Code/Cursor setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
-4. Add Codex adapter.
-5. Add DSH adapter.
-6. Deploy the first authenticated Cloudflare preview.
-7. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
-8. Only then add more games and Arena experiments.
+3. Finish agent setup so lifecycle hooks and the current game seat can be connected without copying JSON by hand.
+4. Add DSH adapter once its local lifecycle contract is fixed.
+5. Deploy the first authenticated Cloudflare preview.
+6. Add full Dou Dizhu bidding/scoring after the end-to-end waiting loop is stable.
+7. Only then add more games and Arena experiments.
 
 ## v0.1 acceptance target
 
