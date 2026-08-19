@@ -9,7 +9,6 @@
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true,
     "noEmit": true,
     "resolveJsonModule": true,
     "allowJs": false,
