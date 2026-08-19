@@ -45,6 +45,26 @@ jobs:
       - name: Use npm 11 for trusted publishing
         run: npm install --global npm@11
 
+      - name: Diagnose GitHub OIDC identity
+        run: |
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "OIDC request URL is missing"; exit 1; }
+          response="$(curl -fsSL -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org")"
+          OIDC_RESPONSE="$response" node <<'NODE'
+          const response = JSON.parse(process.env.OIDC_RESPONSE);
+          const token = response.value;
+          const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+          const keys = [
+            'iss', 'aud', 'repository', 'repository_owner', 'workflow',
+            'job_workflow_ref', 'ref', 'event_name', 'environment', 'actor'
+          ];
+          const safe = Object.fromEntries(keys.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]));
+          console.log(JSON.stringify(safe, null, 2));
+          NODE
+
+      - name: Inspect npm trusted publisher configuration
+        continue-on-error: true
+        run: npm trust list @waitloop/cli --json
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
