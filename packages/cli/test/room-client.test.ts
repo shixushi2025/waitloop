@@ -4,7 +4,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createAndActivateHeadlessRoom, getActiveRoom } from "../src/room-client.js";
+import {
+  callRoomTool,
+  createAndActivateHeadlessRoom,
+  getActiveRoom,
+  WaitloopClientError,
+} from "../src/room-client.js";
+import type { JoinCredentialV1 } from "../src/join.js";
 
 const originalFetch = globalThis.fetch;
 const originalJoinDir = process.env.WAITLOOP_JOIN_DIR;
@@ -21,6 +27,29 @@ function jsonResponse(value: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function testCredential(): JoinCredentialV1 {
+  return {
+    version: 1,
+    code: "WL-23456789AB",
+    roomId: "room-test",
+    serverUrl: "https://waitloop.run",
+    joinUrl: "https://waitloop.run/join/WL-23456789AB",
+    seatToken: "wlseat_private_test_value",
+    actorId: "actor-test",
+    seatId: "seat-1",
+    relation: "controller",
+    roomExpiresAt: Date.now() + 60_000,
+    mcp: {
+      type: "http",
+      url: "https://waitloop.run/mcp",
+      headers: {
+        Authorization: "Bearer wlseat_private_test_value",
+        "X-Waitloop-Room": "room-test",
+      },
+    },
+  };
 }
 
 describe("local room client", () => {
@@ -97,5 +126,35 @@ describe("local room client", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("propagates cancellation to the remote fetch and marks read waits retry-safe", async () => {
+    const controller = new AbortController();
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        controller.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    }) as typeof fetch;
+
+    const waiting = callRoomTool(testCredential(), "wait_for_turn", { timeoutMs: 25_000 }, controller.signal);
+    controller.abort();
+
+    await expect(waiting).rejects.toMatchObject({
+      name: "WaitloopClientError",
+      code: "request_cancelled",
+      retrySafe: true,
+    } satisfies Partial<WaitloopClientError>);
+  });
+
+  it("does not call mutating transport failures retry-safe", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("connection reset");
+    }) as typeof fetch;
+
+    await expect(callRoomTool(testCredential(), "play_move", { expectedRevision: 3, moveId: "move-1" })).rejects.toMatchObject({
+      code: "network_unavailable",
+      retrySafe: false,
+    } satisfies Partial<WaitloopClientError>);
   });
 });
