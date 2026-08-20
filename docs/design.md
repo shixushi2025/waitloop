@@ -1,42 +1,40 @@
 # Design language
 
-Waitloop should look like a developer utility that happens to contain games. It should not look like a gaming portal.
+Waitloop should feel like a developer utility that happens to contain small games. It should not look like a gaming portal, casino, or retention-oriented entertainment product.
 
 ## Principles
 
-- monospace-first where it improves information density
-- quiet neutral surfaces
-- strong hierarchy through spacing and typography, not decoration
-- keyboard-first interaction
-- motion only when it communicates state
-- no gradients by default
-- no glassmorphism
-- no neon/arcade visual language
-- no autoplaying sound
-- no retention mechanics
+- monospace-first where it improves information density;
+- quiet neutral surfaces;
+- hierarchy through spacing/typography rather than decoration;
+- keyboard-first while remaining pointer/touch usable;
+- motion only when it communicates state/history;
+- no gradients by default;
+- no glassmorphism/neon/arcade visual language;
+- no autoplaying sound;
+- no coins, streaks, XP, loot, daily rewards, or retention mechanics;
+- work/agent attention always outranks game celebration.
 
 ## Core visual metaphor
 
-A Waitloop screen is closer to a terminal status panel than a dashboard.
+A Waitloop screen is closer to a terminal/status panel than a dashboard.
 
 ```text
 waitloop_
 
-agent
-────────────────────────────────
+agent/
 codex       running
 elapsed     00:47
 
-game
-────────────────────────────────
+game/
 doudizhu    ready
 
 > enter
 ```
 
-## Status language
+## Canonical lifecycle language
 
-Canonical agent status labels:
+Use the actual lifecycle states rather than marketing synonyms:
 
 ```text
 idle
@@ -46,38 +44,86 @@ completed
 failed
 ```
 
-Avoid marketing synonyms that blur semantics.
-
 ## Game presentation
 
-Games should inherit the same shell and typography. Individual games may introduce minimal domain-specific visuals, but the shell remains consistent.
+Games inherit the same shell and information language.
 
-Dou Dizhu example:
+Current Dou Dizhu presentation model:
 
 ```text
-doudizhu / room_a83f
+doudizhu / room_...
 
-landlord       codex
-turn           you
+players/
+  you         FARMER      11 cards
+> codex       LANDLORD     8 cards    TURN · 18s
+  bot         FARMER      13 cards
 
-last
-10 10
+current_trick/
+codex         pair         J J
 
-hand
-03 03 04 05 06 07 08 09 J J Q K A 2
+activity/
+23  you        10 10
+24  bot        pass
+25  codex      J J
 
-legal
-01    J J
-02    pass
+hand/
+[3] [3] [4] [5] [6] [7] [9] [Q] [K] [A] [2]
 
-> 01
+actions/
+> play selected
+  pass
+  hint
 ```
 
-Clickable controls can coexist with command-like labels. The UI should be usable without remembering commands.
+The `>` / `TURN` marker means the **authoritative current player**, not “the move currently being animated.” Presentation/replay state must use a separate visual treatment.
+
+## Automated-action pacing
+
+Server/game logic remains fast and authoritative. Do not add Worker sleeps merely to make bots look human.
+
+The browser may replay newly observed authoritative history with short presentation delays so the human can see intermediate actions. `activity/` remains visible after the replay so actions are not lost.
+
+Respect `prefers-reduced-motion` and do not make pacing necessary for understanding the final state.
+
+## Connected-agent lobby
+
+Before a connected agent authenticates its MCP seat, the table should clearly present a lobby rather than a frozen game:
+
+```text
+waiting_for_players
+
+players/
+✓ you       ready
+… agent     waiting
+✓ bot       ready
+
+connect/
+$ waitloop join WL-XXXXXXXXXX
+
+> raw MCP configuration
+> agent.md help
+```
+
+Do not show the human's dealt hand or landlord assignment during this waiting projection.
+
+## Timing language
+
+Casual game timing is informational, not coercive.
+
+Good:
+
+```text
+Codex · THINKING · 18s
+Codex · THINKING · 1m 14s · taking longer than usual
+```
+
+Do not show an aggressive countdown that implies a forced move when the casual runtime does not enforce one.
+
+Hard clocks may exist in a future Arena/benchmark policy, but they should be visually/policy distinct from casual Waitloop tables.
 
 ## Interruption state
 
-When work becomes actionable, the game should visually recede instead of competing for attention:
+When work becomes actionable, the game visually recedes instead of competing for attention:
 
 ```text
 ────────────────────────────────
@@ -89,33 +135,35 @@ game paused
 ────────────────────────────────
 ```
 
-Do not show a celebratory game overlay above an agent completion event.
+Do not show a game victory overlay above an agent waiting/completed/failed event.
 
 ## Responsive behavior
 
-Mobile is supported for the web experience, but the primary interaction model remains compact and keyboard-friendly on desktop.
+Mobile is supported, while desktop remains compact and keyboard-friendly.
 
 On narrow screens:
 
-- stack status and game content
-- avoid horizontal tables
-- render card hands as wrap-safe compact tokens
-- keep the primary work-return action visible
+- stack status/game content;
+- avoid horizontal tables that require precision scrolling;
+- wrap card hands as compact touch-safe tokens;
+- preserve readable turn/current-trick/activity state;
+- keep work-return actions visible.
 
 ## Accessibility
 
-- never encode agent state using color alone
-- maintain visible focus states
-- support reduced motion
-- keep interactive targets touch-safe on mobile
-- semantic labels for card/move controls
-- preserve sufficient contrast in both light and dark themes
+- never encode state using color alone;
+- maintain visible focus states;
+- support reduced motion;
+- keep interactive targets touch-safe;
+- use semantic labels for cards/actions;
+- preserve sufficient contrast;
+- avoid motion that hides required state transitions.
 
-## Logo direction
+## Product mark
 
-Prefer a typographic mark over a game-controller icon.
+Prefer a typographic mark over game-controller imagery.
 
-Candidates:
+Examples:
 
 ```text
 waitloop_
