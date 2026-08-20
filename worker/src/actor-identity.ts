@@ -14,6 +14,16 @@ function randomHexId(): string {
   return crypto.randomUUID().replaceAll("-", "");
 }
 
+function cookieValue(header: string | null, name: string): string | null {
+  if (!header) return null;
+  for (const item of header.split(";")) {
+    const index = item.indexOf("=");
+    if (index < 0) continue;
+    if (item.slice(0, index).trim() === name) return item.slice(index + 1).trim();
+  }
+  return null;
+}
+
 export function createAnonymousActorIdentity(): AnonymousActorIdentityV1 {
   return {
     version: 1,
@@ -30,6 +40,10 @@ export function parseAnonymousActorIdentity(value: string | null): AnonymousActo
   const credential = value.slice(separator + 1);
   if (!ACTOR_ID_PATTERN.test(actorId) || !ACTOR_CREDENTIAL_PATTERN.test(credential)) return null;
   return { version: 1, actorId, credential };
+}
+
+export function actorIdentityFromRequest(request: Request): AnonymousActorIdentityV1 | null {
+  return parseAnonymousActorIdentity(cookieValue(request.headers.get("cookie"), ACTOR_IDENTITY_COOKIE_NAME));
 }
 
 export function serializeAnonymousActorIdentity(identity: AnonymousActorIdentityV1): string {
