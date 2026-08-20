@@ -1,4 +1,4 @@
-name: temporary lockfile sync
+name: temporary branch validation
 
 on:
   push:
@@ -8,39 +8,59 @@ permissions:
   contents: write
 
 jobs:
-  sync:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          fetch-depth: 0
+          version: 10
+          run_install: false
 
-      - name: Restore base lock and add only CLI importer
-        env:
-          BASE_SHA: 8f07bc3f2e8adcd8d0d696f40af9585b162c108a
-        run: |
-          git show "${BASE_SHA}:pnpm-lock.yaml" > pnpm-lock.yaml
-          python3 <<'PY'
-          from pathlib import Path
-          path = Path("pnpm-lock.yaml")
-          text = path.read_text()
-          old = "  packages/cli: {}\n"
-          new = """  packages/cli:\n    dependencies:\n      '@modelcontextprotocol/server':\n        specifier: 2.0.0\n        version: 2.0.0\n"""
-          if text.count(old) != 1:
-              raise SystemExit("expected exactly one packages/cli importer")
-          path.write_text(text.replace(old, new))
-          PY
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Commit lockfile when changed
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and test
+        run: pnpm check
+
+      - name: Validate repository contract
+        run: pnpm check:repo-contract
+
+      - name: Validate CLI npm package
+        run: pnpm check:cli-package
+
+      - name: Validate browser JavaScript
+        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Validate agent discovery files
         run: |
-          if git diff --quiet -- pnpm-lock.yaml; then
-            echo "Lockfile already synchronized."
+          test -s apps/web/public/agent.md
+          test -s apps/web/public/llms.txt
+          test -s apps/web/public/skills/waitloop/SKILL.md
+          node -e "JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))"
+
+      - name: Validate Worker bundle
+        run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+
+      - name: Mark branch validation passed
+        run: |
+          if test -f .branch-ci-passed; then
             exit 0
           fi
+          printf '%s\n' "validated" > .branch-ci-passed
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- pnpm-lock.yaml
-          git commit -m "chore: keep lockfile update scoped"
+          git add -- .branch-ci-passed
+          git commit -m "chore: mark temporary branch validation"
           git push origin HEAD:fix/mcp-wait-cancellation
