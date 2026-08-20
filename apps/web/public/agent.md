@@ -41,7 +41,9 @@ The primary Agent interface is the stable local stdio MCP server:
 waitloop mcp
 ```
 
-It is installed once in a supported harness. It exposes both control-plane conveniences and gameplay tools while reusing the existing server APIs internally:
+It is installed once in a supported harness. The published alpha CLI includes the stable bridge and Room commands. The bridge uses the official MCP v2 stdio server entry and supports legacy 2025-era clients and 2026-07-28 clients through the same command.
+
+It exposes both control-plane conveniences and gameplay tools while reusing the existing server APIs internally:
 
 ```text
 create_room()
@@ -56,7 +58,7 @@ yield_to_bot()
 take_control()
 ```
 
-Room Actor credentials stay in private local Waitloop state. Local MCP tools return safe Room/Actor/Seat metadata and game snapshots, never the bearer credential.
+Room Actor credentials stay in private local Waitloop state. Local MCP tools return safe Room/Actor/Seat metadata and game snapshots, never the bearer credential. Credential-shaped error text is redacted before it is returned to the model.
 
 The underlying boundaries remain:
 
@@ -107,7 +109,7 @@ waitloop init --url https://waitloop.run
 waitloop pair
 ```
 
-Lifecycle hooks never carry game credentials and game MCP credentials never authorize lifecycle ingestion.
+Lifecycle hooks never carry game credentials and game MCP credentials never authorize lifecycle ingestion. Stop/failure/session-end hooks finalize `completed` or `failed` before native-session cleanup, so `waitloop status` does not retain a stale `running` or `waiting` state after the harness closes.
 
 ### Codex hook trust
 
@@ -197,6 +199,8 @@ timeout
 
 A `timeout` only bounds one transport/tool call. It never auto-passes, changes Controller, replaces an Agent, or applies a Casual game timeout. Call it again when continued waiting is still desired.
 
+The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`. Cancellation propagates through the read/wait request, stops remote polling, and never mutates the game. Mutation-capable calls are not abandoned mid-flight; after an uncertain mutation transport failure, refresh state before retrying.
+
 `get_turn()` remains available for an immediate snapshot. Do not tightly poll `get_turn()` when `wait_for_turn()` is available.
 
 ## Gameplay tools
@@ -217,9 +221,11 @@ Writes a bounded side-channel comment. It does not change game state, revision, 
 
 A connected Actor that owns and controls its Seat may explicitly hand control to a deterministic temporary Bot. Seat ID, owner, cards, role, and history remain unchanged. This is never triggered solely by elapsed Casual time.
 
+In fully headless `agent-bots` mode, yielding `seat-1` leaves all three Seats under Bot control. The deterministic bots may finish the rest of the game before the Agent reconnects. Treat `yield_to_bot()` as an explicit handoff, not as a pause command.
+
 ### `take_control()`
 
-After reconnecting with the same cached Room credential, the Seat owner explicitly reclaims control from the temporary Bot. Reconnection itself never silently steals control.
+After reconnecting with the same cached Room credential, the Seat owner explicitly reclaims control from the temporary Bot. Reconnection itself never silently steals control. If the bots already finished a headless game, `take_control()` cannot reopen it.
 
 ## Continuous Agent play
 
@@ -284,7 +290,7 @@ New Dou Dizhu Rooms use stable `seat-1`, `seat-2`, and `seat-3` identifiers. IDs
 
 Human Web users receive a persistent anonymous Actor ID plus a separate HttpOnly credential; no account is required. If the shorter Room viewer cookie disappears, the remembered credential can restore Room access during Room lifetime.
 
-A Room/Seat owner may explicitly choose temporary Bot fallback. The original owner can later resume without changing the Seat's game state.
+A Room/Seat owner may explicitly choose temporary Bot fallback. The original owner can later resume without changing the Seat's game state, unless the automated players have already finished the game.
 
 ## Security baseline
 
@@ -297,7 +303,8 @@ Current safeguards include:
 - bounded Room lifetime;
 - server-side capability/revision checks;
 - separate identifiers and credentials;
-- local MCP credential custody.
+- local MCP credential custody and credential-shaped error redaction;
+- cancellation only for read/wait operations.
 
 Rate limits are abuse protection, not accounting.
 
@@ -310,7 +317,7 @@ Rate limits are abuse protection, not accounting.
 5. Call `wait_for_turn()` rather than polling.
 6. Check capabilities, revision, and legal move IDs before `play_move`.
 7. Keep the current Agent run active when the user requested continued play or completion.
-8. Use `yield_to_bot()` only as an explicit owner action.
+8. Use `yield_to_bot()` only as an explicit owner action; in `agent-bots`, expect the bots may finish the game.
 9. Reconnect through cached active Room context and call `take_control()` explicitly when ready.
 10. Advisors may inspect/comment but need explicit delegation to play.
 11. Coding-work attention always outranks the game.
