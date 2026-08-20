@@ -47,10 +47,14 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
   const seatToken = authorization.slice("Bearer ".length);
   const room = env.GAME_ROOMS.getByName(roomId);
 
-  // The first authenticated MCP request is the connected actor's readiness
-  // signal. The actor may own a seat or be an advisor bound to another seat.
+  // Every authenticated MCP request refreshes the connected actor's runtime
+  // presence. Reconnecting never silently reclaims a seat from a temporary
+  // controller; the owner must explicitly call take_control().
   const connected = await room.connectSeatByToken(seatToken);
-  if (!connected.ok) return new Response("Invalid Waitloop room or actor token.", { status: 401 });
+  if (!connected.ok) {
+    const status = connected.error.code === "rate_limited" ? 429 : 401;
+    return new Response(connected.error.message, { status });
+  }
 
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name: "waitloop", version: "0.1.0" });
@@ -97,6 +101,34 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
       },
       async ({ text }) => {
         const result = await room.addCommentBySeatToken(seatToken, text);
+        if (!result.ok) return errorResult(result.error.code, result.error.message);
+        return textResult(rpcValue(result));
+      },
+    );
+
+    server.registerTool(
+      "yield_to_bot",
+      {
+        description:
+          "Temporarily yield your owned seat to a deterministic Waitloop bot. Seat ownership, hand, role, and history stay unchanged; reconnect later and call take_control to resume.",
+        inputSchema: z.object({}),
+      },
+      async () => {
+        const result = await room.yieldSeatToBotBySeatToken(seatToken);
+        if (!result.ok) return errorResult(result.error.code, result.error.message);
+        return textResult(rpcValue(result));
+      },
+    );
+
+    server.registerTool(
+      "take_control",
+      {
+        description:
+          "Reclaim your owned seat after a temporary bot takeover. This does not change the seat's cards, role, ownership, or game history.",
+        inputSchema: z.object({}),
+      },
+      async () => {
+        const result = await room.takeControlBySeatToken(seatToken);
         if (!result.ok) return errorResult(result.error.code, result.error.message);
         return textResult(rpcValue(result));
       },
