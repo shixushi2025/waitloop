@@ -7,6 +7,8 @@ import { loadConfig, normalizeUrl } from "./config.js";
 const PUBLIC_WAITLOOP_URL = "https://waitloop.run";
 const JOIN_CODE_PATTERN = /^WL-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{10}$/;
 
+type JoinRelationV1 = "controller" | "advisor";
+
 interface JoinCredentialV1 {
   version: 1;
   code: string;
@@ -14,6 +16,11 @@ interface JoinCredentialV1 {
   serverUrl: string;
   joinUrl: string;
   seatToken: string;
+  actorId?: string;
+  seatId?: string;
+  relation?: JoinRelationV1;
+  joinExpiresAt?: number;
+  roomExpiresAt?: number;
   mcp: {
     type: "http";
     url: string;
@@ -26,6 +33,18 @@ interface JoinCredentialV1 {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalTimestamp(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
+function optionalRelation(value: unknown): JoinRelationV1 | undefined {
+  return value === "controller" || value === "advisor" ? value : undefined;
 }
 
 export function normalizeJoinCode(input: string): string {
@@ -75,6 +94,12 @@ function parseClaim(body: unknown, code: string, serverUrl: string): JoinCredent
   const roomHeader = body.mcp.headers["X-Waitloop-Room"];
   if (typeof authorization !== "string" || typeof roomHeader !== "string") throw new Error("Waitloop MCP headers are invalid.");
 
+  const actorId = optionalString(body.actorId);
+  const seatId = optionalString(body.seatId);
+  const relation = optionalRelation(body.relation);
+  const joinExpiresAt = optionalTimestamp(body.expiresAt);
+  const roomExpiresAt = optionalTimestamp(body.roomExpiresAt);
+
   return {
     version: 1,
     code,
@@ -82,6 +107,11 @@ function parseClaim(body: unknown, code: string, serverUrl: string): JoinCredent
     serverUrl,
     joinUrl: body.joinUrl,
     seatToken: body.seatToken,
+    ...(actorId ? { actorId } : {}),
+    ...(seatId ? { seatId } : {}),
+    ...(relation ? { relation } : {}),
+    ...(joinExpiresAt ? { joinExpiresAt } : {}),
+    ...(roomExpiresAt ? { roomExpiresAt } : {}),
     mcp: {
       type: "http",
       url: body.mcp.url,
@@ -135,6 +165,10 @@ export async function commandJoin(codeInput: string | undefined, args: string[])
     code,
     roomId: credential.roomId,
     joinUrl: credential.joinUrl,
+    ...(credential.actorId ? { actorId: credential.actorId } : {}),
+    ...(credential.seatId ? { seatId: credential.seatId } : {}),
+    ...(credential.relation ? { relation: credential.relation } : {}),
+    ...(credential.roomExpiresAt ? { roomExpiresAt: credential.roomExpiresAt } : {}),
     mcpServers: {
       waitloop: credential.mcp,
     },
@@ -148,10 +182,13 @@ export async function commandJoin(codeInput: string | undefined, args: string[])
   console.log("waitloop join\n");
   console.log(`code      ${code}`);
   console.log(`room      ${credential.roomId}`);
+  if (credential.actorId) console.log(`actor     ${credential.actorId}`);
+  if (credential.seatId) console.log(`seat      ${credential.seatId}${credential.relation ? ` · ${credential.relation}` : ""}`);
   console.log(`server    ${serverUrl}`);
-  console.log("seat      credential claimed · waiting for MCP client connection\n");
+  if (credential.roomExpiresAt) console.log(`expires   ${new Date(credential.roomExpiresAt).toISOString()}`);
+  console.log("status    credential cached · connect or reconnect the MCP client\n");
   console.log("mcp/");
   console.log(JSON.stringify({ mcpServers: output.mcpServers }, null, 2));
-  console.log("\nAdd this temporary MCP server to the agent that should occupy the room seat.");
-  console.log("The credential is room-scoped and cached privately under ~/.waitloop/joins for safe retry.");
+  console.log("\nThe cached room credential can reconnect this actor while the room remains active.");
+  console.log("Use MCP yield_to_bot before stepping away and take_control after reconnecting when you own the seat.");
 }
