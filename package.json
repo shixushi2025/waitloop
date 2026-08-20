@@ -9,12 +9,14 @@
     "node": ">=20"
   },
   "scripts": {
+    "postinstall": "node scripts/cloudflare-ci-gate.mjs",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/cloudflare-ci-gate.mjs && wrangler deploy",
     "build:cli": "pnpm --filter @waitloop/cli build",
     "check:repo-contract": "node scripts/validate-repository-contract.mjs && node scripts/validate-onboarding-contract.mjs",
     "check:cli-package": "node scripts/validate-cli-package.mjs",
     "check:mcp-stdio": "pnpm build:cli && node scripts/validate-mcp-stdio.mjs",
+    "check:cloudflare-gate": "node scripts/cloudflare-ci-gate.mjs --self-test",
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
