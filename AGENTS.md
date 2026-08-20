@@ -121,6 +121,10 @@ business rules    -> server only
 
 Local tools must never return raw bearer credentials. `active.json` may contain Room-selection context but not another secret copy.
 
+The stable stdio command must remain compatible with supported real harnesses. Current bridge behavior serves MCP 2026-07-28 `server/discover` plus supported legacy `initialize` clients from the same process.
+
+Long-running requests must not serialize the whole stdio input loop. In-flight requests are keyed by JSON-RPC request ID; `notifications/cancelled` aborts only the matching request, propagates cancellation into proxied transport where possible, and must not emit a stale result after cancellation. Closing stdio aborts remaining in-flight requests.
+
 `leave_room` is local selection cleanup, not remote revoke. Any future revoke tool must be explicit and independently authorized.
 
 Stable MCP installers must use the harness's supported CLI/config surface, be idempotent, and not overwrite an existing `waitloop` definition.
@@ -156,6 +160,9 @@ Required behavior:
 - bounded server wait: maximum 25 seconds;
 - returns on turn, finished, waiting lobby, paused, Controller change, or timeout;
 - timeout never passes, plays, changes Controller, or triggers Bot takeover;
+- client cancellation aborts waiting promptly instead of waiting for the transport timeout;
+- cancelled local requests do not deliver stale results;
+- cancellation never passes, plays, changes Controller, or triggers Bot takeover;
 - uses the same authenticated Seat projection as `get_turn`;
 - remains subject to per-Actor read/rate limits;
 - does not claim it can wake a harness after final Agent response.
@@ -228,7 +235,7 @@ Current baseline:
 - per-Room/per-Actor Join/MCP/comment/control/recovery counters;
 - Join/Room expiry;
 - capability checks + game revision;
-- bounded `wait_for_turn` transport loop.
+- bounded and cancellable `wait_for_turn` transport loop.
 
 Rate limiting is abuse mitigation, not accounting or game timing. Hosted inference still needs explicit budgets before broad exposure.
 
@@ -260,7 +267,7 @@ worker/src/mcp.ts
 packages/cli
 ```
 
-Room modes, Join semantics, local/remote MCP tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
+Room modes, Join semantics, local/remote MCP tools, identity/recovery, capabilities, endpoints, installation, waiting/cancellation behavior, or support status changes require whole-surface consistency.
 
 ## Change completeness matrix
 
@@ -272,7 +279,7 @@ Room modes, Join semantics, local/remote MCP tools, identity/recovery, capabilit
 | Seat/Actor/capability | pure actor/control tests, GameRoom auth, Human projection, architecture/game/protocol/security/design/status |
 | Anonymous identity/recovery | identity parser tests, Room credential tests, security/protocol/architecture/status, browser UX |
 | Fallback/reconnect | pure room-control tests, DO auth, Web + MCP, game/design/MCP/protocol/security/status/Agent surfaces |
-| MCP tool/auth/wait | remote/local tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
+| MCP tool/auth/wait/cancel | remote/local tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
 | Hosted inference/public cost | hosted tests/docs, security/status/roadmap, rate/budget controls |
 | Lifecycle adapter | integration + CLI tests/docs + Agent surfaces |
 | Game rule | pure rules tests + `doudizhu-rules.md` |
@@ -291,7 +298,8 @@ If several rows apply, satisfy all.
 - Controller tests prove only active Controller mutates;
 - comments prove no game-revision/state mutation;
 - wait tests prove reasons/bounds/no implicit mutation contract;
-- local bridge tests prove tool list/instructions/credential non-disclosure;
+- cancellation tests prove matching-request abort, proxied transport abort, and stale-result suppression;
+- local bridge tests prove tool list/instructions/protocol compatibility/credential non-disclosure;
 - Room bridge tests prove create -> Join -> authenticated connect;
 - installer tests prove exact/idempotent harness commands;
 - CLI packaging changes run package validation;
