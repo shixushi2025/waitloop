@@ -1,6 +1,7 @@
 import { parseWaitloopAgentEvent } from "@waitloop/protocol";
 
 import { AgentSession } from "./agent-session";
+import { actorIdentityFromRequest } from "./actor-identity";
 import { DeviceRegistry } from "./device-registry";
 import { GameRoom } from "./game-room";
 import { listHostedAgents } from "./hosted-agent";
@@ -16,6 +17,8 @@ interface Env extends RoomApiEnv {
   AGENT_SESSIONS: DurableObjectNamespace<AgentSession>;
   DEVICE_AUTH: DurableObjectNamespace<DeviceRegistry>;
   PAIRINGS: DurableObjectNamespace<PairingRequest>;
+  ROOM_CREATE_RATE_LIMITER: RateLimit;
+  HOSTED_ROOM_CREATE_RATE_LIMITER: RateLimit;
   WAITLOOP_INGEST_TOKEN?: string;
 }
 
@@ -138,6 +141,25 @@ async function handleSessionRoute(
   return json({ version: 1, snapshot });
 }
 
+async function enforceRoomCreationRateLimit(request: Request, env: Env, url: URL): Promise<Response | null> {
+  if (request.method !== "POST" || url.pathname !== "/api/v1/rooms" || isLocalHostname(url.hostname)) return null;
+
+  const identity = actorIdentityFromRequest(request);
+  const fallbackIp = request.headers.get("cf-connecting-ip") ?? "anonymous-headless";
+  const key = identity?.actorId ?? `ip:${fallbackIp}`;
+  const roomLimit = await env.ROOM_CREATE_RATE_LIMITER.limit({ key });
+  if (!roomLimit.success) return apiError(429, "rate_limited", "Too many room creation requests. Try again shortly.");
+
+  const parsed = await readJson(request.clone());
+  if (parsed.ok && isRecord(parsed.value) && parsed.value.mode === "hosted-agent") {
+    const hostedLimit = await env.HOSTED_ROOM_CREATE_RATE_LIMITER.limit({ key });
+    if (!hostedLimit.success) {
+      return apiError(429, "rate_limited", "Too many hosted-agent rooms. Try again later.");
+    }
+  }
+  return null;
+}
+
 function isPairPage(pathname: string): boolean {
   return /^\/pair\/pair_[A-Za-z0-9_-]{32,128}$/.test(pathname);
 }
@@ -162,6 +184,8 @@ export default {
     if (url.pathname === "/api/v1/devices/current") return handleCurrentDevice(request, env);
     if (url.pathname === "/mcp") return handleWaitloopMcp(request, env);
 
+    const roomRateLimitError = await enforceRoomCreationRateLimit(request, env, url);
+    if (roomRateLimitError) return roomRateLimitError;
     const roomResponse = await handleRoomApi(request, env, url);
     if (roomResponse) return roomResponse;
 
