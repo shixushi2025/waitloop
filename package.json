@@ -12,7 +12,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build:cli": "pnpm --filter @waitloop/cli build",
-    "check:repo-contract": "node scripts/validate-repository-contract.mjs",
+    "check:repo-contract": "node scripts/validate-repository-contract.mjs && node scripts/validate-onboarding-contract.mjs",
     "check:cli-package": "node scripts/validate-cli-package.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck",
     "test": "vitest run --passWithNoTests",
