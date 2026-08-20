@@ -77,7 +77,10 @@
     "controlPlane": "create_room and join_room reuse the existing Room/Join HTTP APIs internally",
     "credentialHandling": "room Actor credentials remain in private local cache and are never returned by local MCP tools",
     "activeRoom": "waitloop join or join_room selects one credential-backed active room; the bridge can restart and resume it until room expiry",
-    "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode"
+    "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode",
+    "protocolCompatibility": "the same stdio command supports MCP 2026-07-28 server/discover plus supported legacy initialize clients",
+    "cancellation": "notifications/cancelled aborts the matching in-flight local request and proxied remote fetch; a cancelled request does not emit a stale tool result",
+    "errorBehavior": "classified failures may include error.code, nextAction, and conservative retrySafe metadata; mutating transport failures require get_turn before deciding whether to retry"
   },
   "mcp": {
     "status": "available",
@@ -88,7 +91,7 @@
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
     "joinBehavior": "prefer local MCP join_room or CLI waitloop join; both claim/cache the credential and select an active room, while raw remote MCP remains an advanced fallback",
-    "waitBehavior": "wait_for_turn is a bounded transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout never auto-passes or takes over",
+    "waitBehavior": "wait_for_turn is a bounded transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout never auto-passes or takes over; client cancellation aborts remote polling promptly",
     "continuationBehavior": "MCP does not wake an agent after it returns a final response; a request to play continuously must keep the current agent run active until the requested stopping condition",
     "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
     "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
