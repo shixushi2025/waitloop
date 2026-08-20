@@ -101,3 +101,79 @@ jobs:
           test "$CHECK_RESULT" = "success"
           test "$GATE_RESULT" = "success"
           echo "This commit is ready for Cloudflare production deployment."
+
+  snapshot-main-deployment-checks:
+    if: github.ref == 'refs/heads/fix/cloudflare-ci-observe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
+      checks: read
+      statuses: read
+    env:
+      TARGET_SHA: 4d7d73d9ba51d5960be1deaf0b1b6bd5dbd61916
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Snapshot target commit checks and statuses
+        run: |
+          if test -f .main-checks-snapshot.json; then
+            cat .main-checks-snapshot.json
+            exit 0
+          fi
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const sha = process.env.TARGET_SHA;
+          const headers = {
+            accept: 'application/vnd.github+json',
+            authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            'user-agent': 'waitloop-cloudflare-check-observer',
+            'x-github-api-version': '2026-03-10',
+          };
+          async function read(url) {
+            const response = await fetch(url, { headers });
+            if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+            return response.json();
+          }
+          const [checksBody, statusBody] = await Promise.all([
+            read(`https://api.github.com/repos/shixushi2025/waitloop/commits/${sha}/check-runs?filter=all&per_page=100`),
+            read(`https://api.github.com/repos/shixushi2025/waitloop/commits/${sha}/status`),
+          ]);
+          const checks = (checksBody.check_runs ?? []).map((run) => ({
+            id: run.id,
+            name: run.name,
+            app: run.app?.slug,
+            status: run.status,
+            conclusion: run.conclusion,
+            startedAt: run.started_at,
+            completedAt: run.completed_at,
+            detailsUrl: run.details_url,
+          }));
+          const statuses = (statusBody.statuses ?? []).map((status) => ({
+            id: status.id,
+            context: status.context,
+            state: status.state,
+            createdAt: status.created_at,
+            updatedAt: status.updated_at,
+            targetUrl: status.target_url,
+          }));
+          const snapshot = {
+            version: 1,
+            targetSha: sha,
+            observedAt: new Date().toISOString(),
+            combinedStatus: statusBody.state,
+            checks,
+            statuses,
+          };
+          fs.writeFileSync('.main-checks-snapshot.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          console.log(JSON.stringify(snapshot, null, 2));
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .main-checks-snapshot.json
+          git commit -m "chore: snapshot main deployment checks"
+          git push origin HEAD:fix/cloudflare-ci-observe
