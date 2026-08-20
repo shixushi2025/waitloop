@@ -101,3 +101,24 @@ jobs:
           test "$CHECK_RESULT" = "success"
           test "$GATE_RESULT" = "success"
           echo "This commit is ready for Cloudflare production deployment."
+
+  record-manual-deploy-safety-verification:
+    if: always() && github.ref == 'refs/heads/fix/manual-deploy-clean-tree-verify'
+    needs: ready-to-deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DEPLOY_RESULT: ${{ needs.ready-to-deploy.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record final result
+        run: |
+          printf '%s\n' "$DEPLOY_RESULT" > .official-ci.result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .official-ci.result
+          git commit -m "chore: record manual deploy safety validation"
+          git push origin HEAD:fix/manual-deploy-clean-tree-verify
