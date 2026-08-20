@@ -18,6 +18,27 @@ Do not reconstruct current behavior from old PRs/commits/superseded design notes
 
 Waitloop is a waiting layer for coding agents, not an engagement product. Coding-work attention always outranks the game.
 
+## Current engineering priority
+
+**Stabilize existing supported flows before expanding the feature surface.**
+
+Do not add a new room mode, Actor relation, MCP tool, account concept, game, or adapter merely because the domain model could support it. Real usage of the current flow is the primary source of product work:
+
+```text
+Agent discovery
+-> CLI install/update/doctor
+-> lifecycle install + external trust step
+-> create/join Room
+-> MCP connection
+-> play/advice/delegation
+-> yield/reconnect/recover
+-> finish/expire
+```
+
+When a real harness exposes friction, first determine whether it is stale deployment, documentation drift, CLI diagnostics, client limitations, or an actual missing capability. Prefer making the current path self-explanatory and regression-tested over adding a parallel path.
+
+A platform packaging mechanism such as a Plugin is useful only if it materially simplifies supported setup. It must not be presented as a workaround for platform security/trust requirements it cannot remove.
+
 ## Architecture invariant
 
 ```text
@@ -143,6 +164,10 @@ Room ID, Actor token, Seat binding, ownership, and Controller authority are tran
 
 `comment` never changes game revision/state/turn. `yield_to_bot`/`take_control` are explicit owner-control transitions, not timeout behavior.
 
+A successful Join claim is not the same thing as an MCP connection. The Actor becomes connected only when an authenticated MCP request reaches the room. Do not let CLI/Web/Agent copy blur that boundary.
+
+MCP does not wake a harness after that harness has returned a final response. Continuous play is an Agent-run behavior: if the user requested play until a condition is met, the Agent must keep its run active until that condition or an explicit interruption.
+
 ## Client-neutral control plane
 
 Web is not required for operations that do not inherently need Human UI.
@@ -199,12 +224,13 @@ worker/src/mcp.ts
 packages/cli
 ```
 
-Room modes, Join semantics, MCP tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
+Room modes, Join semantics, MCP tools, identity/recovery, capabilities, endpoints, installation, support status, discovery fallback, or harness continuation behavior require whole-surface consistency.
 
 ## Change completeness matrix
 
 | Change | Also inspect/update |
 | --- | --- |
+| Agent discovery / onboarding | `agent.md`, `agent.json`, `llms.txt`, Skill, CLI docs/doctor, real-harness regression evidence |
 | CLI / package / Join cache | CLI package/readme/tests, `docs/cli.md`, manifest, Agent guide/Skill, release docs |
 | Room/Join modes/lifetime | Room API + GameRoom tests, architecture/game/protocol/security/status, all Agent surfaces |
 | Seat/Actor/capability | pure actor/control tests, GameRoom auth, Human projection, architecture/game/protocol/security/design/status |
@@ -229,6 +255,8 @@ If several rows apply, satisfy all of them.
 - Controller changes prove only active Controller can mutate.
 - Comments prove no game-revision/state mutation.
 - CLI packaging changes run package validation.
+- CLI help/read-only diagnostics must have side-effect regression coverage when they touch installation paths.
+- Join/onboarding docs must distinguish claim/cache from authenticated MCP connection.
 - Browser changes pass JS syntax validation.
 - Public Agent changes pass `pnpm check:repo-contract`.
 - Worker/config changes pass `wrangler deploy --dry-run`.
@@ -266,11 +294,12 @@ CI also validates browser JS and Wrangler dry-run.
 
 ## Preferred implementation order
 
-1. establish durable contract;
-2. shared types / pure capability logic;
-3. regression + negative tests;
-4. runtime/API wiring;
-5. UI/platform adapters;
-6. public Agent + canonical docs sync;
-7. remove transition material;
-8. run complete validation.
+1. reproduce/understand the current-flow problem;
+2. establish the durable contract;
+3. shared types / pure capability logic;
+4. regression + negative tests;
+5. runtime/API/CLI wiring;
+6. UI/platform adapters;
+7. public Agent + canonical docs sync;
+8. remove transition material;
+9. run complete validation.
