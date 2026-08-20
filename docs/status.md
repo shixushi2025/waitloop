@@ -11,7 +11,9 @@ This is the compact handoff snapshot of current durable truth.
 - CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio wire behavior, browser JS, Agent discovery, Wrangler dry-run, and the Cloudflare deployment gate.
 - The final GitHub Actions job is named `ready-to-deploy` and succeeds only after the full `check` job plus a real Checks API gate verification succeed.
 - Cloudflare production builds wait for `ready-to-deploy=success` for the exact `WORKERS_CI_COMMIT_SHA` during dependency installation; failed, cancelled, or timed-out GitHub CI blocks deployment.
-- `pnpm deploy` applies the same production gate before `wrangler deploy`; local and non-production executions skip the production wait.
+- Ordinary local install/development and non-production Cloudflare branches skip the production wait.
+- Explicit `pnpm deploy` resolves the current Git `HEAD` and requires that exact commit's `ready-to-deploy` check before `wrangler deploy`.
+- The anonymous Cloudflare production path polls GitHub at most once per minute and fails closed after 15 minutes; `WAITLOOP_GITHUB_TOKEN` remains an optional higher-rate override.
 
 ## Coding-agent lifecycle
 
@@ -218,7 +220,7 @@ Web can:
 - cancellation propagation only for read/wait operations;
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
 - side-effect-free nested CLI help;
-- fail-closed production deployment when final GitHub CI is not successful.
+- fail-closed automatic and explicit production deployment when final GitHub CI is not successful.
 
 Rate limiting remains abuse protection, not accounting.
 
