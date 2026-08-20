@@ -56,9 +56,29 @@ Security properties:
 - raw configuration requires explicit `--raw-mcp`;
 - local MCP `create_room`, `join_room`, and gameplay results never include the bearer token;
 - expired credential/cache entries are ignored/removed before reuse;
+- expired/not-found/unauthorized active Rooms clear the stale local pointer;
 - local bridge does not transmit unrelated local data.
 
 The bridge is a credential broker, not an authorization authority. Server capability/revision checks remain mandatory.
+
+## Local MCP cancellation boundary
+
+A long local tool call must not become an uninterruptible credentialed request. The stdio bridge assigns an independent `AbortController` to each in-flight JSON-RPC request ID.
+
+For `notifications/cancelled`, only the matching request is aborted. Its signal is propagated to the proxied remote fetch where possible. The bridge suppresses late/stale output from an aborted request rather than presenting it to the model after the harness has cancelled it.
+
+Cancellation is not authorization. It cannot:
+
+```text
+play or pass
+change Controller
+yield to a Bot
+take control
+revoke a credential
+change Room revision
+```
+
+Stdio shutdown aborts outstanding bridge requests before exit. Duplicate in-flight request IDs are rejected instead of sharing cancellation state.
 
 ## Anonymous browser Actor identity
 
@@ -157,7 +177,17 @@ trigger Bot fallback
 create a competitive clock
 ```
 
+The wait also observes the MCP HTTP request `AbortSignal`. Client cancellation interrupts the poll delay promptly and is subject to the same no-mutation rule.
+
 This prevents a waiting optimization from becoming hidden game authority.
+
+## Recoverable local errors
+
+The local bridge may return classified errors containing `nextAction` and conservative `retrySafe` metadata. These are guidance, not elevated authority.
+
+Read-only operations can be marked retry-safe after transport failure/cancellation. Mutating operations are not automatically retry-safe because a transport interruption may leave the remote outcome uncertain; the safe recovery pattern is to obtain a fresh `get_turn()` snapshot first.
+
+Raw credentials are never embedded in these error payloads.
 
 ## Local control tools
 
