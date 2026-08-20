@@ -9,13 +9,10 @@ Waitloop should feel like a developer utility that happens to contain small game
 - hierarchy through spacing/typography rather than decoration;
 - keyboard-first while remaining pointer/touch usable;
 - motion only when it communicates state/history;
-- no gradients by default;
-- no glassmorphism/neon/arcade visual language;
-- no autoplaying sound;
-- no coins, streaks, XP, loot, daily rewards, or retention mechanics;
-- work/agent attention always outranks game celebration.
+- no autoplaying sound, coins, streaks, XP, loot, daily rewards, or retention mechanics;
+- coding-agent attention always outranks game celebration.
 
-## Core visual metaphor
+## Core metaphor
 
 A Waitloop screen is closer to a terminal/status panel than a dashboard.
 
@@ -32,98 +29,127 @@ doudizhu    ready
 > enter
 ```
 
-## Canonical lifecycle language
+## Seat and Actor language
 
-Use the actual lifecycle states rather than marketing synonyms:
+The UI must not imply that a Seat changes identity merely because control changes.
 
 ```text
-idle
-running
-waiting
-completed
-failed
+Seat       the actual player position/hand/role
+Actor      human/bot/agent related to that Seat
+Controller Actor currently allowed to play
+Advisor    Actor that can inspect/comment without playing
 ```
 
-## Game presentation
-
-Games inherit the same shell and information language.
-
-Current Dou Dizhu presentation model:
+Player rows therefore show the stable Seat and separately communicate runtime control:
 
 ```text
-doudizhu / room_...
-
 players/
-  you         FARMER      11 cards
-> codex       LANDLORD     8 cards    TURN · 18s
-  bot         FARMER      13 cards
+  you      FARMER      11 cards    CONTROL · you
+> agent    LANDLORD     8 cards    TURN · Codex · 18s
+  bot      FARMER      13 cards    READY
+```
 
+If a companion controls the Human Seat, the row remains `you`; it should say `CONTROL · agent companion`, not rename the Seat to Codex.
+
+## Current game presentation
+
+```text
 current_trick/
-codex         pair         J J
+codex seat    pair     J J
 
 activity/
 23  you        10 10
 24  bot        pass
-25  codex      J J
+25  agent      J J
+
+companion/
+Codex     “I would probably hold the bomb.”
 
 hand/
 [3] [3] [4] [5] [6] [7] [9] [Q] [K] [A] [2]
-
-actions/
-> play selected
-  pass
-  hint
 ```
 
-The `>` / `TURN` marker means the **authoritative current player**, not “the move currently being animated.” Presentation/replay state must use a separate visual treatment.
+`TURN` always means the authoritative current **Seat**. The Controller is a separate runtime fact. Presentation/replay must use another visual treatment rather than moving the TURN marker historically.
 
-## Automated-action pacing
+## Control delegation UI
 
-Server/game logic remains fast and authoritative. Do not add Worker sleeps merely to make bots look human.
+When a Human Seat has a connected advisor, show an explicit control block:
 
-The browser may replay newly observed authoritative history with short presentation delays so the human can see intermediate actions. `activity/` remains visible after the replay so actions are not lost.
+```text
+control/
+you control this seat · Codex advises
 
-Respect `prefers-reduced-motion` and do not make pacing necessary for understanding the final state.
+[me] [agent]
+```
 
-## Connected-agent lobby
+After delegation:
 
-Before a connected agent authenticates its MCP seat, the table should clearly present a lobby rather than a frozen game:
+```text
+control/
+Codex controls this seat · you can take back control anytime
+
+[me] [agent]
+```
+
+Required behavior:
+
+- delegation is explicit, never inferred from silence/time;
+- `agent` remains disabled until the connected Actor is actually online;
+- Human keeps seeing its own hand after delegation;
+- Human play/pass/hint controls visually disable while the Agent controls the Seat;
+- taking control back is always visible and low-friction;
+- do not imply that delegation transfers Seat ownership.
+
+## Companion / comments
+
+Agent commentary is a secondary side channel, not game activity.
+
+Use a distinct `companion/` section. Do not insert comments into `activity/`, because `activity/` represents authoritative game actions.
+
+Comments should be visually quiet. An Agent should not be encouraged to comment after every move, and comments must never compete with work-attention notifications.
+
+## Connected Actor lobby
+
+Before a connected Actor authenticates, present a lobby rather than a frozen game:
 
 ```text
 waiting_for_players
 
-players/
-✓ you       ready
-… agent     waiting
-✓ bot       ready
-
-connect/
+connected_actor_lobby/
 $ waitloop join WL-XXXXXXXXXX
 
-> raw MCP configuration
-> agent.md help
+join URL
+raw MCP configuration
 ```
 
-Do not show the human's dealt hand or landlord assignment during this waiting projection.
+The join relationship may be independent `controller` or same-Seat `advisor`. The Human's dealt hand/landlord remain hidden until the waiting room starts.
+
+## Headless Agent use
+
+The Web UI is not required for Agent-only tables. `agent.md`/HTTP/MCP must fully describe headless create/join/play. The Web can visualize such capabilities, but must not become an invisible dependency.
+
+## Automated-action pacing
+
+Server/game logic remains fast; do not add Worker sleeps for visual effect. The browser may replay newly observed authoritative history with short delays, while `activity/` preserves the final readable record.
+
+Respect `prefers-reduced-motion`.
 
 ## Timing language
 
-Casual game timing is informational, not coercive.
+Casual timing is informational, not coercive.
 
 Good:
 
 ```text
-Codex · THINKING · 18s
-Codex · THINKING · 1m 14s · taking longer than usual
+Codex · TURN · 18s
+Codex · TURN · 1m 14s · taking a little longer
 ```
 
-Do not show an aggressive countdown that implies a forced move when the casual runtime does not enforce one.
-
-Hard clocks may exist in a future Arena/benchmark policy, but they should be visually/policy distinct from casual Waitloop tables.
+Do not show an aggressive countdown or automatically delegate/pass because a casual threshold elapsed.
 
 ## Interruption state
 
-When work becomes actionable, the game visually recedes instead of competing for attention:
+When coding work becomes actionable, the game visually recedes:
 
 ```text
 ────────────────────────────────
@@ -135,35 +161,21 @@ game paused
 ────────────────────────────────
 ```
 
-Do not show a game victory overlay above an agent waiting/completed/failed event.
+Game victory/control/comment UI must not cover an agent waiting/completed/failed notification.
 
-## Responsive behavior
+## Responsive/accessibility
 
-Mobile is supported, while desktop remains compact and keyboard-friendly.
-
-On narrow screens:
-
-- stack status/game content;
-- avoid horizontal tables that require precision scrolling;
-- wrap card hands as compact touch-safe tokens;
-- preserve readable turn/current-trick/activity state;
-- keep work-return actions visible.
-
-## Accessibility
-
-- never encode state using color alone;
+- stack complex player/control/table sections on narrow screens;
+- wrap card hands as touch-safe tokens;
+- preserve readable Seat turn + Controller state;
+- never encode readiness/control only by color;
 - maintain visible focus states;
 - support reduced motion;
-- keep interactive targets touch-safe;
-- use semantic labels for cards/actions;
-- preserve sufficient contrast;
-- avoid motion that hides required state transitions.
+- preserve sufficient contrast.
 
 ## Product mark
 
-Prefer a typographic mark over game-controller imagery.
-
-Examples:
+Prefer a typographic mark:
 
 ```text
 waitloop_
