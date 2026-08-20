@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -58,6 +58,14 @@ function cachePath(code: string): string {
   return join(root, `${code}.json`);
 }
 
+async function removeCached(code: string): Promise<void> {
+  try {
+    await rm(cachePath(code), { force: true });
+  } catch {
+    // Cache cleanup is best effort; a stale file must never block a fresh claim.
+  }
+}
+
 async function readCached(code: string, serverUrl: string): Promise<JoinCredentialV1 | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(cachePath(code), "utf8"));
@@ -67,7 +75,39 @@ async function readCached(code: string, serverUrl: string): Promise<JoinCredenti
     const authorization = parsed.mcp.headers.Authorization;
     const roomHeader = parsed.mcp.headers["X-Waitloop-Room"];
     if (typeof authorization !== "string" || typeof roomHeader !== "string") return null;
-    return parsed as unknown as JoinCredentialV1;
+
+    const roomExpiresAt = optionalTimestamp(parsed.roomExpiresAt);
+    if (roomExpiresAt !== undefined && roomExpiresAt <= Date.now()) {
+      await removeCached(code);
+      return null;
+    }
+
+    const actorId = optionalString(parsed.actorId);
+    const seatId = optionalString(parsed.seatId);
+    const relation = optionalRelation(parsed.relation);
+    const joinExpiresAt = optionalTimestamp(parsed.joinExpiresAt);
+
+    return {
+      version: 1,
+      code,
+      roomId: parsed.roomId,
+      serverUrl,
+      joinUrl: parsed.joinUrl,
+      seatToken: parsed.seatToken,
+      ...(actorId ? { actorId } : {}),
+      ...(seatId ? { seatId } : {}),
+      ...(relation ? { relation } : {}),
+      ...(joinExpiresAt ? { joinExpiresAt } : {}),
+      ...(roomExpiresAt ? { roomExpiresAt } : {}),
+      mcp: {
+        type: "http",
+        url: parsed.mcp.url,
+        headers: {
+          Authorization: authorization,
+          "X-Waitloop-Room": roomHeader,
+        },
+      },
+    };
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") return null;
     return null;
