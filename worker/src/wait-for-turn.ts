@@ -36,3 +36,29 @@ export function classifyWaitForTurn(snapshot: WaitForTurnSnapshotV1): WaitForTur
   if (snapshot.currentPlayerId === snapshot.viewerSeatId) return "your_turn";
   return null;
 }
+
+export function waitForTurnAbortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new DOMException("MCP request cancelled", "AbortError");
+}
+
+export function throwIfWaitForTurnAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw waitForTurnAbortReason(signal);
+}
+
+export function waitForTurnDelay(ms: number, signal: AbortSignal): Promise<void> {
+  throwIfWaitForTurnAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(waitForTurnAbortReason(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
