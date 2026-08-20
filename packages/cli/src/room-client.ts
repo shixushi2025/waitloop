@@ -72,6 +72,7 @@ export async function callRoomTool(
   credential: JoinCredentialV1,
   name: string,
   args: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const response = await fetch(credential.mcp.url, {
     method: "POST",
@@ -86,6 +87,7 @@ export async function callRoomTool(
       method: "tools/call",
       params: { name, arguments: args },
     }),
+    ...(signal ? { signal } : {}),
   });
   const body = await responseBody(response);
   if (!response.ok) throw new Error(errorMessage(body, `Waitloop MCP request failed with HTTP ${response.status}.`));
@@ -120,10 +122,10 @@ export async function createAndActivateHeadlessRoom(explicitServerUrl?: string) 
   return joinAndActivateRoom(body.joinCode, serverUrl);
 }
 
-export async function getActiveRoom() {
+export async function getActiveRoom(signal?: AbortSignal) {
   const credential = await loadActiveJoinCredential();
   if (!credential) return null;
-  const snapshot = await callRoomTool(credential, "get_turn");
+  const snapshot = await callRoomTool(credential, "get_turn", {}, signal);
   return {
     ...safeJoinMetadata(credential),
     connected: true,
@@ -131,10 +133,14 @@ export async function getActiveRoom() {
   };
 }
 
-export async function callActiveRoomTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+export async function callActiveRoomTool(
+  name: string,
+  args: Record<string, unknown> = {},
+  signal?: AbortSignal,
+): Promise<unknown> {
   const credential = await loadActiveJoinCredential();
   if (!credential) throw new Error("No active Waitloop room. Use create_room or join_room first.");
-  return callRoomTool(credential, name, args);
+  return callRoomTool(credential, name, args, signal);
 }
 
 export async function leaveActiveRoom() {
