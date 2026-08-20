@@ -4,11 +4,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
+  finishTurn,
   readHookInput,
   readLatestAgentState,
-  removeTurnState,
   startTurn,
-  transitionTurn,
   type LocalTurnState,
 } from "./lifecycle.js";
 
@@ -27,7 +26,6 @@ async function readHooks(path: string): Promise<Record<string, unknown>> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!isRecord(parsed)) throw new Error("Cursor hooks file must contain a JSON object.");
-    if (parsed.version !== undefined && parsed.version !== 1) throw new Error("Cursor hooks file must use version 1.");
     return parsed;
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") return { version: 1, hooks: {} };
@@ -42,12 +40,7 @@ async function writeHooks(path: string, value: Record<string, unknown>): Promise
   await rename(temporary, path);
 }
 
-function isWaitloopHandler(value: unknown): boolean {
-  return isRecord(value) && value.command === WAITLOOP_CURSOR_HOOK_COMMAND;
-}
-
 function ensureHooks(value: Record<string, unknown>): Record<string, unknown> {
-  value.version = 1;
   if (value.hooks === undefined) {
     const hooks: Record<string, unknown> = {};
     value.hooks = hooks;
@@ -57,46 +50,48 @@ function ensureHooks(value: Record<string, unknown>): Record<string, unknown> {
   return value.hooks;
 }
 
-export async function installCursor(hooksPath = getCursorHooksPath()): Promise<{ changed: boolean; path: string }> {
-  const value = await readHooks(hooksPath);
-  const hooks = ensureHooks(value);
-  let changed = false;
-
-  for (const event of CURSOR_EVENTS) {
-    const current = hooks[event];
-    if (current !== undefined && !Array.isArray(current)) throw new Error(`Cursor hook event ${event} must be an array.`);
-    const handlers: unknown[] = Array.isArray(current) ? current : [];
-    if (handlers.some(isWaitloopHandler)) continue;
-    handlers.push({ command: WAITLOOP_CURSOR_HOOK_COMMAND });
-    hooks[event] = handlers;
-    changed = true;
-  }
-
-  if (changed) await writeHooks(hooksPath, value);
-  return { changed, path: hooksPath };
+function isWaitloopCommand(value: unknown): boolean {
+  return isRecord(value) && value.command === WAITLOOP_CURSOR_HOOK_COMMAND;
 }
 
-export async function uninstallCursor(hooksPath = getCursorHooksPath()): Promise<{ changed: boolean; path: string }> {
-  const value = await readHooks(hooksPath);
-  if (!isRecord(value.hooks)) return { changed: false, path: hooksPath };
-  const hooks = value.hooks;
+function installEvent(hooks: Record<string, unknown>, event: (typeof CURSOR_EVENTS)[number]): boolean {
+  const current = hooks[event];
+  if (current !== undefined && !Array.isArray(current)) throw new Error(`Cursor hook event ${event} must be an array.`);
+  const commands = Array.isArray(current) ? current : [];
+  if (commands.some(isWaitloopCommand)) return false;
+  commands.push({ command: WAITLOOP_CURSOR_HOOK_COMMAND });
+  hooks[event] = commands;
+  return true;
+}
+
+export async function installCursor(path = getCursorHooksPath()): Promise<{ changed: boolean; path: string }> {
+  const value = await readHooks(path);
+  const hooks = ensureHooks(value);
   let changed = false;
+  for (const event of CURSOR_EVENTS) changed = installEvent(hooks, event) || changed;
+  if (changed) await writeHooks(path, value);
+  return { changed, path };
+}
 
+export async function uninstallCursor(path = getCursorHooksPath()): Promise<{ changed: boolean; path: string }> {
+  const value = await readHooks(path);
+  if (!isRecord(value.hooks)) return { changed: false, path };
+  let changed = false;
   for (const event of CURSOR_EVENTS) {
-    const current = hooks[event];
+    const current = value.hooks[event];
     if (!Array.isArray(current)) continue;
-    const next = current.filter((handler) => !isWaitloopHandler(handler));
-    if (next.length === current.length) continue;
-    changed = true;
-    if (next.length > 0) hooks[event] = next;
-    else delete hooks[event];
+    const next = current.filter((item) => !isWaitloopCommand(item));
+    if (next.length !== current.length) changed = true;
+    if (next.length > 0) value.hooks[event] = next;
+    else delete value.hooks[event];
   }
-
-  if (changed) await writeHooks(hooksPath, value);
-  return { changed, path: hooksPath };
+  if (Object.keys(value.hooks).length === 0) delete value.hooks;
+  if (changed) await writeHooks(path, value);
+  return { changed, path };
 }
 
 function nativeSessionId(input: Record<string, unknown>): string | null {
+  if (typeof input.session_id === "string" && input.session_id.length > 0) return input.session_id;
   if (typeof input.conversation_id === "string" && input.conversation_id.length > 0) return input.conversation_id;
   if (typeof input.generation_id === "string" && input.generation_id.length > 0) return input.generation_id;
   return null;
@@ -119,10 +114,9 @@ export async function runCursorHook(): Promise<void> {
     await startTurn("cursor", sessionId);
   } else if (hook === "stop") {
     const target = input.status === "error" || input.status === "aborted" ? "failed" : "completed";
-    await transitionTurn("cursor", sessionId, target);
-    await removeTurnState("cursor", sessionId);
+    await finishTurn("cursor", sessionId, target);
   } else if (hook === "sessionEnd") {
-    await removeTurnState("cursor", sessionId);
+    await finishTurn("cursor", sessionId, "completed");
   }
 
   process.stdout.write("{}\n");
