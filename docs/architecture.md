@@ -34,9 +34,47 @@ packages/cli            local config, diagnostics, lifecycle install, active Roo
 integrations/*          vendor lifecycle adapters
 worker/*                HTTP control plane, DO runtime, remote MCP, hosted inference
 apps/web/public/*        Human UI + public Agent surfaces
+scripts/*                repository contracts, packaging, MCP wire, deployment gates
 ```
 
 Web/CLI/local MCP/raw HTTP/remote MCP converge on shared server runtime. Clients do not implement alternate Room rules or authorization.
+
+## CI and production deployment
+
+GitHub Actions runs on `main`, pull requests, and `fix/**` branches. Its stable jobs are:
+
+```text
+check
+  -> typecheck / 85 tests
+  -> repository + onboarding contracts
+  -> CLI package validation
+  -> packaged MCP stdio wire validation
+  -> browser / Agent surface validation
+  -> Wrangler dry-run
+
+verify-cloudflare-gate
+  -> query the completed GitHub Actions check through the Checks API
+
+ready-to-deploy
+  -> succeeds only when both jobs succeeded
+```
+
+Cloudflare Workers Builds starts independently when `main` is pushed, but production promotion is gated in the repository:
+
+```text
+Cloudflare automatic dependency install
+  -> root postinstall
+  -> scripts/cloudflare-ci-gate.mjs
+  -> wait for ready-to-deploy on WORKERS_CI_COMMIT_SHA
+  -> fail on failed/cancelled/timed-out CI
+  -> only then continue to wrangler deploy
+```
+
+`pnpm deploy` invokes the same gate before `wrangler deploy`. Local development and non-production Cloudflare branches skip the production wait because they do not satisfy `WORKERS_CI=1` plus `WORKERS_CI_BRANCH=main`.
+
+The gate selects the latest `ready-to-deploy` check produced by the `github-actions` app for the exact commit SHA. Public GitHub Checks access needs no repository secret; an optional `WAITLOOP_GITHUB_TOKEN` may be supplied to increase API rate limits.
+
+This keeps Cloudflare's native Git integration and credentials while ensuring a production deployment cannot outrun or ignore the repository CI result.
 
 ## Local MCP bridge
 
@@ -217,7 +255,8 @@ CLI `--raw-mcp` preserves advanced remote configuration access, but default Join
 - capability checks decide Controller/owner actions;
 - Durable Object serialization + revision reject stale concurrent moves;
 - wait timeout never authorizes game mutation;
-- reconnect/fallback never bypasses ownership or revision.
+- reconnect/fallback never bypasses ownership or revision;
+- Cloudflare production deploy waits for the exact commit's final GitHub Actions gate.
 
 ## Future database boundary
 
