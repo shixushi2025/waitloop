@@ -1,6 +1,6 @@
 # MCP boundaries
 
-Waitloop now has two MCP layers with distinct responsibilities:
+Waitloop has two MCP layers with distinct responsibilities:
 
 ```text
 local stdio MCP (`waitloop mcp`)
@@ -53,6 +53,24 @@ The local bridge does not duplicate Room/game business logic:
 
 Room credentials are read from private `~/.waitloop/joins` state and never returned through model-visible local MCP tools.
 
+### Stdio compatibility and cancellation
+
+The same `waitloop mcp` process accepts modern MCP 2026-07-28 `server/discover` and the supported legacy `initialize` protocol versions used by current coding harnesses.
+
+Long-running tool calls do not serialize the whole stdio bridge. The bridge tracks in-flight JSON-RPC request IDs independently, so a `wait_for_turn` request can remain open while cancellation or other requests are read.
+
+For a matching:
+
+```text
+notifications/cancelled { requestId }
+```
+
+the bridge aborts that local tool request and propagates its `AbortSignal` into the proxied Room HTTP request. A cancelled request does not emit a stale tool result after cancellation. Closing stdin also aborts remaining in-flight requests.
+
+The remote `wait_for_turn` loop uses the HTTP request signal for both snapshot polling and poll delays, so cancellation stops the server wait promptly instead of continuing until the 25-second transport timeout.
+
+Cancellation is transport behavior only. It never auto-passes, auto-plays, changes Controller, or triggers Bot takeover.
+
 ## Active Room context
 
 `waitloop join`, `join_room`, and `create_room` select one active credential-backed Room. The active pointer contains Join code/server context, not a second secret copy.
@@ -68,6 +86,23 @@ leave_room()
 ```
 
 clears only local active selection. It does not revoke the remote credential or mutate the Room, preserving explicit reconnect until Room expiry.
+
+## Recoverable client errors
+
+Local MCP tool failures use machine-readable error payloads where the bridge can classify the condition:
+
+```text
+error.code
+actionable message
+nextAction        when a safe corrective action is known
+retrySafe         when automatic repetition is known to be safe
+```
+
+Examples include `no_active_room`, `request_cancelled`, `network_unavailable`, `room_expired`, `rate_limited`, and authoritative remote game errors such as stale revision or non-controller access.
+
+Read-only `get_turn` / `wait_for_turn` transport failures can be marked retry-safe. Mutating operations are deliberately conservative: after cancellation or an uncertain network failure, the Agent should call `get_turn()` before deciding whether to retry.
+
+Expired/not-found/unauthorized Room failures clear the stale active local pointer while leaving credential-cache retention semantics unchanged.
 
 ## Remote authentication and identity
 
@@ -153,7 +188,7 @@ change Controller
 create a ranked/competitive clock
 ```
 
-The client can call `wait_for_turn` again while the current Agent run remains active.
+The client can call `wait_for_turn` again while the current Agent run remains active. If the client cancels the call, the local proxy and remote polling loop stop promptly and no cancelled result should be consumed by the harness.
 
 ### `play_move(expectedRevision, moveId)`
 
@@ -226,6 +261,8 @@ The remote Room MCP itself remains room-scoped and therefore does not expose `cr
 ## Security invariants
 
 - local tools never return bearer credentials;
+- cancelled stdio requests do not emit stale tool results;
+- cancellation propagates to remote HTTP waiting without mutating game state;
 - remote Actor authentication occurs before tool execution;
 - Room/Actor/Seat identity is transport-resolved, not model-supplied gameplay arguments;
 - stale/non-controller/illegal moves are rejected server-side;
