@@ -13,6 +13,8 @@ Room API: https://waitloop.run/api/v1/rooms
 Join pattern: https://waitloop.run/join/<join-code>
 Game MCP: https://waitloop.run/mcp
 
+If the harness cannot directly read the canonical Markdown URL, read the `guideMirrors` declared in `agent.json` instead of assuming Waitloop/Cloudflare is unavailable.
+
 ## Core model
 
 ```text
@@ -28,17 +30,26 @@ Lifecycle hooks are separate and only report coding-work state.
 
 ## Install / initialize
 
-Consult `https://waitloop.run/agent.json` first.
+Consult `https://waitloop.run/agent.json` first. During alpha, use the explicit dist-tag:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
-waitloop init --url https://waitloop.run
-waitloop pair
 waitloop doctor
 ```
 
-Install only lifecycle adapters actually present. Codex users must review/trust the Waitloop lifecycle hook in `/hooks`.
+`waitloop doctor` checks the published Waitloop CLI version and, when Codex is detected, its CLI version/hooks capability plus the installed Waitloop hook events. If it prints an update command, use that command before diagnosing older behavior.
+
+Initialize/pair only when lifecycle integration is desired:
+
+```bash
+waitloop init --url https://waitloop.run
+waitloop pair
+```
+
+Install only lifecycle adapters actually present. `waitloop install codex` installs the hook definition, but Codex still owns trust: command hooks do not run until the exact current definition is reviewed/trusted in Codex CLI `/hooks`.
+
+A Codex Plugin may eventually make packaging/distribution nicer, but plugin-bundled command hooks use the same Codex trust flow. Do not claim that a Plugin removes hook review.
 
 ## Create or join without Web
 
@@ -50,6 +61,10 @@ waitloop join WL-7K4P9Q2MZX --json
 ```
 
 Raw Join is available through `https://waitloop.run/join/<join-code>` or the Join API.
+
+**Join is credential claim/cache, not MCP attachment.** Do not report the Agent as connected merely because `waitloop join` succeeded. The room considers the Actor connected only after an authenticated request reaches `/mcp`.
+
+If the current harness session cannot hot-add a newly claimed MCP server, use its supported MCP config/reload path or use raw MCP HTTP for the current task. Keep the cached bearer token out of model-visible output/logs whenever possible.
 
 Create a fully headless Agent-vs-bots room:
 
@@ -90,6 +105,16 @@ X-Waitloop-Room: <room-id>
 3. Only call `play_move` when `seat:play` is present.
 4. Use a server-generated move ID and the exact revision.
 5. On stale state, call `get_turn()` again.
+
+### Continuous play semantics
+
+MCP does not wake an Agent after the Agent has sent its final answer.
+
+- If the user asks only to **connect/verify**, one authenticated `get_turn()` is enough.
+- If the user asks to **take over / keep playing / play until finished**, keep the current Agent run active until that stopping condition is met.
+- Current alpha has no `wait_for_turn()`. If another Human/connected Actor owns the turn, wait briefly and poll `get_turn()` at a low frequency rather than tight-looping.
+
+Do not return a final response after connection if the user explicitly asked for continuous play.
 
 ### Advisor
 
