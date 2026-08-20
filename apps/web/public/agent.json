@@ -9,9 +9,7 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
-    "version": "0.1.0-alpha.3",
-    "candidateVersion": "0.1.0-alpha.4",
-    "candidatePublished": false,
+    "version": "0.1.0-alpha.4",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
