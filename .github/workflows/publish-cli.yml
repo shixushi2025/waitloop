@@ -3,25 +3,30 @@ name: publish-cli
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
-  group: npm-cli-${{ github.event.release.tag_name }}
+  group: npm-cli-${{ github.event.release.tag_name || github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'cli-v')
+    if: >-
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'cli-v')) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
-      - name: Checkout release tag
+      - name: Checkout validated source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.workflow_run.head_sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -55,19 +60,35 @@ jobs:
       - name: Validate packaged MCP stdio bridge
         run: pnpm check:mcp-stdio
 
-      - name: Validate release tag
+      - name: Validate publication trigger
         id: release
         env:
+          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
-          const expected = `cli-v${pkg.version}`;
-          if (process.env.RELEASE_TAG !== expected) {
-            console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
-            process.exit(1);
+          const manifest = JSON.parse(fs.readFileSync('apps/web/public/agent.json', 'utf8'));
+
+          if (process.env.EVENT_NAME === 'release') {
+            const expected = `cli-v${pkg.version}`;
+            if (process.env.RELEASE_TAG !== expected) {
+              console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
+              process.exit(1);
+            }
+          } else {
+            const marker = fs.readFileSync('.github/publish-cli-alpha6', 'utf8').trim();
+            if (marker !== pkg.version || pkg.version !== '0.1.0-alpha.6') {
+              console.error(`One-shot marker ${marker} does not authorize package ${pkg.version}.`);
+              process.exit(1);
+            }
+            if (manifest.cli?.candidateVersion !== pkg.version || manifest.cli?.candidatePublished !== false) {
+              console.error('agent.json must stage this unpublished candidate before trusted publication.');
+              process.exit(1);
+            }
           }
+
           const prerelease = pkg.version.match(/-([0-9A-Za-z-]+)/)?.[1];
           const distTag = prerelease ? prerelease.split('.')[0] : 'latest';
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
@@ -106,3 +127,26 @@ jobs:
           done
           echo "npm registry did not expose @waitloop/cli@${VERSION} after publication." >&2
           exit 1
+
+      - name: Validate clean npm installation
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          PREFIX="$RUNNER_TEMP/waitloop-alpha6"
+          npm install --global --prefix "$PREFIX" "@waitloop/cli@${VERSION}"
+          test "$("$PREFIX/bin/waitloop" --version)" = "$VERSION"
+          "$PREFIX/bin/waitloop" --help | grep -F "waitloop mcp"
+          "$PREFIX/bin/waitloop" --help | grep -F "waitloop room create"
+          WAITLOOP_CLI_ENTRY="$PREFIX/lib/node_modules/@waitloop/cli/dist/index.js" node scripts/validate-mcp-stdio.mjs
+
+      - name: Record one-shot publication result
+        if: github.event_name == 'workflow_run'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          printf 'published-and-verified %s\n' "$VERSION" > .cli-alpha6-publish.result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .cli-alpha6-publish.result
+          git commit -m "chore: record CLI alpha.6 publication"
+          git push origin HEAD:main
