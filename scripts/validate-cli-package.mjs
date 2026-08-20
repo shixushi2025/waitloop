@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,6 +74,20 @@ const versionOutput = execFileSync(process.execPath, [builtIndex, "--version"], 
 }).trim();
 if (versionOutput !== packageJson.version) {
   fail(`waitloop --version returned ${versionOutput}; expected ${packageJson.version}`);
+}
+
+const helpRoot = mkdtempSync(resolve(tmpdir(), "waitloop-help-"));
+const helpHookPath = resolve(helpRoot, "hooks.json");
+try {
+  const helpOutput = execFileSync(process.execPath, [builtIndex, "install", "codex", "--help"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, WAITLOOP_CODEX_HOOKS: helpHookPath },
+  });
+  if (!helpOutput.includes("Usage:")) fail("nested --help did not print CLI help");
+  if (existsSync(helpHookPath)) fail("waitloop install codex --help created a hooks file");
+} finally {
+  rmSync(helpRoot, { recursive: true, force: true });
 }
 
 console.log(`@waitloop/cli@${packageJson.version} package validation passed (${files.size} files).`);
