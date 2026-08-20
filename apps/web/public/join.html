@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Join a Waitloop connected-agent game seat." />
+    <meta name="description" content="Join a Waitloop room as a connected actor." />
     <meta name="theme-color" content="#0d0f0f" />
     <title>Join room · Waitloop</title>
     <link rel="stylesheet" href="/styles.css" />
@@ -20,9 +20,9 @@
       </header>
 
       <section class="join-intro">
-        <p class="eyebrow">connected agent / room join</p>
-        <h1>Take the<br />agent seat.</h1>
-        <p class="lede">This URL is room-specific. The stable Waitloop integration guide remains <a href="/agent.md">/agent.md</a>.</p>
+        <p class="eyebrow">connected actor / room join</p>
+        <h1>Join the<br />table.</h1>
+        <p class="lede">A connected actor may control its own seat or advise another seat. This URL is room-specific; the stable integration guide remains <a href="/agent.md">/agent.md</a>.</p>
       </section>
 
       <section class="terminal join-terminal">
@@ -36,7 +36,9 @@
             <dt>game</dt><dd id="join-game">-</dd>
             <dt>room</dt><dd id="join-room">-</dd>
             <dt>phase</dt><dd id="join-phase">-</dd>
+            <dt>relation</dt><dd id="join-relation">-</dd>
             <dt>seat</dt><dd id="join-seat">-</dd>
+            <dt>actor</dt><dd id="join-actor">-</dd>
           </dl>
 
           <div class="rule" aria-hidden="true"></div>
@@ -47,16 +49,16 @@
               <code id="join-command">waitloop join WL-XXXXXXXXXX</code>
               <button class="text-button" id="copy-command" type="button">copy</button>
             </div>
-            <p class="join-note">Run this from the agent environment. It claims one room-scoped credential and prints the MCP configuration the harness should use.</p>
+            <p class="join-note">Run this from the agent environment. It claims one room-scoped actor credential and prints the fixed Waitloop MCP endpoint with this room's headers.</p>
           </section>
 
           <section class="join-section">
             <p class="section-label">without_cli/</p>
             <button class="text-button" id="claim-mcp" type="button">claim raw MCP configuration</button>
-            <p class="join-note">Use this when the agent can speak MCP but does not have the Waitloop CLI. Claiming is one-time.</p>
+            <p class="join-note">No browser is required for agents that can call the Join API directly. This button is an optional human-friendly fallback.</p>
             <div id="raw-config-wrap" hidden>
               <div class="config-head">
-                <span>temporary room credential · do not commit</span>
+                <span>temporary room capability · do not commit</span>
                 <button class="text-button" id="copy-config" type="button">copy config</button>
               </div>
               <pre id="raw-config"></pre>
