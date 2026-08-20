@@ -201,7 +201,7 @@ export async function joinAndActivateRoom(code: string, explicitServerUrl?: stri
   const serverUrl = await resolveWaitloopServerUrl(explicitServerUrl);
   let credential: JoinCredentialV1;
   try {
-    credential = await claimJoinCredential(code, serverUrl);
+    credential = await claimJoinCredential(code, serverUrl, signal);
   } catch (error) {
     if (signal?.aborted || isAbortError(error)) throw cancellationError("join_room");
     if (error instanceof WaitloopClientError) throw error;
