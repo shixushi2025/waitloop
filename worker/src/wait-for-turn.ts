@@ -36,3 +36,32 @@ export function classifyWaitForTurn(snapshot: WaitForTurnSnapshotV1): WaitForTur
   if (snapshot.currentPlayerId === snapshot.viewerSeatId) return "your_turn";
   return null;
 }
+
+function waitCancelledError(): Error {
+  const error = new Error("wait_for_turn was cancelled by the MCP client.");
+  error.name = "AbortError";
+  return error;
+}
+
+export function throwIfWaitCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw waitCancelledError();
+}
+
+export function waitForTurnDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfWaitCancelled(signal);
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(waitCancelledError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
