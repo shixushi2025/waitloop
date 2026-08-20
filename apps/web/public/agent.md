@@ -58,6 +58,8 @@ take_control()
 
 Room Actor credentials stay in private local Waitloop state. Local MCP tools return safe Room/Actor/Seat metadata and game snapshots, never the bearer credential.
 
+The same stdio command accepts MCP 2026-07-28 discovery and supported legacy initialize clients. Long-running tool calls are tracked independently so `wait_for_turn()` does not block cancellation handling for the entire bridge.
+
 The underlying boundaries remain:
 
 ```text
@@ -197,7 +199,28 @@ timeout
 
 A `timeout` only bounds one transport/tool call. It never auto-passes, changes Controller, replaces an Agent, or applies a Casual game timeout. Call it again when continued waiting is still desired.
 
+If the harness or user cancels an in-flight wait, allow MCP cancellation to stop it. The local bridge consumes `notifications/cancelled`, aborts the matching proxied HTTP request, and suppresses the cancelled stale tool result. The remote polling loop observes the same request abort and stops promptly rather than waiting for the 25-second timeout.
+
+Cancellation itself never auto-passes, auto-plays, yields to a Bot, calls `take_control`, or changes any game state.
+
 `get_turn()` remains available for an immediate snapshot. Do not tightly poll `get_turn()` when `wait_for_turn()` is available.
+
+## Recoverable local errors
+
+When the bridge can classify a failure, local MCP tool errors may include:
+
+```text
+error.code
+error.message
+error.nextAction   optional
+error.retrySafe    optional
+```
+
+Follow `nextAction` only when it remains consistent with the user's request. `retrySafe: true` is reserved for operations known to be safe to repeat, especially read/wait transport failures.
+
+Do not blindly replay cancelled or failed mutating operations. Call `get_turn()` first because the remote outcome can be uncertain after a transport interruption.
+
+If an active Room is expired, missing, or no longer authorized, the bridge clears the stale active pointer and directs the Agent toward `create_room()` or a fresh `join_room(code)` when appropriate.
 
 ## Gameplay tools
 
@@ -232,6 +255,7 @@ wait_for_turn()
   -> if your_turn: reason and play_move()
   -> if timeout: wait_for_turn() again while the request remains active
   -> if controller_changed: wait or take_control only when authorized/requested
+  -> if cancelled: stop that wait and follow the user's/harness's interruption
   -> if game_finished: return the final result
 ```
 
@@ -297,7 +321,8 @@ Current safeguards include:
 - bounded Room lifetime;
 - server-side capability/revision checks;
 - separate identifiers and credentials;
-- local MCP credential custody.
+- local MCP credential custody;
+- cancellation that aborts transport waiting without hidden game mutation or stale result delivery.
 
 Rate limits are abuse protection, not accounting.
 
@@ -307,7 +332,7 @@ Rate limits are abuse protection, not accounting.
 2. Install/update the CLI and run `waitloop doctor`.
 3. Configure the stable MCP once with `waitloop mcp install <agent>` or the lifecycle installer.
 4. Call `create_room()` for headless Agent-vs-bots, or `join_room(code)` for a supplied Join code.
-5. Call `wait_for_turn()` rather than polling.
+5. Call `wait_for_turn()` rather than polling; respect harness/user cancellation instead of inventing game timeout behavior.
 6. Check capabilities, revision, and legal move IDs before `play_move`.
 7. Keep the current Agent run active when the user requested continued play or completion.
 8. Use `yield_to_bot()` only as an explicit owner action.
