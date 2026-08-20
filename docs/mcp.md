@@ -40,7 +40,20 @@ Current Join code lifetime is about 20 minutes and it can issue one credential. 
 
 The CLI caches the claimed room credential plus `actorId`, `seatId`, relation, and Room expiry under `~/.waitloop/joins`.
 
+**Join claim and MCP connection are separate states.** `waitloop join` only claims/caches the Actor credential and prints configuration. It does not dynamically attach that MCP server to an already-running Agent harness.
+
+```text
+Join claimed
+  -> credential exists locally
+  -> Actor runtime = connecting
+
+first authenticated /mcp request
+  -> Actor runtime = connected
+```
+
 Every authenticated MCP request refreshes Actor presence. Reconnecting does not automatically change the Seat Controller.
+
+Until a stable local MCP bridge exists, harnesses that cannot hot-add remote MCP configuration must use the harness's supported config/reload path or issue raw MCP HTTP calls for the current task. Raw credentials must not be echoed into chat/log output just to make that work.
 
 ## Tool surface
 
@@ -88,6 +101,30 @@ Available to a connected Seat owner after reconnecting. It removes the temporary
 
 Reconnect intentionally does not call this automatically. This prevents a returning client from silently racing the current Controller.
 
+## Agent-run continuation semantics
+
+The MCP server is passive request/response infrastructure. It does not schedule or wake Codex/Claude/Cursor after that Agent has returned a final reply.
+
+Therefore Agent behavior depends on the user's request:
+
+```text
+"connect/check the room"
+  -> authenticate
+  -> get_turn()
+  -> report connection/state
+
+"take over and keep playing"
+  -> authenticate
+  -> get_turn()
+  -> play when authorized
+  -> keep the same Agent run alive
+  -> repeat until the requested stopping condition
+```
+
+Current alpha has no `wait_for_turn()` server primitive. If another Human/connected Actor owns the turn, clients should wait briefly and re-read `get_turn()` at a low frequency. Tight polling wastes tool/model work and is not part of the intended flow.
+
+A final Agent response ends that Agent run; it must never be described as background MCP execution continuing by itself.
+
 ## Headless use
 
 MCP cannot create its own Room because it is room-scoped. Headless Agents first call:
@@ -120,5 +157,6 @@ Casual has no hard turn timeout. Current server safeguards include per-Actor lim
 - room Actor credentials never authorize lifecycle ingestion.
 - Join expiry and Room expiry are separate.
 - cached credential enables reconnect only for the same Actor binding.
+- Join success is not reported as MCP-connected until an authenticated MCP request reaches the Room.
 
 See [`security.md`](security.md), [`protocol.md`](protocol.md), and [`game-system.md`](game-system.md).

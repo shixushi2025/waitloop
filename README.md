@@ -10,6 +10,10 @@ while (agent.running) {
 
 Waitloop is a developer-native waiting layer, not an engagement/casino product. Coding work always has priority.
 
+## Current product priority
+
+The current focus is **stabilizing the existing Agent/Web/CLI/MCP flow**, not continuously adding modes or integrations. Real harness use is treated as regression testing; friction in discovery, installation, connection, recovery, and documentation should be fixed before expanding the feature surface.
+
 ## Agent entrypoints
 
 ```text
@@ -22,19 +26,37 @@ https://waitloop.run/join/<join-code>
 https://waitloop.run/mcp
 ```
 
+`agent.json` also declares GitHub mirrors of `agent.md` for Agent/browser environments that block direct Markdown navigation.
+
 Room/Join HTTP is the control plane; MCP is room-scoped gameplay. Web is optional for Agent-only operation.
 
 ## CLI
 
 ```bash
 npm install -g @waitloop/cli@alpha
+waitloop --version
+waitloop doctor
+```
+
+`doctor` checks the currently published Waitloop CLI version and, when Codex is present, its hooks capability plus installed Waitloop lifecycle hook events.
+
+Lifecycle setup is separate:
+
+```bash
 waitloop init --url https://waitloop.run
 waitloop pair
-waitloop doctor
+waitloop install codex
+```
+
+Codex command hooks remain subject to Codex's own review/trust flow. Plugin packaging can improve distribution, but plugin-bundled command hooks do not bypass that trust requirement.
+
+Join a room Actor capability with:
+
+```bash
 waitloop join WL-XXXXXXXXXX
 ```
 
-The CLI caches room Actor context/credential for reconnect; raw HTTP + MCP remains equally valid.
+Join claims/caches the room credential; it does **not** mean a running Agent session has already attached the MCP server. The Actor becomes connected only after an authenticated `/mcp` request.
 
 ## Game identity
 
@@ -88,6 +110,8 @@ take_control()
 ```
 
 Game rules, hidden information, current Controller, and revision checks remain server-side.
+
+MCP is request/response participation. It cannot wake an Agent after that Agent returns a final response; when the user explicitly asks an Agent to keep playing or play until finished, the Agent must keep the current run active until that stopping condition.
 
 ## Safety baseline
 

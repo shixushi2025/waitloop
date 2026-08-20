@@ -11,6 +11,19 @@ Waitloop is a developer-native waiting layer for coding agents. Work has priorit
 
 Choose whichever supported path fits the harness. CLI, raw HTTP, Join URL, Skill, and MCP overlap as entry methods but converge on the same server-authoritative runtime.
 
+## Discovery fallback
+
+Some Agent/browser sandboxes may block direct navigation to a Markdown URL even when normal HTTP clients can fetch it. Do not infer a Waitloop or Cloudflare outage from a browser-only block.
+
+If the canonical guide cannot be read directly, use the `guideMirrors` array in https://waitloop.run/agent.json. Current mirrors are:
+
+```text
+https://raw.githubusercontent.com/shixushi2025/waitloop/main/apps/web/public/agent.md
+https://github.com/shixushi2025/waitloop/blob/main/apps/web/public/agent.md
+```
+
+`agent.json`, `llms.txt`, and the packaged Skill intentionally repeat the critical machine-facing facts so discovery does not depend on one fetch path.
+
 ## Core identity model
 
 ```text
@@ -48,16 +61,23 @@ take_control()
 
 Do not require Web UI for Agent-only flows and do not invent `create_room()` on the current room-scoped MCP server. An Agent can use raw HTTP first, then MCP.
 
-## Install the CLI
+## Install and update the CLI
 
-Read https://waitloop.run/agent.json first. When the published CLI is available:
+Read https://waitloop.run/agent.json first. During the alpha channel, always use the explicit `@alpha` dist-tag:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
+waitloop doctor
+```
+
+`waitloop doctor` compares the local CLI version with the currently published version in `agent.json`. If they differ, run the update command it prints.
+
+Initialize/pair lifecycle reporting only when the user wants coding-agent lifecycle integration:
+
+```bash
 waitloop init --url https://waitloop.run
 waitloop pair
-waitloop doctor
 ```
 
 Supported lifecycle installers include:
@@ -68,9 +88,19 @@ waitloop install cursor
 waitloop install codex
 ```
 
-Codex users must review/trust the lifecycle hook in Codex `/hooks`.
-
 The CLI is convenience, not a protocol requirement.
+
+### Codex lifecycle hooks
+
+`waitloop install codex` installs the Waitloop hook definition. `waitloop doctor` then checks:
+
+- detected Codex CLI version;
+- whether the Codex `hooks` feature is available;
+- whether all Waitloop lifecycle hook events are present in the local hook file.
+
+Codex itself owns command-hook trust. A correctly installed hook is still skipped until Codex trusts the exact current hook definition. Use Codex CLI `/hooks` to review it.
+
+A Codex Plugin may package Skill/MCP/hooks into a nicer installable experience, but plugin-bundled command hooks use the same Codex trust-review flow. Plugin packaging therefore improves distribution; it does not remove the security/trust step. Waitloop does not currently require a Codex Plugin.
 
 ## Join an existing connected Actor binding
 
@@ -110,6 +140,10 @@ Content-Type: application/json
 A Join code is one-time and currently expires after about 20 minutes. The claimed room Actor credential remains usable for reconnect while the room remains active. Rooms currently expire after about 24 hours.
 
 The Join response exposes `actorId`, stable room-scoped `seatId`, relation (`controller` or `advisor`), room expiry, and the fixed MCP configuration.
+
+**Important:** `waitloop join` means "claim and cache this room Actor credential." It does **not** mean the currently running Codex/Claude/Cursor session has dynamically attached the new MCP server. A harness that cannot hot-add MCP configuration must use its supported MCP configuration/reload path, or use raw MCP HTTP for that current task without printing the cached bearer token into chat/log output.
+
+A room does not consider the connected Actor online until an authenticated MCP request reaches `/mcp`.
 
 ## Create a room headlessly
 
@@ -193,6 +227,16 @@ yield_to_bot()
   -> continue same Seat
 ```
 
+## Continuous Agent play
+
+Remote MCP is request/response participation; it does not wake an Agent after that Agent has returned a final reply to the user.
+
+If the user asks to **connect/verify**, one `get_turn()` is enough. If the user asks to **take over and keep playing / play until finished**, keep the current Agent run active and continue the game loop until that stopping condition is met.
+
+Current alpha does not yet expose `wait_for_turn()`. Therefore, when another Human/connected Actor owns the current turn, avoid tight polling: wait briefly and re-read `get_turn()` at a low frequency. When your Seat is current, choose one server-generated legal move and call `play_move`, then continue.
+
+Do not claim that MCP will continue in the background after the Agent sends its final response.
+
 ## Browser anonymous identity
 
 Human Web users do not need an account. The browser receives a persistent anonymous Actor ID plus a separate secret credential in an HttpOnly cookie.
@@ -235,15 +279,17 @@ Never put credentials in URLs, prompts, source files, commits, Skill files, or l
 
 ## Agent operating order
 
-1. Read https://waitloop.run/agent.json and this guide.
+1. Read https://waitloop.run/agent.json and this guide; if direct Markdown fetch is blocked, use a declared guide mirror.
 2. Use an installed CLI/Skill when convenient; otherwise use raw HTTP + MCP.
-3. Create a headless Room or claim the Join code the user supplied.
-4. Preserve the returned `actorId`, `seatId`, relation, room expiry, and room MCP credential locally for that room.
-5. Connect MCP and call `get_turn()`.
-6. Check capabilities before `play_move`.
-7. If stepping away from an owned Seat and continued play is desired, call `yield_to_bot()`.
-8. Reconnect with the same cached room credential and call `take_control()` only when ready to resume.
-9. Advisors may inspect/comment but must wait for explicit delegation before playing.
-10. Work/lifecycle attention always outranks the game.
+3. Run `waitloop doctor` before lifecycle installation when CLI/Codex compatibility is uncertain.
+4. Create a headless Room or claim the Join code the user supplied.
+5. Remember that Join only claims/caches the capability; establish an authenticated MCP request before saying the Agent is connected.
+6. Preserve the returned `actorId`, `seatId`, relation, room expiry, and room MCP credential locally for that room.
+7. Call `get_turn()` and check capabilities before `play_move`.
+8. If the user requested continuous play, keep this Agent run active until the requested stopping condition instead of returning immediately after connection.
+9. If stepping away from an owned Seat and continued play is desired, call `yield_to_bot()`.
+10. Reconnect with the same cached room credential and call `take_control()` only when ready to resume.
+11. Advisors may inspect/comment but must wait for explicit delegation before playing.
+12. Work/lifecycle attention always outranks the game.
 
 Never weaken another product's trust/security settings or overwrite unrelated configuration merely to make Waitloop work.

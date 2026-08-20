@@ -2,9 +2,40 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-## 1. Connected Actor runtime efficiency
+The current product priority is **stabilization before feature expansion**. Do not interpret this roadmap as permission to keep adding modes/tools while the existing install -> connect -> play -> recover paths still have avoidable friction.
 
-The Seat/Actor identity, anonymous browser recovery, explicit temporary Bot takeover, and reconnectable room credentials are implemented. Next improve Agent waiting/transport ergonomics:
+## 1. Current-flow stabilization
+
+Treat real harness use as product regression testing. Repeatedly validate the existing paths on supported environments rather than adding new product concepts first:
+
+```text
+Agent discovery
+-> CLI install/update
+-> doctor
+-> lifecycle adapter install/trust
+-> create/join Room
+-> establish MCP connection
+-> play/advice/control
+-> yield/reconnect/take control
+-> finish/expire cleanly
+```
+
+Near-term work should prioritize:
+
+- verify `agent.md`/`agent.json`/Skill/llms discovery from real Agent browser/search/shell environments and keep usable mirrors/fallbacks;
+- make `waitloop doctor` the first-line diagnosis for stale CLI, Codex hook capability, hook installation, server reachability, and pairing state;
+- keep CLI help/read-only diagnostics side-effect free;
+- make Join-vs-MCP-connected state unambiguous in CLI, docs, Web, and Agent instructions;
+- test continuous-play instructions so an Agent does not return immediately after connection when the user asked it to keep playing;
+- validate Codex Desktop + Codex CLI lifecycle setup, including the externally owned hook trust step;
+- exercise expired Join/Room/reconnect/fallback paths with regression tests;
+- keep public Agent surfaces synchronized with every behavior change.
+
+Acceptance: a new user/Agent can follow the current supported path without needing product-author knowledge, and common failures explain the next corrective action instead of requiring manual source inspection.
+
+## 2. Connected Actor runtime efficiency
+
+Only after the current flow is stable, reduce unavoidable transport friction without changing the domain model:
 
 - `wait_for_turn` or equivalent server-side long poll so Agents do not repeatedly poll `get_turn`;
 - transport-level disconnect detection and richer presence state, without timer-forced Casual moves;
@@ -14,20 +45,7 @@ The Seat/Actor identity, anonymous browser recovery, explicit temporary Bot take
 
 Acceptance: an Agent can join once, wait efficiently, disconnect/reconnect, and explicitly recover control with minimal model/tool churn.
 
-## 2. Multiple connected Actors and richer relationships
-
-Current Room modes intentionally have one joined connected Actor. Extend only through the Seat/Actor/Binding/capability model:
-
-- multiple Join capabilities per Room;
-- all-ready gating for multiple connected player Seats;
-- multiple advisors on one Seat;
-- public-only spectator/commentator Actors that cannot see private Seat state;
-- per-turn one-shot delegation leases;
-- explicit leave/revoke flows for individual Actor credentials.
-
-Do not add these as `participant.kind` special cases.
-
-Acceptance: every connected Actor has independent identity/credential/scope and hidden-information access is explicit.
+A Codex Plugin may be evaluated as a distribution/package improvement after the basic flow is reliable. OpenAI's current plugin model can bundle Skill/MCP/hooks, but plugin-bundled command hooks still use Codex hook review/trust; therefore Plugin work must not be justified as a way to bypass that security step.
 
 ## 3. Public hardening
 
@@ -43,7 +61,35 @@ Current room creation, hosted-room creation, Join, MCP, comments, recovery, and 
 
 Acceptance: abusive anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
 
-## 4. Cross-device identity only when needed
+## 4. Dou Dizhu completeness
+
+Only fill rule gaps that materially block the current product experience:
+
+- bidding / rob-landlord;
+- landlord resolution from bidding rather than pre-game random assignment;
+- bidding score/settlement;
+- bomb/rocket multipliers;
+- spring / anti-spring;
+- regression coverage for the selected rule profile.
+
+Acceptance: rules docs, engine, tests, Human UI, and Agent-visible state agree exactly.
+
+## 5. Multiple connected Actors and richer relationships
+
+Defer until current single-connected-Actor modes are stable. When needed, extend only through the Seat/Actor/Binding/capability model:
+
+- multiple Join capabilities per Room;
+- all-ready gating for multiple connected player Seats;
+- multiple advisors on one Seat;
+- public-only spectator/commentator Actors that cannot see private Seat state;
+- per-turn one-shot delegation leases;
+- explicit leave/revoke flows for individual Actor credentials.
+
+Do not add these as `participant.kind` special cases.
+
+Acceptance: every connected Actor has independent identity/credential/scope and hidden-information access is explicit.
+
+## 6. Cross-device identity only when needed
 
 Current Human identity is anonymous and browser/device-local. Do not introduce a database/account system solely for one-Room resume.
 
@@ -57,26 +103,15 @@ If product needs become cross-Room/cross-device:
 
 Accounts must remain optional for core headless/public game rooms unless product requirements change.
 
-## 5. Dou Dizhu completeness
-
-- bidding / rob-landlord;
-- landlord resolution from bidding rather than pre-game random assignment;
-- bidding score/settlement;
-- bomb/rocket multipliers;
-- spring / anti-spring;
-- regression coverage for the selected rule profile.
-
-Acceptance: rules docs, engine, tests, Human UI, and Agent-visible state agree exactly.
-
-## 6. Additional lifecycle adapters
+## 7. Additional lifecycle adapters
 
 - DSH after its lifecycle contract is well understood;
 - other coding agents based on real demand;
 - preserve canonical lifecycle semantics and fail-open/privacy behavior.
 
-## 7. Arena / benchmark
+## 8. Arena / benchmark
 
-Arena remains separate from casual waiting:
+Arena remains separate from casual waiting and is intentionally low priority while the core waiting/game loop is being stabilized:
 
 - deterministic Agent-vs-Agent runner;
 - reproducible seeds/config;

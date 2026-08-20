@@ -1,6 +1,6 @@
 {
   "name": "@waitloop/cli",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Waitloop CLI and coding-agent lifecycle adapters.",
   "license": "MIT",
   "type": "module",
