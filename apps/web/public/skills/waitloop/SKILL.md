@@ -33,6 +33,8 @@ waitloop --version
 waitloop doctor
 ```
 
+The published alpha includes the stable Room commands and official MCP v2 stdio bridge. The same `waitloop mcp` command supports legacy 2025-era clients and 2026-07-28 clients.
+
 Install the stable MCP once:
 
 ```bash
@@ -131,7 +133,13 @@ yield_to_bot()
 
 Seat ID, owner, hand, role, and history remain stable. Reconnection never silently steals control from the temporary Bot.
 
+In `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect. `yield_to_bot()` is an explicit handoff, not a pause primitive.
+
 `leave_room()` clears only local active selection; it does not revoke the cached credential or mutate the game.
+
+## Lifecycle terminal state
+
+Stop, failure, and session-end hooks finalize the latest lifecycle state before native-session cleanup. A closed harness should therefore remain `completed` or `failed`, not stale `running`/`waiting`.
 
 ## Advanced fallback
 
@@ -148,7 +156,7 @@ Remote MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield
 ## Security and privacy
 
 - Actor/Seat/Room IDs do not authorize access.
-- Local MCP never returns raw Room credentials to the model.
+- Local MCP never returns raw Room credentials to the model and redacts credential-shaped errors.
 - Respect `room:manage`, `seat:control`, and `seat:play` capabilities.
 - Casual elapsed time alone never authorizes fallback.
 - Lifecycle reporting excludes prompt, source, repository, cwd, transcript, tool, assistant, and native-session content.
