@@ -31,10 +31,10 @@ describe("wait_for_turn classification", () => {
     expect(classifyWaitForTurn(snapshot({ capabilities: ["seat:view-private"] }))).toBe("controller_changed");
   });
 
-  it("surfaces terminal and paused room states", () => {
+  it("surfaces terminal, lobby, and paused room states", () => {
     expect(classifyWaitForTurn(snapshot({ roomPhase: "finished", status: "finished" }))).toBe("game_finished");
+    expect(classifyWaitForTurn(snapshot({ roomPhase: "waiting_for_players", status: "paused" }))).toBe("waiting_for_players");
     expect(classifyWaitForTurn(snapshot({ roomPhase: "paused", status: "paused" }))).toBe("room_paused");
-    expect(classifyWaitForTurn(snapshot({ roomPhase: "waiting_for_players", status: "paused" }))).toBe("room_paused");
   });
 });
 
