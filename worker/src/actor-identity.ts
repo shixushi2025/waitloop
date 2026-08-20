@@ -10,6 +10,12 @@ export interface AnonymousActorIdentityV1 {
   credential: string;
 }
 
+interface HeaderReadable {
+  headers: {
+    get(name: string): string | null;
+  };
+}
+
 function randomHexId(): string {
   return crypto.randomUUID().replaceAll("-", "");
 }
@@ -42,7 +48,7 @@ export function parseAnonymousActorIdentity(value: string | null): AnonymousActo
   return { version: 1, actorId, credential };
 }
 
-export function actorIdentityFromRequest(request: Request): AnonymousActorIdentityV1 | null {
+export function actorIdentityFromRequest(request: HeaderReadable): AnonymousActorIdentityV1 | null {
   return parseAnonymousActorIdentity(cookieValue(request.headers.get("cookie"), ACTOR_IDENTITY_COOKIE_NAME));
 }
 
