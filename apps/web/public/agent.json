@@ -3,6 +3,10 @@
   "name": "waitloop",
   "homepage": "https://waitloop.run",
   "canonicalGuide": "https://waitloop.run/agent.md",
+  "guideMirrors": [
+    "https://raw.githubusercontent.com/shixushi2025/waitloop/main/apps/web/public/agent.md",
+    "https://github.com/shixushi2025/waitloop/blob/main/apps/web/public/agent.md"
+  ],
   "manifest": "https://waitloop.run/agent.json",
   "llms": "https://waitloop.run/llms.txt",
   "source": "https://github.com/shixushi2025/waitloop",
@@ -10,6 +14,8 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.4",
+    "candidateVersion": "0.1.0-alpha.5",
+    "candidatePublished": false,
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -24,6 +30,7 @@
     "pairCommand": "waitloop pair",
     "joinCommand": "waitloop join <join-code>",
     "doctorCommand": "waitloop doctor",
+    "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability and installed Waitloop hook events",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml"
   },
   "skill": {
@@ -53,6 +60,8 @@
     "requires": ["Authorization: Bearer <actor-token>", "X-Waitloop-Room: <room-id>"],
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
+    "joinBehavior": "waitloop join claims/caches a room credential and prints configuration; it does not hot-inject that MCP server into an already-running agent session",
+    "continuationBehavior": "MCP does not wake an agent after it returns a final response; a request to play continuously must keep the current agent run active until the requested stopping condition",
     "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
     "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
   },
@@ -77,8 +86,9 @@
     "codex": {
       "lifecycle": "available",
       "installer": "waitloop install codex",
-      "postInstall": "Review and trust the Waitloop hook in Codex /hooks.",
-      "plugin": "not-required",
+      "postInstall": "Codex requires review/trust of the exact command-hook definition before it runs; use Codex CLI /hooks to review it.",
+      "plugin": "not-current-primary-path",
+      "pluginNote": "A Codex plugin can bundle skills/MCP/hooks, but plugin-bundled command hooks still require Codex hook review/trust, so it does not remove the core trust step.",
       "skill": "available",
       "mcp": "available"
     },
