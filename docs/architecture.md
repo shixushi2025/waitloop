@@ -2,218 +2,223 @@
 
 ## Overview
 
-Waitloop is a TypeScript monorepo deployed as a Cloudflare Worker with Static Assets and Durable Objects.
+Waitloop is a TypeScript monorepo deployed as one Cloudflare Worker with Static Assets and Durable Objects.
 
-The system separates six responsibilities:
+Responsibilities:
 
-1. **Lifecycle adapters** observe platform-specific coding-agent signals.
-2. **Protocol** converts those signals into canonical Waitloop events.
-3. **CLI** manages local pairing, lifecycle adapter install, diagnostics, and room join-code exchange.
-4. **Runtime** stores authoritative lifecycle/game state and enforces credentials/revisions.
-5. **Games** implement pure deterministic rules behind game-agnostic contracts.
-6. **Web** renders viewer-safe projections and presentation pacing; it is never authoritative.
+1. **Lifecycle adapters** map vendor-specific coding-agent events into Waitloop lifecycle state.
+2. **Protocol** defines canonical lifecycle/game contracts.
+3. **CLI** provides local pairing/adapters/diagnostics/Join convenience.
+4. **HTTP control plane** creates rooms, claims Actor capabilities, and changes owner-authorized control.
+5. **Game runtime** stores authoritative room/Actor/Seat state in `GameRoom` Durable Objects.
+6. **Game packages** implement pure deterministic rules.
+7. **MCP gameplay plane** lets one authenticated connected Actor inspect/play/comment.
+8. **Web** is Human UI/presentation only; it is not required for Agent operation.
 
 ```text
-Claude Code ─┐
-Cursor ──────┼─> integrations/* -> protocol -> AgentSession DO
-Codex ───────┤                              -> browser status
-DSH ─────────┘
+coding lifecycle
+Claude/Cursor/Codex -> integrations -> protocol -> AgentSession DO -> Web attention
 
-browser ---------------------------> room HTTP API -> GameRoom DO
-CLI join / raw MCP ----------------> join API -----┘
-MCP client ------------------------> /mcp ---------┘
-Hosted model ----------------------> hosted runner -> GameRoom DO
+room control plane
+Web / CLI / Agent HTTP -> /api/v1/rooms + /api/v1/join/* -> GameRoom DO
+
+room gameplay plane
+connected Agent -> /mcp -----------------------------> GameRoom DO
+hosted provider -> hosted runner --------------------> GameRoom DO
+Human Web -> room human endpoints -------------------> GameRoom DO
 ```
 
-## Production deployment
+## Deployment
 
 ```text
 waitloop.run
-  ├─ static assets
+  ├─ static product + Agent surfaces
   │   ├─ /agent.md
   │   ├─ /agent.json
   │   ├─ /llms.txt
   │   ├─ /skills/waitloop/SKILL.md
   │   ├─ /game.html
-  │   └─ /join/<code> (Worker-routed room onboarding)
+  │   └─ /join/<code>
   ├─ /api/*
   ├─ /mcp
-  ├─ AgentSession Durable Objects
-  ├─ DeviceRegistry Durable Object
-  ├─ PairingRequest Durable Objects
-  └─ GameRoom Durable Objects
+  ├─ AgentSession DO
+  ├─ DeviceRegistry DO
+  ├─ PairingRequest DO
+  └─ GameRoom DO
 ```
 
-GitHub pushes to `main` are deployed through Cloudflare's repository integration. CI independently runs a Wrangler deployment dry-run before merge.
+GitHub `main` auto-deploys through Cloudflare repository integration. CI independently validates Wrangler dry-run bundling.
 
-## Package/runtime boundaries
+## Code boundaries
 
 ```text
 packages/protocol       pure lifecycle contracts/validation
-packages/game-core      pure game-agnostic room contracts
-packages/doudizhu       pure Dou Dizhu rules
-packages/cli            local Node CLI/integration management
-integrations/*          platform-specific lifecycle adapters
-worker/*                Cloudflare APIs/DOs/MCP/hosted/join runtime
-apps/web/public/*        static presentation + public Agent surfaces
+packages/game-core      pure game-agnostic room/state transition contracts
+packages/doudizhu       pure Dou Dizhu legality/state transitions
+packages/cli            local Node convenience/integration layer
+integrations/*          vendor-specific lifecycle adapters
+worker/*                Cloudflare control/runtime/MCP/hosted boundaries
+apps/web/public/*        Human UI + public Agent surfaces
 ```
 
-Dependency direction must preserve these semantic rules:
+Core packages never depend on vendor integration or browser/Cloudflare details.
 
-- `protocol` does not depend on platform integrations or Worker code;
-- `game-core` has no Cloudflare/UI dependency;
-- `doudizhu` depends on pure game contracts/utilities, not Worker/MCP;
-- integrations map vendor signals into `protocol` rather than adding vendor semantics to core;
-- Worker orchestrates packages and owns runtime authorization/state;
-- web consumes public/runtime projections and never owns game truth.
+## GameRoom domain boundary
 
-## AgentSession Durable Object
+`GameRoom` owns the complete persisted game plus runtime authorization metadata.
 
-An `AgentSession` represents one logical Waitloop-tracked coding-agent work session.
+The important split is:
 
-Responsibilities:
+```text
+Pure game state
+  players = Seat IDs
+  hand/role/turn/history
 
-- accept validated canonical lifecycle events;
-- enforce duplicate/stale/terminal transition rules;
-- persist minimal lifecycle/timing metadata;
-- expose current snapshot;
-- publish updates to authorized subscribers.
+Runtime identity
+  Actors
+  Seats
+  Bindings
+  active Controller
+  Actor readiness
+  comments
+  credentials/capabilities
+```
 
-It must not require prompt/source/repository/tool/transcript content for the core experience.
+### Seat
 
-## DeviceRegistry and PairingRequest
+One player position understood by the game engine. Its hand/role/history survive Controller changes.
 
-`DeviceRegistry` stores current scoped lifecycle credential digests/metadata. `PairingRequest` owns a short-lived browser approval/exchange flow.
+### Actor
 
-The CLI keeps the verifier locally until exchange. Browser pairing does not put the final device credential in a URL.
+Human, Bot, Hosted Agent, or Connected Agent runtime identity.
 
-## GameRoom Durable Object
+### Binding
 
-A `GameRoom` owns one authoritative game instance plus runtime metadata around it.
+Connects an Actor to one Seat with relation `controller` or `advisor`.
 
-Responsibilities:
+### Controller
 
-- own/persist complete internal game state;
-- associate/authenticate viewer and machine seats;
-- enforce room revision, turn order, and move legality through the registered game definition;
-- expose viewer-specific snapshots;
-- track runtime participant/seat state;
-- implement connected-agent lobby/join readiness outside the game-rules package;
-- run deterministic/hosted automated seats;
-- pause/resume when linked work attention changes;
-- broadcast authorized machine snapshots where applicable.
+Only `activeControllerActorId` receives `seat:play`. The Seat owner retains `seat:control` and can delegate/take back control.
 
-`GameRoom` must not implement Dou Dizhu pattern/rule branching.
+This keeps Dou Dizhu/game packages unaware of Codex/Claude/MCP/UI concepts.
 
-## Game vs runtime phase
+## Backward-compatible migration
 
-The generic game/room state understands:
+Older persisted rooms modeled participant==player==seat. `GameRoom` normalizes that shape into the new Actor/Seat/Binding model on read:
+
+```text
+legacy participant P
+  -> Actor P
+  -> Seat P
+  -> controller Binding P -> P
+```
+
+Legacy `participants` and `seatStates` are temporarily included in snapshots while browser/runtime projections migrate. New code should use `actors`, `seats`, `bindings`, and `actorStates`.
+
+## Runtime phase/readiness
+
+Game status:
 
 ```text
 playing | paused | finished
 ```
 
-The Worker adds connected-agent onboarding phase:
+Runtime phase:
 
 ```text
 waiting_for_players -> playing -> paused -> playing -> finished
 ```
 
-Seat readiness (`waiting`, `connecting`, `connected`, `ready`) is runtime metadata. It does not belong in `packages/doudizhu`.
-
-During `waiting_for_players`, human projection hides pre-start hand/landlord information even if internal game state has already been prepared.
-
-## Connected-agent join architecture
+Connected Actor readiness:
 
 ```text
-browser creates connected-agent room
-  -> high-entropy WL-... join code
-  -> room remains waiting_for_players
-
-path A:
-  waitloop join <code>
-
-path B:
-  /join/<code> -> raw MCP configuration
-
-claim
-  -> one wlseat_... credential
-  -> seat connecting
-  -> configure /mcp with Authorization + X-Waitloop-Room
-  -> first authenticated MCP request
-  -> seat connected
-  -> room starts
+waiting -> connecting -> connected
 ```
 
-The join code is a one-time issuance capability. The resulting seat token is the ongoing room credential.
+The first authenticated MCP request marks the joined Actor ready and allows a waiting room to start.
 
-## Human and machine game paths
+## Client-neutral room creation
 
-### Browser human
+Room creation no longer conceptually belongs to the browser.
 
 ```text
-viewer cookie
-  -> human-safe snapshot
-  -> card selection / play / pass / hint
-  -> Worker resolves to current legal move
-  -> GameRoom applies authoritative transition
+POST /api/v1/rooms
 ```
 
-### MCP agent
+can be called by Web, CLI, or an Agent directly. `agent-bots` deliberately creates no Human viewer cookie/snapshot and supports a fully headless lifecycle:
 
 ```text
-room + wlseat transport credentials
-  -> get_turn()
-  -> viewer-specific machine snapshot + legal move IDs
-  -> play_move(expectedRevision, moveId)
-  -> GameRoom validates/applies
+Agent HTTP create
+  -> Join code
+  -> Join claim
+  -> MCP connection
+  -> game
 ```
 
-### Hosted agent
+Web is required only when a Human wants a visual/interactive client.
+
+## Connected Agent relationships
+
+### Separate player
+
+`connected-agent` binds the connected Actor as Controller of its own Seat.
+
+### Companion/advisor
+
+`companion-agent` binds the connected Actor as advisor of the Human Seat. The Actor receives that explicitly granted Seat's private projection and may comment, but cannot mutate it until the owner delegates Controller.
+
+### Headless player
+
+`agent-bots` binds the connected Actor as Controller of its own Seat against two deterministic bots, with no browser dependency.
+
+## HTTP vs MCP
+
+The intended split is:
 
 ```text
-GameRoom current hosted seat
-  -> viewer-specific machine snapshot
-  -> hosted provider selects move ID
-  -> invalid/error/timeout => deterministic legal fallback
+HTTP / CLI control plane
+  create room
+  claim Join capability
+  inspect/control owner-managed room relationship
+
+MCP gameplay plane
+  get_turn()
+  play_move(expectedRevision, moveId)
+  comment(text)
 ```
+
+Do not duplicate game rules/authorization inside CLI/Web/MCP clients; they all converge on `GameRoom` and the registered game definition.
+
+## Human projection
+
+Browser Human uses a viewer credential and human-safe projection:
+
+- private hand for its Seat after start;
+- no exhaustive machine `legalMoves[]`;
+- `canPlay/canPass/canHint` based on authoritative active Controller capability;
+- retains private view while delegated but loses mutation controls.
+
+## Comment side channel
+
+Room comments belong to runtime metadata, not game history. `comment` does not increment game revision or affect turn/legal state.
 
 ## Trust boundaries
 
-Every external boundary validates untrusted input:
+Validate every external boundary:
 
-- adapter -> lifecycle ingest;
+- lifecycle adapter -> ingest;
 - browser pairing -> PairingRequest;
-- browser -> room APIs;
-- join code -> seat-credential issuance;
-- MCP client -> room-bound tool handler;
-- hosted model output -> legal move selection;
-- persisted Durable Object data -> versioned/normalized runtime state.
+- Web/Agent -> Room API;
+- Join code -> Actor credential issuance;
+- MCP -> Actor binding/capability;
+- Human control mutation -> Seat owner + same-Seat binding;
+- hosted output -> server-generated legal move;
+- persisted DO state -> normalized/version-aware model.
 
-Types do not replace runtime validation.
+## Concurrency/revision
 
-## Concurrency/revision model
-
-Durable Objects serialize requests per object, while explicit room/session revisions protect clients from stale decisions and make rejection deterministic.
-
-Never rely on “request ordering probably works” as the only stale-state defense.
-
-## Persistence
-
-Persist only data required to recover current active resources. Persisted schemas remain versioned/normalizable and must not depend on serialized class instances.
-
-Changes to persisted Durable Object shapes require migration/recovery consideration and tests as the system approaches broader public usage.
-
-## Observability
-
-Structured logs should contain opaque identifiers, transition outcomes, error codes, and aggregate model usage—not private user content, raw credentials, prompts, source, or hidden game hands.
+Durable Objects serialize requests per room, while explicit room/game revision rejects stale Human/Agent decisions. Active Controller authorization prevents Human and Agent from simultaneously mutating the same Seat.
 
 ## Failure behavior
 
-Waitloop fails open with respect to the user's primary work:
-
-- Waitloop outage must not block the coding agent;
-- lifecycle hook failures are bounded/best-effort;
-- game failure must not hide an actionable coding-agent state;
-- hosted model failure falls back at the game layer rather than blocking indefinitely;
-- casual connected-agent waiting is allowed to be long, with soft UI reminders rather than a forced timer.
+Waitloop fails open with respect to primary coding work. Lifecycle delivery is bounded/best-effort; game failures do not hide work attention; hosted provider failures use game fallbacks; casual connected Actors may take a long time without a forced timer.
