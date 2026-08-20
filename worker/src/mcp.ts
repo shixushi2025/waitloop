@@ -5,6 +5,8 @@ import type { GameRoom, GameRoomSnapshotV1 } from "./game-room";
 import {
   classifyWaitForTurn,
   normalizeWaitForTurnTimeout,
+  throwIfWaitForTurnAborted,
+  waitForTurnDelay,
   WAIT_FOR_TURN_POLL_MS,
 } from "./wait-for-turn";
 
@@ -38,10 +40,6 @@ function sameOriginOrAbsent(request: Request): boolean {
   } catch {
     return false;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<Response> {
@@ -86,12 +84,12 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
       "wait_for_turn",
       {
         description:
-          "Wait efficiently until your bound seat can act or the room reaches another actionable state. timeoutMs only bounds this tool call; it never auto-passes, takes over a seat, or changes Casual game state.",
+          "Wait efficiently until your bound seat can act or the room reaches another actionable state. timeoutMs only bounds this tool call; it never auto-passes, takes over a seat, or changes Casual game state. Client cancellation aborts the wait promptly.",
         inputSchema: z.object({
           timeoutMs: z.number().int().min(1_000).max(25_000).optional(),
         }),
       },
-      async ({ timeoutMs }) => {
+      async ({ timeoutMs }, ctx) => {
         let boundedTimeout: number;
         try {
           boundedTimeout = normalizeWaitForTurnTimeout(timeoutMs);
@@ -99,10 +97,13 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
           return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");
         }
 
+        const signal = ctx.mcpReq.signal;
         const startedAt = Date.now();
         let latest: GameRoomSnapshotV1 | null = null;
         while (true) {
+          throwIfWaitForTurnAborted(signal);
           const result = await room.getSnapshotBySeatToken(seatToken);
+          throwIfWaitForTurnAborted(signal);
           if (!result.ok) return errorResult(result.error.code, result.error.message);
           latest = rpcValue(result) as GameRoomSnapshotV1;
           const reason = classifyWaitForTurn(latest);
@@ -125,7 +126,7 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
               snapshot: latest,
             });
           }
-          await sleep(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed));
+          await waitForTurnDelay(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed), signal);
         }
       },
     );
