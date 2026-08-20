@@ -6,8 +6,9 @@ This is the compact handoff snapshot of current durable truth.
 
 - Production: `https://waitloop.run`.
 - Cloudflare Worker + Static Assets + Durable Objects.
-- GitHub `main` auto-deploys through Cloudflare.
-- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, browser JS, Agent discovery, and Wrangler dry-run.
+- GitHub `main` currently auto-deploys through Cloudflare.
+- CI runs on `main`, pull requests, and `fix/**` branches.
+- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio wire behavior, browser JS, Agent discovery, and Wrangler dry-run.
 
 ## Coding-agent lifecycle
 
@@ -16,6 +17,8 @@ idle | running | waiting | completed | failed
 ```
 
 Claude Code, Cursor, and Codex lifecycle adapters are available; DSH remains planned. Reporting is fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
+
+Stop, failure, and session-end hooks finalize the latest state as `completed` or `failed` before native-session cleanup. This prevents `waitloop status`, `waitloop open`, and the remote AgentSession from remaining stale `running`/`waiting` after a harness closes.
 
 Codex owns lifecycle command-hook review/trust. `waitloop doctor` checks local/published Waitloop CLI, Codex version/hooks capability, installed Waitloop events, and stable local MCP registration. A Plugin is not required and cannot bypass lifecycle hook trust.
 
@@ -33,12 +36,20 @@ https://waitloop.run/mcp
 
 `agent.json` declares GitHub mirrors of `agent.md` so Agent discovery does not depend on one browser navigation path.
 
-CLI alpha:
+Published CLI alpha:
+
+```text
+0.1.0-alpha.6
+```
+
+Install/update:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop doctor
 ```
+
+The publication was verified from a clean npm installation, including CLI version/help and the installed package's MCP stdio wire protocol.
 
 ## Stable local MCP bridge
 
@@ -57,7 +68,7 @@ waitloop mcp install claude-code
 
 The ordinary lifecycle installers for Codex/Claude Code also install this stable MCP entry.
 
-The local bridge now uses the official MCP v2 stdio server entry, serving both legacy 2025-era MCP clients and 2026-07-28 clients from the same command rather than maintaining a hand-written JSON-RPC protocol loop.
+The local bridge uses the official MCP v2 stdio server entry, serving both legacy 2025-era MCP clients and 2026-07-28 clients from the same command rather than maintaining a hand-written JSON-RPC protocol loop.
 
 Local tools:
 
@@ -176,6 +187,8 @@ Transport timeout never auto-passes, auto-plays, changes Controller, or triggers
 
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
+In fully headless `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control. The automated players may finish the game before the owner reconnects; yield is therefore an explicit handoff rather than a pause primitive.
+
 MCP is request/response participation. It cannot wake an Agent after final response. Continuous-play intent must keep the current Agent run active through `wait_for_turn -> play_move` until the requested stopping condition.
 
 ## Human Web recovery / takeover
@@ -207,14 +220,17 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 80+ unit/regression tests across rules, identity, controller fallback, CLI, and MCP;
+- 85 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, and MCP;
+- lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - local bridge tool/instruction contract and corrective error/redaction behavior;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
+- packaged CLI MCP stdio `initialize -> tools/list -> tools/call` wire validation;
 - headless create -> Join claim -> authenticated MCP connect;
 - active Room pointer and expired cache handling;
 - Codex/Claude MCP installer command/idempotency;
 - wait-for-turn reason/timeout classification;
-- package/onboarding/public-surface consistency.
+- package/onboarding/public-surface consistency;
+- clean npm installation verification during trusted publication.
 
 ## Known gaps
 
