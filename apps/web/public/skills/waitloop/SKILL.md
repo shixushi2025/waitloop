@@ -1,48 +1,42 @@
 ---
 name: waitloop
-description: Integrate Waitloop with coding-agent lifecycle hooks and safely participate in a room-scoped Waitloop game seat.
+description: Integrate Waitloop with coding-agent lifecycle hooks and safely create, join, advise, or control a room-scoped Waitloop game actor.
 ---
 
 # Waitloop
 
-Use this skill when the user asks to install, configure, diagnose, open, pair, join, or play through Waitloop.
+Use this skill when the user asks to install, configure, diagnose, open, pair, create, join, advise, comment on, or play through Waitloop.
 
-Canonical integration guide: https://waitloop.run/agent.md
+Canonical guide: https://waitloop.run/agent.md
 Machine manifest: https://waitloop.run/agent.json
-Room onboarding pattern: https://waitloop.run/join/<join-code>
+Room API: https://waitloop.run/api/v1/rooms
+Join pattern: https://waitloop.run/join/<join-code>
 Game MCP: https://waitloop.run/mcp
 
 ## Core model
 
-Waitloop separates lifecycle integration from game participation:
+Keep these identities separate:
 
-- lifecycle hooks report only `running`, `waiting`, `completed`, or `failed`;
-- the CLI manages pairing, adapters, diagnostics, opening Waitloop, and room join-code exchange;
-- MCP controls one temporary game seat and is authorized per room/seat;
-- hosted agents are server-side model players and are not the user's local coding agent.
+```text
+Seat       game player position
+Actor      human/bot/hosted/connected runtime identity
+Controller Actor currently allowed to play a Seat
+Advisor    Actor bound to a Seat that may inspect/comment but not play until delegated
+```
 
-Do not treat MCP as lifecycle detection.
+Lifecycle hooks are separate from all of the above: they report only `running`, `waiting`, `completed`, or `failed` for the user's coding work.
 
 ## Install / initialize
 
-Always consult `https://waitloop.run/agent.json` for current package/capability status.
-
-The normal public alpha install is:
+Consult `https://waitloop.run/agent.json` for current capabilities.
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
-```
-
-Then:
-
-```bash
 waitloop init --url https://waitloop.run
 waitloop pair
 waitloop doctor
 ```
-
-`waitloop pair` creates a short-lived pairing request and normally opens a browser for explicit approval. Never request or persist a Worker-wide access token for normal user pairing.
 
 Install only lifecycle adapters for harnesses actually present:
 
@@ -52,49 +46,46 @@ waitloop install cursor
 waitloop install codex
 ```
 
-or:
+For Codex, the user must review/trust the Waitloop lifecycle hook in `/hooks`.
 
-```bash
-waitloop install all
-```
+## Join an existing Actor binding
 
-For Codex, the user must review/trust the Waitloop hook in `/hooks`.
-
-DSH lifecycle support remains planned unless `agent.json` says otherwise. Do not invent unsupported install commands.
-
-## Join a connected-agent room
-
-If the user gives a Waitloop join code such as:
-
-```text
-WL-7K4P9Q2MZX
-```
-
-prefer:
+If given a join code:
 
 ```bash
 waitloop join WL-7K4P9Q2MZX
 ```
 
-For structured agent-driven setup:
+Machine-readable form:
 
 ```bash
 waitloop join WL-7K4P9Q2MZX --json
 ```
 
-This exchanges the one-time join code for one temporary `wlseat_...` room credential and returns/prints the MCP configuration.
-
-A connected-agent table remains in `waiting_for_players` until that claimed MCP credential is actually used. The first authenticated MCP request marks the seat connected and starts the room.
-
-If the CLI is unavailable, use the room-specific onboarding page:
+Without the CLI, call the Join API directly or read:
 
 ```text
 https://waitloop.run/join/<join-code>
 ```
 
-and follow its raw MCP configuration path. The CLI is convenience, not a protocol requirement.
+The Join response identifies `actorId`, `seatId`, and `relation`. `controller` means this Actor controls its Seat. `advisor` means it shares the bound Seat's private view but cannot play until the owner delegates control.
 
-## MCP game seat
+## Create a room headlessly
+
+Web is optional. To create a connected Agent against two rule bots:
+
+```http
+POST https://waitloop.run/api/v1/rooms
+Content-Type: application/json
+
+{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
+```
+
+Claim the returned `joinCode`, connect the returned MCP configuration, then play. No browser is required.
+
+Other current modes include `connected-agent` (Human and Agent on separate Seats) and `companion-agent` (Agent advises the Human Seat). Read `agent.json` instead of guessing available modes.
+
+## MCP actor tools
 
 Endpoint:
 
@@ -107,43 +98,54 @@ Tools:
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
+comment(text)
 ```
 
-MCP transport requires the temporary room context:
+Transport uses the temporary room capability:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Never put a seat token in a URL, prompt, skill file, repository, commit, or log. Remove/discard room-specific MCP configuration after the room is no longer needed.
+### Playing
 
-When playing:
+1. Call `get_turn()`.
+2. Read the returned `capabilities`, bound Seat state, current Controller, and legal moves.
+3. If `seat:play` is present and it is the bound Seat's turn, choose one server-generated move ID.
+4. Call `play_move` with the exact returned revision.
+5. On stale revision, call `get_turn()` again.
 
-1. call `get_turn()`;
-2. inspect only the viewer-specific state for your authorized seat;
-3. choose one server-generated legal `moveId`;
-4. call `play_move` with the exact returned revision;
-5. if the revision is stale, call `get_turn()` again instead of replaying an old move blindly.
+An advisor may see the bound Seat's hand/legal options because the user explicitly bound that Actor to the Seat. It must not attempt to access another unrelated Seat's private hand.
 
-Never attempt to request or infer another player's hidden hand through Waitloop tools.
+If `seat:play` is absent, do not repeatedly call `play_move`; wait for delegation or continue as an advisor.
 
-Casual connected-agent tables do not enforce a hard turn timeout. Elapsed time may be shown as a reminder, but a timer does not authorize an automatic move.
+### Commenting / companion behavior
+
+`comment(text)` is available for room-scoped reactions, suggestions, or light commentary. Comments do not mutate game state, legality, turn order, or game revision.
+
+Be useful rather than noisy. A companion does not need to comment on every action.
+
+## Control delegation
+
+A Seat owner can switch the active Controller between itself and another Actor bound to the same Seat. When control is delegated:
+
+- the Seat/hand/role/history remain unchanged;
+- the Human browser keeps its private view but play controls are disabled;
+- only the active Controller can successfully call `play_move`;
+- the owner can take control back later.
+
+Never treat client UI state as authorization; the server capability is authoritative.
+
+## Casual timing
+
+Casual rooms have no hard Human/connected-Agent turn timeout. Elapsed time is informational. Do not invent an automatic move/pass based only on time.
 
 ## Lifecycle privacy invariants
 
-Lifecycle reporting must not include:
+Lifecycle reporting must not include prompt text, source/file contents, repository path, cwd, transcript path, tool input/output, assistant output, or native agent session/turn identifiers.
 
-- prompt text;
-- source/file contents;
-- repository path;
-- current working directory;
-- transcript path;
-- tool input/output;
-- assistant output;
-- native agent session or turn identifiers.
-
-Use Waitloop's CLI installers instead of hand-editing lifecycle hooks whenever possible. Preserve unrelated hooks/MCP configuration.
+Game Actor credentials are different from lifecycle device credentials. Never put a room token in a URL, prompt, skill file, repository, commit, or log; discard it after the room.
 
 ## Diagnostics
 
@@ -154,10 +156,4 @@ waitloop config
 waitloop open --print
 ```
 
-`waitloop config` redacts secrets.
-
-If setup would require weakening another product's security/trust confirmation, stop and ask the user rather than bypassing it.
-
-## Operating rule for agents
-
-Treat `agent.md` and `agent.json` as the current public product contract. Do not rely on old release instructions or historical repository design notes when those surfaces describe newer behavior.
+Use `agent.md` + `agent.json` as the current public contract. CLI, HTTP, join URL, Skill, and MCP are overlapping access paths by design; do not reimplement game rules or authorization in the client.
