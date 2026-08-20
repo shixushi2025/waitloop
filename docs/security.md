@@ -1,121 +1,169 @@
 # Security and privacy
 
-Waitloop sits beside tools that can access source code, terminals, repositories, and credentials. The safest default is to avoid collecting that data at all.
+Waitloop runs beside tools that can access source code, terminals, repositories, credentials, and model context. The safest default is to avoid collecting that data at all and to keep every credential narrowly scoped.
 
 ## Data minimization
 
-The core agent lifecycle protocol needs only:
+The core lifecycle protocol needs only:
 
-- agent kind
-- opaque session ID
-- lifecycle state
-- event ID
-- timestamp
-- optional monotonic sequence
+- agent kind;
+- opaque Waitloop session ID;
+- lifecycle state;
+- event ID;
+- timestamp;
+- optional monotonic sequence.
 
-It does not require:
+It does not require prompts, source code, filenames, repository URLs, working directories, shell commands/output, transcripts, tool payloads, assistant output, model reasoning, or native agent session/turn identifiers.
 
-- prompts
-- source code
-- filenames
-- repository URLs
-- shell commands
-- command output
-- tool arguments
-- model reasoning
-- secrets or environment variables
+First-party integrations must not emit those fields unless a future feature explicitly changes the documented privacy contract.
 
-First-party integrations must not send those fields unless a future feature explicitly documents and obtains a reason to do so.
+## Identifier vs credential
 
-## Identifiers
+Routing/context identifiers are not authorization secrets.
 
-Session, event, room, and player IDs should be opaque and unguessable for public deployments. Do not derive public IDs from local paths, usernames, repository names, or prompt text.
+Examples:
 
-## Authentication phases
+- room ID routes to a `GameRoom` but does not authorize the browser/agent;
+- Waitloop session ID identifies a lifecycle session but is not an account credential;
+- join code is temporary capability material, not the ongoing MCP credential.
 
-### Local alpha
+Do not derive public identifiers from local paths, usernames, repository names, or prompt text.
 
-A local-only developer flow may use a short-lived pairing token or localhost trust boundary for ease of testing.
+## Current credential classes
 
-### Public beta
+### Lifecycle device credential
 
-Before exposing mutating APIs publicly, require authenticated sessions and bind resources to an account/device identity. Mutation endpoints must reject cross-user room/session access.
+`wldev_...`
+
+- issued through browser pairing;
+- scoped to lifecycle reporting (`agent:write`);
+- stored locally by the CLI;
+- server stores only a digest;
+- does not authorize arbitrary game/MCP/browser/admin actions.
+
+### Browser room viewer credential
+
+`wlview_...`
+
+- issued when a public browser game room is created;
+- stored in a room-scoped HttpOnly cookie;
+- server stores only a digest;
+- authorizes that browser's viewer projection/actions for that room;
+- room ID alone is insufficient.
+
+### Connected-agent join code
+
+`WL-...`
+
+- short-lived room-specific capability;
+- can issue one connected-agent seat credential;
+- should not be embedded in source control/logs;
+- after claim, the seat credential—not the join code—is used for MCP.
+
+### MCP seat credential
+
+`wlseat_...`
+
+- authorizes exactly one agent seat in one room;
+- server stores only a digest;
+- supplied in the MCP HTTP `Authorization` header;
+- never a lifecycle/device/account credential;
+- should be discarded when the room is no longer useful.
+
+## Browser pairing
+
+Normal device pairing uses a short-lived pairing request, explicit browser approval, and a verifier kept by the CLI until exchange.
+
+A Worker-wide bootstrap/access token is a development/recovery mechanism, not a normal end-user credential.
 
 ## Durable Object authorization
 
-Durable Object IDs are routing primitives, not authorization. Every request reaching a Durable Object must still carry sufficient verified identity/context to authorize the requested action.
+Durable Object IDs are routing primitives, not authorization. Every mutating/read path must establish the viewer/device/seat authorization appropriate for that resource.
 
 ## Game information isolation
 
 Hidden-information games require explicit viewer-specific projection.
 
-The following invariants are mandatory:
+Mandatory invariants:
 
-- a player cannot request another player's private view
-- legal moves are generated only for the acting player
-- spectators never receive private hands
-- logs do not contain private hands in production by default
-- MCP sees the same information class as the player it represents
+- one player cannot request another player's private view;
+- legal moves are generated only for the acting player;
+- browser human snapshots do not expose the machine-only exhaustive move set;
+- lobby projections do not expose dealt hands or landlord assignment before the connected seat is ready;
+- production logs do not contain private hands by default;
+- MCP sees the same information class as the seat it represents.
 
-## Event replay and staleness
-
-Agent lifecycle events use `eventId` for idempotency and optional `sequence` for source ordering. Game commands use `expectedRevision`.
-
-Reject or ignore:
-
-- duplicate mutation IDs
-- stale sequences
-- stale game revisions
-- moves from the wrong player
-- moves not in the current legal move set
-
-## Adapter behavior
-
-Hooks and adapters must not become a reliability dependency for the coding agent. They should:
-
-- use strict execution/network timeouts
-- fail without blocking the primary agent workflow
-- avoid executing arbitrary server-provided shell code
-- write configuration only with explicit install/update actions
-- validate remote responses before use
+Privacy must be enforced in projection construction, not by deleting fields from serialized internal state.
 
 ## MCP boundary
 
-Treat all MCP tool arguments as untrusted input even when generated by a model.
+MCP tool arguments are untrusted even when generated by a model.
 
-Prefer constrained tools such as:
+The intended model-visible tool surface is:
 
 ```text
-get_turn(roomId)
-play_move(roomId, expectedRevision, moveId)
+get_turn()
+play_move(expectedRevision, moveId)
 ```
 
-rather than arbitrary script execution or raw game-state mutation.
+Room and seat identity are bound through transport headers:
+
+```text
+Authorization: Bearer <wlseat_...>
+X-Waitloop-Room: <room-id>
+```
+
+Do not expose raw game-state mutation, arbitrary script execution, player substitution, or credentials as normal tool arguments.
+
+The first authenticated MCP request for a claimed connected seat is also the readiness signal that allows a waiting connected-agent room to begin.
+
+## Event replay and staleness
+
+Lifecycle events use `eventId` and optional source `sequence`. Game commands use `expectedRevision`.
+
+Reject/ignore as appropriate:
+
+- duplicate mutation/event IDs;
+- stale sequences;
+- stale game revisions;
+- moves from the wrong player;
+- moves not in the current legal move set;
+- invalid/expired/already-claimed join codes;
+- invalid room viewer or MCP seat credentials.
+
+## Adapter behavior
+
+Hooks/adapters must not become a reliability dependency for the coding agent. They should:
+
+- use strict execution/network timeouts;
+- fail without blocking the primary agent workflow;
+- avoid arbitrary server-provided shell execution;
+- write configuration only through explicit install/update actions;
+- validate remote responses before use;
+- preserve unrelated user hooks/configuration.
 
 ## Web security baseline
 
-Public deployment should include:
+Current/future production controls should include:
 
-- HTTPS only
-- restrictive CORS
-- CSRF protections where cookie authentication is used
-- Content Security Policy for the web UI
-- no inline secrets in static assets
-- rate limits on pairing, room creation, event ingest, and MCP mutation
-- bounded request body sizes
-- stable JSON errors without stack traces
+- HTTPS only;
+- restrictive CORS/origin behavior where applicable;
+- CSRF protections for cookie-authenticated mutations;
+- strong Content Security Policy/security headers;
+- no inline/static secrets;
+- bounded request body sizes;
+- stable JSON errors without stack traces;
+- rate limits on pairing, room creation, lifecycle ingest, join claim, MCP mutation, and hosted inference;
+- cost/usage controls for model-backed seats.
 
-## Supply chain
+Rate limiting, broader abuse controls, and additional CSP/security hardening remain active roadmap items.
 
-Keep dependencies intentionally small. Prefer platform APIs and pure TypeScript when a dependency would only save a few lines.
+## Supply chain and CI
 
-CI should eventually include:
+Keep dependencies intentionally small. CI validates frozen installs, TypeScript/tests, repository documentation/Agent-surface invariants, CLI package contents, browser JavaScript, and Worker bundling.
 
-- lockfile integrity
-- typecheck/tests
-- dependency audit or equivalent advisory scanning
-- secret scanning
+Secret/advisory scanning should be added as the public surface grows.
 
-## Reporting
+## Security reporting
 
-Until a dedicated security policy/contact exists, security-sensitive issues should not be filed with exploit details in a public issue. Add a private reporting path before public beta.
+Do not post exploit details in a public issue once a private reporting path exists. A dedicated private reporting/security policy remains part of production hardening.
