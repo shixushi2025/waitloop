@@ -188,7 +188,9 @@ export interface InitializeGameRoomRequest {
 }
 
 const STATE_KEY = "game-room-v1";
-const MAX_AUTOMATED_MOVES = 8;
+// A fully bot-controlled Dou Dizhu table needs at most 54 plays plus at most
+// two passes between plays. 192 leaves headroom while still bounding one DO RPC.
+const MAX_AUTOMATED_MOVES = 192;
 const MAX_COMMENTS = 50;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
