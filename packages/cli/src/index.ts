@@ -9,6 +9,7 @@ import { installClaudeCode, uninstallClaudeCode } from "./claude-code.js";
 import { createConfig, getConfigPath, loadConfig, redactConfig, saveConfig } from "./config.js";
 import { installCodex, readLatestCodexState, runCodexHook, uninstallCodex } from "./codex.js";
 import { installCursor, readLatestCursorState, runCursorHook, uninstallCursor } from "./cursor.js";
+import { fetchPublishedCliDiagnostic, inspectCodexHooks, inspectCodexRuntime } from "./diagnostics.js";
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
 import { commandJoin } from "./join.js";
 import type { LocalTurnState } from "./lifecycle.js";
@@ -16,6 +17,7 @@ import { pairDevice, unpairDevice } from "./pairing.js";
 import { getCliVersion } from "./version.js";
 
 const VERSION = getCliVersion();
+const PUBLIC_WAITLOOP_URL = "https://waitloop.run";
 
 type InstallTarget = "claude-code" | "cursor" | "codex";
 
@@ -129,7 +131,10 @@ async function commandInit(args: string[]): Promise<void> {
     const result = await installTarget(agent.id);
     console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} ${agent.label}`);
     console.log(`  ${result.path}`);
-    if (agent.id === "codex") console.log("  review/trust the new hook in Codex with /hooks");
+    if (agent.id === "codex") {
+      console.log("  Codex requires separate hook review/trust; run `waitloop doctor` for the installed-hook check.");
+      console.log("  Use Codex CLI `/hooks` to review the exact hook definition before it can run.");
+    }
   }
 }
 
@@ -179,6 +184,16 @@ async function checkHealth(url: string): Promise<string> {
 async function commandDoctor(): Promise<void> {
   console.log("waitloop doctor\n");
   const config = await loadConfig();
+  const serverUrl = config?.url ?? PUBLIC_WAITLOOP_URL;
+  const published = await fetchPublishedCliDiagnostic(serverUrl);
+  if (published) {
+    const state = published.version === VERSION ? "current" : `published ${published.version}`;
+    console.log(`cli       ${VERSION} · ${state}`);
+    if (published.version !== VERSION) console.log(`update    ${published.installCommand}`);
+  } else {
+    console.log(`cli       ${VERSION} · update check unavailable`);
+  }
+
   if (!config) {
     console.log(`config    missing · ${getConfigPath()}`);
     console.log("server    not checked");
@@ -189,7 +204,22 @@ async function commandDoctor(): Promise<void> {
     console.log(`pairing   ${config.deviceToken ? "device credential configured" : "not paired"}`);
   }
   console.log("");
-  printAgents();
+  const detections = printAgents();
+
+  const codexDetection = detections.find((item) => item.id === "codex" && item.installed);
+  if (codexDetection) {
+    const [runtime, hooks] = await Promise.all([inspectCodexRuntime(), inspectCodexHooks()]);
+    console.log("\ncodex/");
+    console.log(`  cli      ${runtime.version ?? "detected"}`);
+    console.log(`  hooks    ${runtime.hooksFeature}`);
+    const installed = hooks.installedEvents.length;
+    console.log(`  config   ${installed}/${hooks.installedEvents.length + hooks.missingEvents.length} Waitloop hook events · ${hooks.path}`);
+    if (hooks.missingEvents.length > 0) console.log(`  missing  ${hooks.missingEvents.join(", ")}`);
+    if (runtime.hooksFeature === "unavailable") console.log("  action   update Codex CLI before relying on lifecycle hooks");
+    if (hooks.missingEvents.length === 0) {
+      console.log("  trust    owned by Codex · review the current definition with Codex CLI `/hooks`");
+    }
+  }
 }
 
 function parseInstallTargets(target: string | undefined): InstallTarget[] {
@@ -203,7 +233,10 @@ async function commandInstall(target: string | undefined): Promise<void> {
     const result = await installTarget(item);
     console.log(`${result.changed ? "installed" : "already installed"} ${item}`);
     console.log(result.path);
-    if (item === "codex") console.log("review/trust the new hook in Codex with /hooks");
+    if (item === "codex") {
+      console.log("Codex hook configuration is installed, but Codex still requires review/trust before command hooks run.");
+      console.log("Run `waitloop doctor`, then use Codex CLI `/hooks` to review the current definition.");
+    }
   }
 }
 
@@ -270,6 +303,13 @@ async function main(): Promise<void> {
   }
   if (command === "--version" || command === "-v" || command === "version") {
     console.log(VERSION);
+    return;
+  }
+
+  // Help must always be side-effect free. In particular,
+  // `waitloop install codex --help` must never install a hook.
+  if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+    help();
     return;
   }
 
