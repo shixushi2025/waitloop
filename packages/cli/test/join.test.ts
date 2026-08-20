@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { commandJoin, loadActiveJoinCredential } from "../src/join.js";
+import { claimJoinCredential, commandJoin, loadActiveJoinCredential } from "../src/join.js";
 
 const originalFetch = globalThis.fetch;
 const originalJoinDir = process.env.WAITLOOP_JOIN_DIR;
@@ -87,6 +87,32 @@ describe("waitloop join cache", () => {
       expect(pointer.code).toBe(code);
       expect((await loadActiveJoinCredential())?.roomId).toBe("room-fresh");
       expect(logs.join("\n")).not.toContain(seatToken);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes cancellation into an uncached Join claim", async () => {
+    const root = await mkdtemp(join(tmpdir(), "waitloop-join-abort-"));
+    const code = "WL-23456789AB";
+    process.env.WAITLOOP_JOIN_DIR = root;
+    const controller = new AbortController();
+
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    try {
+      const claim = claimJoinCredential(code, "https://waitloop.run", controller.signal);
+      controller.abort();
+      await expect(claim).rejects.toMatchObject({ name: "AbortError" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
