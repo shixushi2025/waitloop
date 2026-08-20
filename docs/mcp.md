@@ -1,89 +1,101 @@
 # MCP game boundary
 
-Waitloop exposes a remote MCP endpoint at `/mcp` for an agent that occupies one temporary game seat.
+Waitloop exposes a fixed remote MCP endpoint at `/mcp` for one temporary room-scoped **Actor binding**.
 
-MCP is intentionally **not** used to detect whether a coding agent is running. Lifecycle detection belongs to platform adapters/hooks. MCP only lets an already-authorized agent inspect and act on its own game seat.
+MCP is intentionally not lifecycle detection. Lifecycle hooks report coding-agent work state; MCP lets an already-authorized game Actor inspect/play/comment within one room.
 
-## Connected-agent onboarding
+## Seat vs Actor
 
-Connected-agent rooms start in `waiting_for_players` and expose a short-lived human-readable join code such as:
+MCP authenticates an Actor, not an abstract game rule player ID.
 
 ```text
-WL-7K4P9Q2MZX
+Seat = game player position
+Actor = connected runtime identity
+Binding = Actor -> Seat relationship
 ```
 
-Two connection paths are first-class:
+A connected Actor may be:
+
+- `controller` of its own Seat;
+- `advisor` bound to another Actor's Seat.
+
+Both receive only the private projection of their explicitly bound Seat. An advisor does not receive `seat:play` until the Seat owner delegates active control.
+
+## Onboarding and headless use
+
+Join code paths are equivalent entry methods:
 
 ```text
 waitloop join <code>
-raw room-scoped MCP configuration
+POST /api/v1/join/<code>/claim
+https://waitloop.run/join/<code>
 ```
 
-Room-specific instructions are available at:
+The Web page is optional. Agents can create a headless room directly:
 
-```text
-https://waitloop.run/join/<join-code>
+```http
+POST /api/v1/rooms
+Content-Type: application/json
+
+{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
 ```
 
-`/agent.md` remains the stable universal Waitloop integration guide. `/join/<code>` is temporary onboarding for one room.
+Then claim the returned code and connect MCP. `companion-agent` creates an advisor bound to the Human Seat; `connected-agent` creates an independent Agent Seat.
 
-## Join-code and seat lifecycle
-
-A join code is a temporary capability to issue **one** room-scoped seat credential.
-
-Current flow:
+## Join/Actor lifecycle
 
 ```text
 room created
-  -> connected seat waiting
+  -> connected Actor waiting
   -> join code claimed
-  -> wlseat_... credential issued
-  -> seat connecting
+  -> wlseat_... Actor credential issued
+  -> Actor connecting
   -> first authenticated MCP request
-  -> seat connected
+  -> Actor connected
   -> room begins playing
 ```
 
-The join code itself is not the ongoing game credential and should not be used as a tool argument. The room ID is derived independently from the raw code so the public room identifier is not a substitute for the join capability.
+The historical token prefix remains `wlseat_` for compatibility, but its durable meaning is now a room-scoped **Actor capability**. The Actor's Join response includes `actorId`, `seatId`, and `relation`.
 
-## Authentication model
+## Authentication
 
-After claim, every MCP HTTP request carries:
+Every MCP request carries:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-The server stores only a SHA-256 digest of the seat token.
+The server stores only a digest of the raw credential.
 
-Neither the room ID nor the seat token is exposed as a model-visible tool argument. The transport resolves the authenticated seat before constructing the tool surface, so the model cannot ask for another player's view.
-
-A seat token authorizes exactly one player seat in one room. It is not an account/device/lifecycle token and should be discarded when the room ends.
+Room ID and credential are transport/auth context, never model-visible tool arguments. The transport resolves the authenticated Actor and its bound Seat before tools execute.
 
 ## Tools
 
-The tool surface is deliberately small.
+Current surface:
 
-### `get_turn`
-
-Input:
-
-```json
-{}
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
 ```
 
-Returns the authenticated player's viewer-specific machine snapshot, including:
+### `get_turn()`
 
-- role and own hand after the room starts;
-- public remaining-card counts and move history;
-- current player/current trick context;
+Returns the Actor's room snapshot, including:
+
+- `viewerActorId` and `viewerSeatId`;
+- Actor/Seat/binding metadata;
+- capability list;
+- private hand/state of the explicitly bound Seat;
+- public player/card counts and history;
+- current Controller;
 - room revision;
-- server-generated legal move IDs when it is this seat's turn.
+- server-generated legal move IDs when relevant.
 
-It never returns another player's private hand.
+An advisor is intentionally allowed to inspect its bound Seat's hand/legal options. It cannot use this mechanism to request a different unrelated Seat's private view.
 
-### `play_move`
+### `play_move(expectedRevision, moveId)`
 
 Input:
 
@@ -94,35 +106,56 @@ Input:
 }
 ```
 
-The agent must use a `moveId` returned by `get_turn` and the exact associated revision. Stale revisions, out-of-turn calls, and non-legal move IDs are rejected before state mutation.
+A move succeeds only when all are true:
 
-The agent does not submit raw authoritative cards or arbitrary game state.
+- this Actor has `seat:play`;
+- this Actor is the bound Seat's active Controller;
+- it is that Seat's authoritative turn;
+- the revision is current;
+- the move ID is server-generated and legal.
 
-## Why room/seat identity lives in transport headers
+An advisor that has not been delegated control receives `not_active_controller` even if it can see a legal move list.
 
-This is intentionally **not** the tool API:
+### `comment(text)`
 
-```text
-get_turn(roomId, playerId, seatToken)
-play_move(roomId, playerId, seatToken, ...)
+Input:
+
+```json
+{"text":"I would probably pass here."}
 ```
 
-Putting identity/credentials in normal model-visible arguments makes substitution easier and unnecessarily expands the tool schema.
+Comments are a room side channel for advice/reactions. They do not mutate:
 
-The model sees only:
+- game state;
+- game revision;
+- turn order;
+- legal moves.
+
+The current input is trimmed and bounded to 280 characters. Companions should be useful rather than noisy.
+
+## Controller delegation
+
+Controller changes are control-plane operations, currently exposed to the Human Seat owner through the room API/Web UI.
 
 ```text
-get_turn()
-play_move(expectedRevision, moveId)
+Seat owner: Human
+Advisor: connected Agent
+activeControllerActorId: Human
+
+Human delegates
+  -> activeControllerActorId: Agent
+  -> Human retains private view but browser play controls disable
+  -> Agent play_move becomes authorized
+
+Human takes back control
+  -> activeControllerActorId: Human
 ```
 
-while the HTTP transport is already bound to the room and seat.
+Changing Controller never changes the underlying Seat/hand/role/history.
 
 ## Raw MCP configuration
 
-Users/agents without the Waitloop CLI can claim the room through the `/join/<code>` page/API and use the returned room-scoped configuration directly.
-
-Equivalent HTTP MCP configuration:
+Equivalent configuration:
 
 ```json
 {
@@ -131,7 +164,7 @@ Equivalent HTTP MCP configuration:
       "type": "http",
       "url": "https://waitloop.run/mcp",
       "headers": {
-        "Authorization": "Bearer ${WAITLOOP_SEAT_TOKEN}",
+        "Authorization": "Bearer ${WAITLOOP_ACTOR_TOKEN}",
         "X-Waitloop-Room": "${WAITLOOP_ROOM_ID}"
       }
     }
@@ -139,37 +172,41 @@ Equivalent HTTP MCP configuration:
 }
 ```
 
-Do not commit, log, place in a prompt, or persist the raw seat token beyond its room lifetime.
+Do not commit, log, put in prompts, or persist the raw room credential beyond its useful room lifetime.
 
-## CLI path
+## Why identity is outside tool arguments
 
-With the public CLI installed:
+This is intentionally not the API:
+
+```text
+get_turn(roomId, playerId, token)
+play_move(roomId, playerId, token, ...)
+```
+
+The model sees only the constrained gameplay schema. Room/Actor/Seat identity is resolved by the authenticated transport, which prevents model argument substitution from selecting another private view.
+
+## CLI relationship
 
 ```bash
 waitloop join WL-7K4P9Q2MZX
-```
-
-For machine-readable output:
-
-```bash
 waitloop join WL-7K4P9Q2MZX --json
 ```
 
-The CLI performs the same join-code exchange and prints the temporary MCP configuration. It does not change the MCP server protocol.
+The CLI performs the same Join API exchange and prints/caches the temporary MCP configuration. It does not implement game authorization or rules itself.
 
-## Timing and readiness
+## Timing
 
-The first authenticated MCP request is the connected seat readiness signal. Merely creating or claiming the room does not start the table.
+The first authenticated MCP request is readiness. Casual connected Actors have no hard game timeout; elapsed time may be shown but does not authorize forced moves/passes.
 
-Casual Waitloop tables have no hard connected-agent turn timeout. Elapsed time may be displayed as a reminder, but the server does not force a pass/move because a casual timer expired.
+A future Arena/benchmark policy may add hard timing separately.
 
-## Transport/security notes
+## Security invariants
 
-- `/mcp` uses the MCP TypeScript server SDK web-standard HTTP handler.
-- browser `Origin` requests are accepted only when the origin matches the Waitloop endpoint origin.
-- seat authentication happens before the MCP handler exposes the seat tools.
-- tool handlers re-check the seat token against authoritative room state for reads/mutations.
+- browser `Origin` is restricted for MCP HTTP requests;
+- Actor auth happens before MCP tool execution;
+- move/comment handlers re-check room-scoped credential/capability;
+- an advisor can see only the private Seat explicitly granted by its binding;
+- game Actor credentials are narrower than lifecycle device credentials and are never reused for lifecycle ingestion;
 - room IDs are routing/context identifiers, not authorization secrets.
-- seat credentials are narrower than lifecycle device credentials and must never be reused for lifecycle ingestion.
 
-See [`security.md`](security.md) for the complete credential/trust model and [`game-system.md`](game-system.md) for room/seat phases.
+See [`security.md`](security.md) and [`game-system.md`](game-system.md).
