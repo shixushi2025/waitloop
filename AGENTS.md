@@ -151,6 +151,55 @@ Do not weaken a test to make an implementation pass unless the documented contra
 - Keep dependencies minimal and justified.
 - Prefer refactoring a growing responsibility boundary before adding another unrelated branch to a large entry-point file.
 
+## Refactoring cycle
+
+Early implementations are allowed to optimize for proving the product contract. They are not automatically permanent architecture.
+
+Use this loop:
+
+```text
+small correct implementation
+        ↓
+real usage and additional features
+        ↓
+patch pressure becomes visible
+        ↓
+stable responsibilities/patterns emerge
+        ↓
+structural refactor
+        ↓
+strengthen tests + canonical docs
+        ↓
+continue feature work
+```
+
+Do not refactor on a calendar. Refactor when the structure provides evidence that the current boundary is no longer carrying its responsibilities cleanly.
+
+Treat the following as patch-pressure signals:
+
+- the same large file repeatedly gains unrelated branches or mode-specific conditionals;
+- one module owns protocol parsing, authorization, domain state, persistence, and presentation responsibilities at the same time;
+- a new feature must bypass or duplicate an existing abstraction to work;
+- the same validation/state-transition logic is copied into multiple places;
+- changing one concept causes unrelated modules to change because boundaries are implicit;
+- meaningful unit tests become difficult and only end-to-end tests can exercise the behavior;
+- the implementation no longer matches the responsibility boundaries documented in `docs/architecture.md`;
+- a new coding agent needs substantial historical context to understand why a current module is shaped the way it is.
+
+Prefer **local refactoring** during a feature when the behavior and boundary are obvious: extract pure logic, split validation, remove duplication, or isolate a responsibility.
+
+Use a **structural refactor** when module ownership itself has changed: route/runtime/MCP boundaries, persistence models, protocol layers, or large UI state responsibilities. For structural refactors:
+
+1. identify the behavior/contracts that must remain unchanged;
+2. strengthen or add tests around those contracts first;
+3. move responsibilities without mixing unrelated product changes when practical;
+4. update `docs/architecture.md`, `docs/status.md`, and affected canonical docs;
+5. remove obsolete compatibility branches or transitional files once the migration is complete.
+
+Do not abstract after the first occurrence of a pattern. A useful default is: implement the first case directly, tolerate a second while checking whether the concepts are genuinely the same, and extract a shared abstraction once repetition and responsibility are stable.
+
+The goal is not maximum abstraction. The goal is a codebase that can continue changing without each new feature increasing the cost of the next one.
+
 ## Required checks
 
 Before merging a non-trivial change, run or rely on CI for:
