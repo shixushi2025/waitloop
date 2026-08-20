@@ -30,6 +30,7 @@ const agentGuide = read("apps/web/public/agent.md");
 const llms = read("apps/web/public/llms.txt");
 const skill = read("apps/web/public/skills/waitloop/SKILL.md");
 const rootReadme = read("README.md");
+const agents = read("AGENTS.md");
 const docsIndex = read("docs/README.md");
 
 if (cliPackage.name !== "@waitloop/cli") fail("unexpected CLI package name");
@@ -51,12 +52,17 @@ if (manifest.mcp?.endpoint !== "https://waitloop.run/mcp") fail("agent.json MCP 
 if (manifest.mcp?.joinUrlPattern !== "https://waitloop.run/join/<join-code>") fail("agent.json joinUrlPattern is out of sync");
 if (manifest.rooms?.createEndpoint !== "https://waitloop.run/api/v1/rooms") fail("agent.json Room API endpoint is out of sync");
 
-for (const tool of ["get_turn", "play_move", "comment"]) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+for (const tool of ["get_turn", "play_move", "comment", "yield_to_bot", "take_control"]) {
+  requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+}
 for (const mode of ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"]) {
   requireIncludes("agent.json rooms.modes", manifest.rooms?.modes, mode);
 }
 if (manifest.rooms?.headlessAgentMode !== "agent-bots") fail("agent.json headlessAgentMode is out of sync");
 if (manifest.rooms?.companionMode !== "companion-agent") fail("agent.json companionMode is out of sync");
+for (const key of ["seatIds", "roomLifetime", "joinLifetime", "browserIdentity", "recovery"]) {
+  if (typeof manifest.rooms?.[key] !== "string" || manifest.rooms[key].length === 0) fail(`agent.json rooms.${key} is required`);
+}
 
 for (const needle of [
   "https://waitloop.run/agent.json",
@@ -68,6 +74,10 @@ for (const needle of [
   "get_turn()",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
+  "yield_to_bot()",
+  "take_control()",
+  "seat-1",
+  "Actor ID is not a credential",
   "companion-agent",
   "agent-bots",
   "advisor",
@@ -82,8 +92,9 @@ for (const needle of [
   "get_turn()",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
-  "companion-agent",
-  "agent-bots",
+  "yield_to_bot()",
+  "take_control()",
+  "seat-1",
   "Advisor",
 ]) requireText("SKILL.md", skill, needle);
 
@@ -96,12 +107,15 @@ for (const needle of [
   "https://waitloop.run/mcp",
   "npm install -g @waitloop/cli@alpha",
   "agent-bots",
-  "comment(text)",
+  "yield_to_bot()",
+  "take_control()",
 ]) requireText("llms.txt", llms, needle);
 
-for (const needle of ["Seat", "Actor", "Controller", "companion-agent", "agent-bots", "comment(text)"]) {
+for (const needle of ["Seat", "Actor", "Controller", "seat-1", "yield_to_bot()", "take_control()", "credential"]) {
   requireText("README.md", rootReadme, needle);
+  requireText("AGENTS.md", agents, needle);
 }
+
 if (!rootReadme.includes("docs/README.md")) fail("root README must point to the canonical docs index");
 if (rootReadme.includes("docs/game-experience-v2.md")) fail("root README references removed transitional documentation");
 
@@ -139,7 +153,11 @@ for (const path of stableInstallDocs) {
 
 for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/architecture.md", "docs/status.md"]) {
   const content = read(path);
-  for (const needle of ["Seat", "Actor", "advisor"]) requireText(path, content, needle);
+  for (const needle of ["Seat", "Actor", "credential", "seat-1"]) requireText(path, content, needle);
+}
+for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/status.md"]) {
+  const content = read(path);
+  for (const needle of ["yield_to_bot", "take_control"]) requireText(path, content, needle);
 }
 
-console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/Actor/MCP Agent surfaces synchronized.`);
+console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/identity/recovery/MCP Agent surfaces synchronized.`);
