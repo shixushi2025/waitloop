@@ -22,6 +22,16 @@ interface Env extends RoomApiEnv {
   WAITLOOP_INGEST_TOKEN?: string;
 }
 
+interface RoomRateLimitRequest {
+  method: string;
+  headers: {
+    get(name: string): string | null;
+  };
+  clone(): {
+    text(): Promise<string>;
+  };
+}
+
 const DEVICE_REGISTRY_NAME = "registry-v1";
 
 function deviceRegistry(env: Env) {
@@ -141,7 +151,11 @@ async function handleSessionRoute(
   return json({ version: 1, snapshot });
 }
 
-async function enforceRoomCreationRateLimit(request: Request, env: Env, url: URL): Promise<Response | null> {
+async function enforceRoomCreationRateLimit(
+  request: RoomRateLimitRequest,
+  env: Env,
+  url: URL,
+): Promise<Response | null> {
   if (request.method !== "POST" || url.pathname !== "/api/v1/rooms" || isLocalHostname(url.hostname)) return null;
 
   const identity = actorIdentityFromRequest(request);
@@ -150,8 +164,18 @@ async function enforceRoomCreationRateLimit(request: Request, env: Env, url: URL
   const roomLimit = await env.ROOM_CREATE_RATE_LIMITER.limit({ key });
   if (!roomLimit.success) return apiError(429, "rate_limited", "Too many room creation requests. Try again shortly.");
 
-  const parsed = await readJson(request.clone());
-  if (parsed.ok && isRecord(parsed.value) && parsed.value.mode === "hosted-agent") {
+  let mode: unknown = null;
+  try {
+    const text = await request.clone().text();
+    if (text.length <= 16 * 1024) {
+      const parsed: unknown = JSON.parse(text);
+      if (isRecord(parsed)) mode = parsed.mode;
+    }
+  } catch {
+    // The authoritative Room API will report malformed/oversized JSON.
+  }
+
+  if (mode === "hosted-agent") {
     const hostedLimit = await env.HOSTED_ROOM_CREATE_RATE_LIMITER.limit({ key });
     if (!hostedLimit.success) {
       return apiError(429, "rate_limited", "Too many hosted-agent rooms. Try again later.");
