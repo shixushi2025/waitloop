@@ -10,6 +10,8 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.3",
+    "candidateVersion": "0.1.0-alpha.4",
+    "candidatePublished": false,
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -37,18 +39,24 @@
     "modes": ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"],
     "headlessAgentMode": "agent-bots",
     "companionMode": "companion-agent",
+    "seatIds": "stable room-scoped seat-1/seat-2/seat-3 identifiers for the current three-seat game",
     "actorRelations": ["controller", "advisor"],
-    "controlModel": "a Seat is the game player position; Actors bind to seats and only the active controller may play"
+    "controlModel": "a Seat is the game player position; Actors bind to seats and only the active controller may play",
+    "roomLifetime": "24 hours",
+    "joinLifetime": "20 minutes; one-time claim",
+    "browserIdentity": "anonymous persistent Actor ID plus separate HttpOnly credential; no account required",
+    "recovery": "a remembered browser Actor can recover room viewer access; a Seat owner may temporarily yield/replace control with a bot without changing Seat ownership"
   },
   "mcp": {
     "status": "available",
     "endpoint": "https://waitloop.run/mcp",
     "scope": "one game room and one connected actor binding",
-    "tools": ["get_turn", "play_move", "comment"],
+    "tools": ["get_turn", "play_move", "comment", "yield_to_bot", "take_control"],
     "requires": ["Authorization: Bearer <actor-token>", "X-Waitloop-Room: <room-id>"],
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
-    "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control"
+    "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
+    "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
   },
   "integrations": {
     "claude-code": {
@@ -96,6 +104,7 @@
     "forbiddenLifecycleData": ["prompt", "source code", "repository path", "cwd", "transcript", "tool input", "tool output", "assistant output", "native session id"],
     "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
     "gameActorCredentials": "room/actor-scoped; never place in URLs or source control",
+    "browserActorIdentity": "Actor ID is not authorization; the separate anonymous credential is stored in an HttpOnly cookie and only its digest is stored per room",
     "advisorPrivateView": "an advisor sees only the private state of the seat it is explicitly bound to"
   }
 }
