@@ -1,25 +1,23 @@
 # Current implementation status
 
-This document is a compact handoff snapshot of `main`. It describes what is true **now**, not the history of how Waitloop reached this state.
-
-For subsystem details, follow [`README.md`](README.md) in this directory.
+This is the compact handoff snapshot of the current system. It describes durable truth, not implementation history.
 
 ## Deployment
 
-- Production domain: `https://waitloop.run`.
+- Production: `https://waitloop.run`.
 - Cloudflare Worker + Static Assets + Durable Objects.
-- GitHub pushes to `main` are configured to deploy through Cloudflare.
-- CI still runs a Wrangler deployment dry-run before merge.
+- GitHub `main` auto-deploys through Cloudflare.
+- CI independently validates Wrangler dry-run bundling.
 
-## Agent lifecycle
+## Coding-agent lifecycle
 
-Canonical lifecycle states:
+Canonical states:
 
 ```text
 idle | running | waiting | completed | failed
 ```
 
-Available lifecycle adapters:
+Lifecycle adapters:
 
 ```text
 Claude Code   available
@@ -28,179 +26,165 @@ Codex         available
 DSH           planned
 ```
 
-Lifecycle delivery is fail-open and deliberately excludes prompts, source code, repository paths, terminal/tool output, transcripts, assistant output, and native agent session identifiers.
+Lifecycle reporting is fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
 
-Runtime components:
+Runtime components include `AgentSession`, `DeviceRegistry`, `PairingRequest`, scoped `wldev_...` credentials, and explicit browser pairing.
 
-- `AgentSession` Durable Object;
-- `DeviceRegistry` Durable Object;
-- `PairingRequest` Durable Object;
-- scoped `wldev_...` device credentials;
-- short-lived browser pairing with explicit approval.
+## CLI and Agent discovery
 
-## CLI
-
-The public package is:
-
-```text
-@waitloop/cli
-```
-
-Install the current alpha channel with:
+Public CLI channel:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 ```
 
-Supported commands include:
+Important commands include `init`, `pair`, `join`, `install`, `status`, `open`, and `doctor`. Exact package version/capability metadata is authoritative in `packages/cli/package.json` and `apps/web/public/agent.json`.
 
-```text
-init
-pair / unpair
-doctor
-install / uninstall
-status
-open
-config
-join
-hook
-```
-
-`waitloop join <code>` exchanges a one-time connected-agent room code for a temporary room-scoped MCP credential. Exact package version/capability metadata is authoritative in `packages/cli/package.json` and `apps/web/public/agent.json`.
-
-CLI publication uses npm Trusted Publishing / GitHub Actions OIDC. Normal publishing must not depend on a long-lived npm publish token.
-
-## Public Agent discovery
-
-Stable public surfaces:
+Stable Agent surfaces:
 
 ```text
 https://waitloop.run/agent.md
 https://waitloop.run/agent.json
 https://waitloop.run/llms.txt
 https://waitloop.run/skills/waitloop/SKILL.md
+https://waitloop.run/api/v1/rooms
+https://waitloop.run/join/<join-code>
 https://waitloop.run/mcp
 ```
 
-Room-specific onboarding:
+CLI, raw HTTP, Join URL, Skill, and MCP intentionally overlap as access methods; server runtime/rules are shared.
+
+## Game identity model
+
+The current runtime separates:
 
 ```text
-https://waitloop.run/join/<join-code>
+Seat       actual player position/hand/role
+Actor      human | bot | hosted-agent | connected-agent
+Binding    Actor -> Seat relationship
+Controller Actor currently allowed to play the Seat
+Advisor    Actor allowed to inspect/comment on its bound Seat but not play until delegated
 ```
 
-`agent.md` is universal product/integration guidance. `/join/<code>` is temporary room-specific onboarding. `agent.json` is the machine-readable capability manifest.
+Only active Controller has `seat:play`. Seat owner retains `seat:control` and can delegate/take back control. Controller changes never change the Seat's hand, role, history, or ownership.
 
-## Game runtime
+Legacy rooms where participant==player==seat are normalized into this model when read.
 
-Participant types:
+## Current Dou Dizhu room modes
 
 ```text
-Human
-Bot
-Hosted Agent
-Connected Agent
+bots
+hosted-agent
+connected-agent
+companion-agent
+agent-bots
 ```
 
-Current Dou Dizhu table modes:
+Semantics:
 
-```text
-you + 2 bots
-you + configured hosted agent + bot
-you + connected agent + bot
-```
+- `bots`: Human + 2 deterministic bots.
+- `hosted-agent`: Human + configured hosted model + bot.
+- `connected-agent`: Human and connected Agent occupy separate Seats.
+- `companion-agent`: Human + 2 bots; connected Agent is advisor of the Human Seat. It sees that Seat's private hand/legal options, may comment, and cannot play until delegated.
+- `agent-bots`: connected Agent controls its own Seat against 2 bots; create/join/play can be fully headless with no Web UI.
 
-The game is server-authoritative and hidden-information safe:
+Current pre-bidding setup randomly chooses the landlord from the three Seats. Full bidding/scoring is not implemented.
 
-- rules live in `packages/doudizhu`;
-- generic room logic lives outside the Dou Dizhu package;
-- browser humans do not receive exhaustive `legalMoves[]`;
-- hosted/MCP agents select server-generated move IDs;
-- stale and out-of-turn mutations are rejected;
-- browser lobby projection does not expose dealt hands or landlord assignment before a connected-agent seat is ready.
-
-Current pre-bidding Dou Dizhu behavior:
-
-- standard 54-card deck;
-- landlord is chosen randomly from all three seats when the table is prepared;
-- landlord receives the three bottom cards and leads;
-- full bidding/scoring is not implemented yet.
-
-## Connected-agent room flow
-
-Connected-agent tables use a lobby phase:
+## Room and connected Actor lifecycle
 
 ```text
 room created
   -> waiting_for_players
-  -> join code claimed
-  -> seat connecting
+  -> Join code claimed
+  -> connected Actor connecting
   -> first authenticated MCP request
-  -> seat connected
+  -> Actor connected
   -> playing
 ```
 
-Two connection paths are first-class:
+Join response identifies `actorId`, `seatId`, and relation (`controller` or `advisor`). Historical `wlseat_...` token prefix remains, but the credential now represents one room-scoped Actor binding.
 
-```text
-waitloop join <code>
-raw room-scoped MCP configuration
+The Web UI is a Human client, not a prerequisite. Headless Agents can call:
+
+```http
+POST /api/v1/rooms
+
+{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
 ```
 
-MCP tools remain deliberately small:
+then claim the returned Join code and use MCP.
+
+## MCP gameplay
+
+Current tools:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
+comment(text)
 ```
 
-Casual connected-agent tables have no hard turn timeout. The UI shows elapsed waiting/thinking time and can warn that an agent is taking longer than usual, but does not force a move.
+- `get_turn` returns the private view of the Actor's explicitly bound Seat plus capabilities/runtime metadata.
+- `play_move` succeeds only for the active Controller with a current revision and server-generated legal move.
+- `comment` is a bounded side channel and does not change game state, turn, legality, or game revision.
+
+An advisor receives `not_active_controller` until the Seat owner delegates control.
+
+## Human Web experience
+
+Current UI includes:
+
+- stable Seat identity plus separate Controller/runtime status;
+- authoritative TURN marker;
+- current trick + recent game activity;
+- companion comment section separate from game history;
+- `control/ me | agent` for Human Seat delegation/take-back;
+- Human private hand remains visible while delegated, but play/pass/hint controls disable;
+- connected Actor lobby with CLI/Join URL/raw MCP paths;
+- bot action presentation pacing without server sleeps;
+- soft elapsed Agent timing with no forced casual timeout;
+- coding-agent attention pause behavior.
+
+## Hidden-information/security behavior
+
+- browser Human does not receive exhaustive machine `legalMoves[]`;
+- unrelated Seats' private hands are never exposed;
+- an advisor sees only the private Seat it was explicitly bound to;
+- lobby projection hides cards/landlord before connected readiness;
+- stale/out-of-turn/non-controller moves are rejected;
+- Human and Agent cannot simultaneously mutate the same Seat as active controllers.
 
 ## Hosted agents
 
-The Worker can expose hosted DeepSeek and OpenAI players when the relevant secrets are configured.
+Configured DeepSeek/OpenAI seats receive only their Seat projection/legal move IDs. Provider error/invalid output/infrastructure timeout falls back to deterministic legal play.
 
-Hosted agents receive only their viewer-specific game state and server-generated legal moves. Provider failures, invalid selections, or infrastructure timeouts fall back to a deterministic legal move so a hosted request does not permanently block the room.
+## Validation
 
-## Web game experience
-
-The current Dou Dizhu UI is developer-native and includes:
-
-- explicit authoritative `TURN` state;
-- current trick;
-- recent activity history;
-- short presentation pacing for automated actions without sleeping in game/Worker logic;
-- clickable card selection plus play/pass/hint/clear;
-- soft elapsed time for connected agents;
-- linked coding-agent interruption/pause behavior;
-- connected-agent lobby with CLI join, raw MCP, and `/agent.md` help paths.
-
-## Validation required on main
-
-CI currently validates:
+CI validates:
 
 ```text
 frozen pnpm install
 root + CLI TypeScript
 Vitest suite
 repository contract / docs-Agent synchronization
-CLI npm tarball and packaged --version
+CLI npm tarball + packaged --version
 browser JavaScript syntax
-public Agent discovery files
-Wrangler deployment dry-run
+Agent discovery files
+Wrangler dry-run
 ```
 
 ## Known gaps
 
-These are current gaps, not historical TODOs:
-
 - full Dou Dizhu bidding / rob-landlord / scoring;
-- stronger reconnect and disconnected-seat recovery UX;
-- explicit user-controlled replace-with-bot takeover for a stalled/disconnected connected agent;
-- room/join/credential expiry cleanup beyond current join-code expiry behavior;
-- rate limiting and abuse controls for public room creation, pairing, MCP, lifecycle ingest, and hosted inference;
-- hosted-agent cost budgets/quotas before broad public usage;
+- connected Actor reconnect/disconnect and explicit replace-with-bot recovery;
+- a server-side `wait_for_turn`/long-poll mechanism to avoid Agent polling;
+- stable local MCP bridge / automatic harness MCP installation after `waitloop join`;
+- generalized multi-connected-Actor all-ready gating beyond current single joined Actor modes;
+- arbitrary multiple advisors/spectators/commentators and richer relation policy;
+- room/credential cleanup beyond current Join expiry;
+- rate limiting/abuse controls for public room creation, Join, MCP, pairing, lifecycle, comments, and hosted inference;
+- hosted inference budgets/quotas;
 - stronger production CSP/CORS/security hardening;
-- account-backed browser lifecycle-session access/device-management UX if/when accounts are introduced;
 - DSH lifecycle adapter;
 - Arena/benchmark mode.
 
