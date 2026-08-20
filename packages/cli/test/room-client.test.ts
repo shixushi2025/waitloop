@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createAndActivateHeadlessRoom, getActiveRoom } from "../src/room-client.js";
+import type { JoinCredentialV1 } from "../src/join.js";
+import { callRoomTool, createAndActivateHeadlessRoom, getActiveRoom } from "../src/room-client.js";
 
 const originalFetch = globalThis.fetch;
 const originalJoinDir = process.env.WAITLOOP_JOIN_DIR;
@@ -97,5 +98,41 @@ describe("local room client", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("forwards a caller AbortSignal to a read-only remote MCP request", async () => {
+    const controller = new AbortController();
+    const credential: JoinCredentialV1 = {
+      version: 1,
+      code: "WL-23456789AB",
+      roomId: "room-read-cancel",
+      serverUrl: "https://waitloop.run",
+      joinUrl: "https://waitloop.run/join/WL-23456789AB",
+      seatToken: "wlseat_private_test_token",
+      mcp: {
+        type: "http",
+        url: "https://waitloop.run/mcp",
+        headers: {
+          Authorization: "Bearer wlseat_private_test_token",
+          "X-Waitloop-Room": "room-read-cancel",
+        },
+      },
+    };
+
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return jsonResponse({
+        jsonrpc: "2.0",
+        id: "test",
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ version: 1, reason: "timeout" }) }],
+        },
+      });
+    }) as typeof fetch;
+
+    await expect(callRoomTool(credential, "wait_for_turn", { timeoutMs: 1_000 }, controller.signal)).resolves.toEqual({
+      version: 1,
+      reason: "timeout",
+    });
   });
 });
