@@ -129,7 +129,7 @@
 
 .player {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(170px, auto) auto minmax(88px, auto);
+  grid-template-columns: minmax(120px, 1fr) minmax(170px, auto) auto minmax(150px, auto);
   gap: 20px;
   align-items: baseline;
   padding: 11px 13px;
@@ -143,10 +143,22 @@
 }
 
 .player .runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   color: var(--faint);
   text-align: right;
   font-size: 11px;
   letter-spacing: 0.04em;
+}
+
+.seat-fallback-button {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .player.current {
@@ -405,6 +417,10 @@
     display: none;
   }
 
+  .player .runtime {
+    min-width: 140px;
+  }
+
   .control-row {
     align-items: flex-start;
     flex-direction: column;
@@ -447,6 +463,7 @@
 
   .player .runtime {
     grid-column: 2;
+    min-width: 0;
   }
 
   .comment-row {

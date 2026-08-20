@@ -1,8 +1,6 @@
 # Waitloop CLI
 
-The CLI is the local convenience/integration layer between Waitloop and coding agents. It owns local config, device pairing, lifecycle hook installation, diagnostics, opening the current waiting session, and Join-code exchange.
-
-It does **not** own game rules, room authorization, Actor/Seat relationships, or MCP tool semantics; those remain server-side.
+The CLI is the local convenience/integration layer. It owns local config, lifecycle pairing/adapters, diagnostics, and Join exchange. Room/game authority remains server-side.
 
 ## Install
 
@@ -14,7 +12,7 @@ waitloop pair
 waitloop doctor
 ```
 
-Exact published version/capabilities are authoritative in `packages/cli/package.json` and `https://waitloop.run/agent.json`.
+Exact package version/candidate status is authoritative in `packages/cli/package.json` and `agent.json`.
 
 ## Local files
 
@@ -23,35 +21,73 @@ Exact published version/capabilities are authoritative in `packages/cli/package.
 ├── config.json
 ├── joins/
 └── state/
-    ├── claude-code/
-    ├── cursor/
-    └── codex/
 ```
 
-Lifecycle device credentials and game Actor credentials are separate scopes.
+Lifecycle device credentials, cached Room Actor credentials, and browser anonymous Actor credentials are different scopes.
 
-## Commands
+## Join cache
+
+```bash
+waitloop join WL-7K4P9Q2MZX
+waitloop join WL-7K4P9Q2MZX --json
+```
+
+Current Join cache stores the room-scoped credential plus, when returned by the server:
 
 ```text
-waitloop init [--url URL] [--yes]
-waitloop pair [--no-open] [--bootstrap-token TOKEN]
-waitloop join <join-code> [--url URL] [--json]
-waitloop unpair
-waitloop doctor
-waitloop install <claude-code|cursor|codex|all>
-waitloop uninstall <claude-code|cursor|codex|all>
-waitloop status
-waitloop open [--print]
-waitloop config
-waitloop hook <claude-code|cursor|codex>
-waitloop --version
+roomId
+actorId
+seatId
+relation
+roomExpiresAt
+MCP endpoint/headers
 ```
 
-## Pairing / lifecycle adapters
+Human CLI output displays Actor/Seat/relation; `--json` exposes them for an automated harness.
 
-`waitloop pair` creates a short-lived pairing request, normally opens a browser for explicit approval, and stores a scoped `agent:write` device credential locally.
+The raw credential is cached privately under `~/.waitloop/joins/<code>.json` so the same Actor can reconnect while the Room remains active. The Join code itself is one-time and expires much sooner than the Room.
 
-Install only adapters for harnesses actually present:
+A cached MCP credential is not a global Waitloop identity and is not reused for lifecycle reporting.
+
+## Recovery workflow
+
+After an Agent owns/controls a Seat:
+
+```text
+MCP yield_to_bot()
+-> CLI/MCP process may leave
+-> cached room credential remains
+-> reconnect same MCP config
+-> MCP get_turn()
+-> MCP take_control()
+```
+
+Reconnection does not automatically reclaim Controller authority. The explicit `take_control()` step is intentional.
+
+## Headless control plane
+
+CLI is optional. Agents may use raw HTTP:
+
+```text
+POST /api/v1/rooms
+POST /api/v1/join/<code>/claim
+```
+
+then use MCP. `mode:"agent-bots"` is fully headless.
+
+The CLI does not implement Room rules/capability decisions itself.
+
+## Current MCP tools
+
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
+
+## Lifecycle adapters
 
 ```bash
 waitloop install claude-code
@@ -59,63 +95,7 @@ waitloop install cursor
 waitloop install codex
 ```
 
-Codex users must review/trust the Waitloop lifecycle hook in `/hooks`. Waitloop must not bypass that trust step.
-
-Lifecycle delivery is bounded and fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
-
-DSH lifecycle support remains planned unless `agent.json` says otherwise.
-
-## Join a connected Actor
-
-A Join code may represent either an independent Agent controller or an advisor bound to another Seat:
-
-```bash
-waitloop join WL-7K4P9Q2MZX
-```
-
-Structured output:
-
-```bash
-waitloop join WL-7K4P9Q2MZX --json
-```
-
-Current CLI behavior:
-
-1. normalizes the code;
-2. calls the Join API;
-3. exchanges the one-time code for a temporary `wlseat_...` room credential;
-4. caches the room credential under `~/.waitloop/joins` for safe retry;
-5. prints the temporary MCP configuration.
-
-The historical `wlseat_` prefix remains, but the server now treats it as one room-scoped **Actor binding**. The raw Join API response contains `actorId`, `seatId`, and relation (`controller` or `advisor`). The Agent can also inspect its exact capabilities through MCP `get_turn()`.
-
-The existing CLI binary intentionally does not reimplement the relationship/capability rules.
-
-## CLI is optional for game participation
-
-Agents may instead:
-
-```text
-POST /api/v1/rooms
-POST /api/v1/join/<code>/claim
-POST /mcp
-```
-
-For example `mode: "agent-bots"` creates a fully headless Agent + 2 bot room with no browser dependency. The CLI is convenience, not the control-plane authority.
-
-## Game MCP is separate
-
-Current tools:
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-comment(text)
-```
-
-Installing lifecycle hooks does not globally install a playable room Actor. Each game capability remains temporary and room-scoped.
-
-An advisor can inspect its explicitly bound Seat and call `comment`, but cannot successfully `play_move` until the Seat owner delegates active control.
+Codex users must review/trust the lifecycle hook in `/hooks`. Lifecycle delivery stays fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
 
 ## Diagnostics
 
@@ -126,18 +106,14 @@ waitloop config
 waitloop open --print
 ```
 
-`waitloop config` redacts secrets. `status` reads adapter-local lifecycle state. `open` prefers running/waiting coding-agent work.
+## Not implemented yet
 
-## Future CLI/runtime work
+- stable local MCP bridge / automatic harness MCP configuration after Join;
+- `wait_for_turn`/long-poll integration;
+- automatic removal of temporary local MCP config at Room end.
 
-Not implemented yet:
+Do not describe those as current behavior.
 
-- stable local MCP bridge / automatic Codex/Claude/Cursor MCP configuration after Join;
-- server-side `wait_for_turn` integration;
-- automatic cleanup of temporary MCP config when a room ends.
+## Maintenance
 
-Do not describe these as current CLI behavior.
-
-## Maintenance rule
-
-When CLI/Join behavior changes, inspect/update CLI tests/readme, this doc, `agent.md`, `agent.json`, Skill, `llms.txt`, MCP/protocol docs, and release docs if packaging changes. `pnpm check:repo-contract` enforces a subset of those invariants.
+CLI/Join changes require synchronized CLI package docs, public Agent surfaces, MCP/protocol/security docs, release metadata, and package validation. `pnpm check:repo-contract` enforces key cross-file invariants.

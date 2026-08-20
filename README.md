@@ -2,15 +2,13 @@
 
 **Tiny games while your coding agent runs.**
 
-Waitloop is a developer-native waiting layer for coding agents. It gives short waits somewhere to go, then gets out of the way as soon as coding work needs attention.
-
 ```ts
 while (agent.running) {
   waitloop();
 }
 ```
 
-Waitloop is not an engagement/casino product.
+Waitloop is a developer-native waiting layer, not an engagement/casino product. Coding work always has priority.
 
 ## Agent entrypoints
 
@@ -24,9 +22,7 @@ https://waitloop.run/join/<join-code>
 https://waitloop.run/mcp
 ```
 
-`agent.md` is the stable guide; `agent.json` is machine-readable capability truth; Room/Join HTTP is the control plane; MCP is room-scoped gameplay. Web is optional for Agent-only operation.
-
-Repository-editing agents must follow [`AGENTS.md`](AGENTS.md) and [`docs/README.md`](docs/README.md).
+Room/Join HTTP is the control plane; MCP is room-scoped gameplay. Web is optional for Agent-only operation.
 
 ## CLI
 
@@ -35,45 +31,25 @@ npm install -g @waitloop/cli@alpha
 waitloop init --url https://waitloop.run
 waitloop pair
 waitloop doctor
-```
-
-Join an existing connected Actor capability:
-
-```bash
 waitloop join WL-XXXXXXXXXX
 ```
 
-CLI is convenience, not a protocol requirement; Agents may use raw HTTP + MCP directly.
+The CLI caches room Actor context/credential for reconnect; raw HTTP + MCP remains equally valid.
 
-## Game model
-
-Waitloop separates game identity from runtime control:
+## Game identity
 
 ```text
-Seat       actual player position / hand / role
+Room       one active game runtime
+Seat       stable game position (`seat-1`, `seat-2`, `seat-3`)
 Actor      Human | Bot | Hosted Agent | Connected Agent
-Binding    Actor -> Seat relationship
-Controller Actor currently allowed to play the Seat
-Advisor    Actor allowed to inspect/comment on its bound Seat but not play until delegated
+Binding    Actor -> Seat
+Controller Actor currently allowed to play
+Advisor    bound Actor that may inspect/comment but not play until delegated
 ```
 
-This enables three distinct Agent relationships without adding game-specific hacks:
+Seat/Actor IDs are identifiers, not credentials.
 
-```text
-independent player
-  Human Seat + Agent Seat + Bot Seat
-
-companion
-  Human owns Seat
-  Agent advises same Seat
-  Human may delegate/take back control
-
-headless Agent
-  Agent Seat + 2 bots
-  HTTP + Join + MCP only, no browser
-```
-
-Current Dou Dizhu room modes:
+Current modes:
 
 ```text
 bots
@@ -83,68 +59,65 @@ companion-agent
 agent-bots
 ```
 
-The server owns rules, hidden information, Actor capabilities, current Controller, and revisions. Human/Agent clients do not duplicate game authorization.
+`companion-agent` lets an Agent see/advise the Human Seat and optionally take delegated control. `agent-bots` is fully headless.
+
+## Recovery / takeover
+
+Human browsers receive a persistent anonymous Actor identity plus a separate secret credential; no account/database is required for one-Room recovery. If the shorter room viewer cookie is lost, the remembered Actor can recover room access while the Room is active.
+
+Eligible Seats can explicitly use a temporary Bot Controller without changing Seat owner, hand, role, or history.
+
+Connected Seat owners can:
+
+```text
+yield_to_bot()
+... leave / reconnect with cached room credential ...
+take_control()
+```
+
+Reconnect never silently steals control back. Casual elapsed time never forces takeover.
 
 ## MCP
-
-Current tools:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 comment(text)
+yield_to_bot()
+take_control()
 ```
 
-An advisor sees only its explicitly bound Seat's private view. `play_move` is rejected until that Actor becomes active Controller. Comments are a side channel and never alter game revision, turn order, or legality.
+Game rules, hidden information, current Controller, and revision checks remain server-side.
+
+## Safety baseline
+
+Current runtime includes:
+
+- 16 KiB JSON body limit;
+- Cloudflare native room-creation rate limiting and tighter hosted-room limit;
+- per-Room/per-Actor Join/MCP/comment/control/recovery limits;
+- one-time ~20 minute Join codes;
+- ~24 hour active Room lifetime;
+- hashed credentials at rest;
+- capability checks for Room/Seat mutations.
+
+No global database/account layer is required yet. Cross-device identity/history can be added later if product needs justify a global index.
 
 ## Current implementation
 
-The repository includes:
+Also included:
 
-- canonical coding-agent lifecycle state + `AgentSession` Durable Objects;
-- Claude Code, Cursor, and Codex lifecycle adapters;
-- scoped browser/device pairing;
-- public CLI + npm Trusted Publishing/OIDC;
-- server-authoritative Dou Dizhu engine/runtime;
-- deterministic bots and configurable hosted DeepSeek/OpenAI seats;
-- Actor/Seat/controller/advisor runtime model;
-- Human-to-Agent Seat delegation and take-back;
-- companion comments/advice;
-- fully headless Agent + two-bot room creation;
-- connected Actor Join codes and fixed room-scoped MCP endpoint;
-- Human-safe browser projection without exhaustive machine legal moves;
-- random landlord until full bidding is implemented;
-- current trick/activity/presentation pacing and soft Agent elapsed timing;
-- GitHub `main` -> Cloudflare automatic deployment;
-- strict CI + repository-contract synchronization checks.
+- canonical lifecycle states with Claude Code/Cursor/Codex adapters;
+- scoped device pairing;
+- deterministic bots + configurable hosted DeepSeek/OpenAI Seats;
+- server-authoritative Dou Dizhu with random landlord until bidding is implemented;
+- Human-safe browser projection, current trick/activity, companion comments, and presentation pacing;
+- GitHub `main` -> Cloudflare auto deployment;
+- strict CI and repository-contract synchronization.
 
-Current details/gaps: [`docs/status.md`](docs/status.md).
+See [`docs/status.md`](docs/status.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/README.md`](docs/README.md).
 
-## Product principles
-
-- **Work comes first.** Coding-agent waiting/completed/failed state outranks the game.
-- **Developer-native.** Quiet, keyboard-friendly, low-chrome UI.
-- **Minimal lifecycle data.** No prompt/source/tool/transcript content required.
-- **Server-authoritative.** Rules, hidden information, revisions, and Actor capabilities remain server-side.
-- **Client-neutral control plane.** Web, CLI, and Agent HTTP converge on the same room runtime.
-- **MCP is participation, not lifecycle detection.** Lifecycle hooks report work; MCP interacts with one temporary room Actor.
-
-## Architecture
-
-```text
-coding agents -> integrations -> lifecycle protocol -> AgentSession DO
-
-Web / CLI / Agent HTTP -> Room + Join control plane -> GameRoom DO
-Connected Agent       -> MCP gameplay plane -------> GameRoom DO
-Hosted model          -> hosted runner ------------> GameRoom DO
-Human Web             -> human room API -----------> GameRoom DO
-```
-
-See [`docs/architecture.md`](docs/architecture.md).
-
-## Documentation
-
-Start with [`docs/README.md`](docs/README.md). `main` documents current durable truth, not implementation chronology. Transitional design notes are removed after their durable decisions are extracted.
+Repository-editing Agents must follow [`AGENTS.md`](AGENTS.md).
 
 ## Local development
 
@@ -156,12 +129,10 @@ pnpm check:cli-package
 pnpm dev
 ```
 
-CI also validates browser JavaScript and Wrangler deployment bundling.
-
 ## Domain
 
 **https://waitloop.run**
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT.

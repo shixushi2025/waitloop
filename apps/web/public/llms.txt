@@ -1,6 +1,6 @@
 # Waitloop
 
-> Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; games fill short waits; work immediately takes priority again when the agent needs attention.
+> Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; games fill short waits; work takes priority again when the agent needs attention.
 
 Canonical agent integration guide: https://waitloop.run/agent.md
 Machine-readable manifest: https://waitloop.run/agent.json
@@ -12,10 +12,14 @@ CLI alpha install: npm install -g @waitloop/cli@alpha
 Health: https://waitloop.run/api/v1/health
 Source: https://github.com/shixushi2025/waitloop
 
-Important model: a game Seat is distinct from an Actor. An Actor may control a Seat or advise a Seat. Advisors may inspect their explicitly bound Seat and comment but cannot play until the Seat owner delegates control.
+Seat and Actor are separate. New Dou Dizhu rooms use stable room-scoped Seat IDs. Actor ID is not a credential. Controllers play; Advisors may inspect/comment on the one Seat they are explicitly bound to.
 
-Agents do not need the Web UI. Headless Agent + 2 bot rooms can be created with `POST /api/v1/rooms` using mode `agent-bots`, then joined through the returned code and controlled through room-scoped MCP.
+Web is optional. A headless Agent can `POST /api/v1/rooms` with mode `agent-bots`, claim the returned Join code, then use MCP.
 
-Current MCP tools: get_turn(), play_move(expectedRevision, moveId), comment(text).
+Current MCP tools: get_turn(), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
 
-Lifecycle hooks and game MCP are separate. Hooks report running/waiting/completed/failed; game credentials are temporary room/Actor capabilities.
+`yield_to_bot()` temporarily delegates an owned Seat to a deterministic Bot without changing Seat/hand/role/history. The cached room credential can reconnect; `take_control()` explicitly restores the owner. Casual fallback is never triggered solely by elapsed time.
+
+Join codes are one-time and short-lived; rooms also expire. Human browser sessions use a persistent anonymous Actor ID plus a separate HttpOnly credential to recover room access without requiring an account.
+
+Lifecycle hooks and game MCP remain separate security scopes.

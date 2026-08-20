@@ -1,56 +1,58 @@
 # Security and privacy
 
-Waitloop runs beside tools that can access source code, terminals, repositories, credentials, and model context. The safest default is to avoid collecting that data and keep every credential/capability narrowly scoped.
+Waitloop runs beside tools that can access source code, terminals, credentials, and model context. Default policy is data minimization plus narrowly scoped capabilities.
 
-## Lifecycle data minimization
+## Lifecycle privacy
 
-Lifecycle reporting needs only agent kind, opaque Waitloop session ID, lifecycle state, event ID, timestamp, and optional source ordering.
+Lifecycle reporting does not require prompts, source, repository path, cwd, transcript, tool input/output, assistant output, reasoning, or native Agent session IDs.
 
-It does not require prompts, source code, filenames, repository URLs, cwd, commands/output, transcripts, tool payloads, assistant output, reasoning, or native agent session/turn IDs.
+Lifecycle credentials are separate from game credentials.
 
-Game participation is a separate authorization domain.
+## Identifier is not credential
 
-## Identifier vs credential
+These grant no authority by themselves:
 
-Routing/context identifiers are not authorization secrets:
+```text
+Room ID
+Seat ID
+Actor ID
+Waitloop lifecycle session ID
+```
 
-- room ID routes to a `GameRoom` but grants no room capability;
-- Waitloop session ID identifies lifecycle state but grants no account authority;
-- Join code is one-time capability material, not ongoing MCP authorization;
-- Seat ID identifies a game position but grants no permission to inspect/control it.
+That includes concrete current Seat identifiers such as `seat-1`, `seat-2`, and `seat-3`: knowing one never proves ownership or grants private-view/play rights.
 
-## Credential classes
+Current credential/capability classes:
 
-### Lifecycle device credential — `wldev_...`
+- `wldev_...` — lifecycle device credential;
+- `wlview_...` — one Room Human viewer credential;
+- `WL-...` — short-lived one-time Join capability;
+- `wlseat_...` — room-scoped connected Actor credential (historical prefix);
+- `wla_...` — persistent anonymous browser Actor credential.
 
-Scoped to lifecycle reporting (`agent:write`). It never authorizes game/MCP/browser/admin actions.
+Raw credentials are never stored as Room authorization state; digests are stored.
 
-### Browser room viewer credential — `wlview_...`
+## Anonymous browser Actor identity
 
-Stored as a room-scoped HttpOnly cookie. It authenticates the Human Actor/viewer for that room. Room ID alone is insufficient.
+A Human browser may receive:
 
-### Join code — `WL-...`
+```text
+actor_<opaque ID>
+wla_<secret credential>
+```
 
-Short-lived capability that may issue one connected **Actor** credential. The Join response identifies the Actor's bound Seat and relation (`controller` or `advisor`).
+combined inside an HttpOnly `SameSite=Lax` cookie. The secret is not placed in URLs. A Room stores only its digest for that Actor.
 
-### Game Actor credential — historical prefix `wlseat_...`
+If `wl_room_...` is missing, the browser can recover a fresh room viewer credential only when both Actor ID and secret validate against that Room.
 
-The prefix remains for compatibility, but the durable meaning is now one room-scoped Actor binding, not necessarily an independently owned player Seat.
+The Actor ID alone is intentionally useless for takeover. This is browser/device-local anonymous identity, not a cross-device account.
 
-- server stores only a digest;
-- supplied in MCP `Authorization` header;
-- may represent a controller or advisor;
-- never reusable as lifecycle/account/device authority;
-- discard after the room.
-
-## Seat/Actor capability model
-
-Game authorization is based on Actor binding/capabilities rather than client type.
+## Seat / Actor authorization
 
 Relevant capabilities:
 
 ```text
 room:view-public
+room:manage
 seat:view-private
 seat:inspect-legal
 seat:play
@@ -58,105 +60,109 @@ seat:control
 room:comment
 ```
 
-Security consequences:
+- Room owner gets `room:manage`.
+- Seat owner gets `seat:control`.
+- only active Controller gets `seat:play`.
+- Advisor private-view grant applies only to the Seat explicitly named by its binding.
+- temporary Bot takeover changes Controller, not ownership.
 
-- only the active Controller receives `seat:play`;
-- only the Seat owner receives `seat:control`;
-- an advisor may receive `seat:view-private` and `seat:inspect-legal` for the **single Seat it was explicitly bound to**;
-- an advisor must not gain another unrelated Seat's private view;
-- switching Controller changes authorization only; it does not transfer ownership or alter game state;
-- browser button state is never treated as authorization.
+## Temporary Bot takeover / recovery
 
-## Advisor private-view consent
+Eligible Seat owners or Room owner may explicitly replace an eligible Seat Controller with a deterministic temporary Bot.
 
-`companion-agent` explicitly creates an advisor binding to the Human Seat. That binding is the user's authorization for the Agent to see that Seat's hand/legal options.
+Security invariants:
 
-The runtime must not generalize this permission into spectator-wide hidden information. Tests should cover that advisors cannot select another Seat/private projection.
+- native Bot Seat cannot be re-replaced through this mechanism;
+- temporary Bot gets no `seat:control` ownership power;
+- original owner stays unchanged;
+- connected owner must reconnect before browser-side restore;
+- reconnect itself never steals Controller authority;
+- connected Seat owner explicitly uses `take_control()`;
+- stale move revision checks remain active throughout.
 
-## Human control delegation
+This prevents simultaneous Human/Agent/Bot controller races.
 
-When the Human owner delegates control:
+## Hidden information
 
-- Human keeps its own private Seat view;
-- Human play/pass/hint endpoints reject mutation because `seat:play` is absent;
-- connected Agent `play_move` becomes authorized only after it is active Controller;
-- Human can take control back through owner-authorized control-plane mutation;
-- concurrent/stale actions remain protected by room revision.
+- construct projections from allowed fields; never serialize internal state then redact;
+- unrelated Seat hands never leave server;
+- lobby hides dealt cards/landlord before connected readiness;
+- Human browser projection omits exhaustive `legalMoves[]`;
+- connected Actor gets only bound Seat private view;
+- temporary Bot is server-internal and receives authoritative Seat legal moves only.
 
-This prevents Human and Agent from racing the same Seat as simultaneous controllers.
+## Join / Room lifetime
 
-## Hidden-information projection
+Current new-Room baseline:
 
-Mandatory invariants:
+```text
+Join code      ~20 minutes, one-time claim
+Room           ~24 hours
+room Actor credential reconnectable only while Room is active
+```
 
-- internal state is never serialized then redacted as a privacy mechanism;
-- unrelated Seats' private hands are never returned;
-- lobby Human projection hides dealt cards/landlord before connected readiness;
-- browser Human projection omits exhaustive machine legal moves;
-- machine Actor projection is derived from its bound Seat only;
-- production logs should not contain private hands by default.
+Expiry is a security boundary, not merely UI metadata. Expired Room state is lazily removed on access.
+
+## Rate limiting / request bounds
+
+Current safeguards:
+
+- JSON bodies capped at 16 KiB;
+- Cloudflare native room creation limit: 30/min per remembered Actor, falling back to connection IP for anonymous/headless callers;
+- hosted-agent room create: tighter 5/min limit;
+- per-GameRoom Join claim attempts;
+- per-Actor MCP connect/read/move/comment/control limits;
+- per-Actor Human viewer mutation/control/recovery limits.
+
+The Cloudflare Rate Limiting binding is deliberately treated as permissive abuse protection, not accurate quota/accounting. Hosted inference still needs explicit cost budgets before broad public exposure.
 
 ## MCP boundary
 
-MCP identity is transport-bound:
+Transport:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Model-visible tools:
+Tools:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 comment(text)
+yield_to_bot()
+take_control()
 ```
 
-Do not expose room/Actor/Seat substitution or raw credentials as normal tool arguments.
+Room/Seat/Actor substitution is not model-visible input. All tool handlers re-resolve the authenticated Actor and check capabilities.
 
-`play_move` re-checks active Controller capability and room revision. `comment` is bounded and writes only a side channel; it must not change game revision/turn/legality.
+`yield_to_bot` and `take_control` are explicit owner actions; Casual elapsed time does not authorize them automatically.
 
-## Client-neutral Room API
+## HTTP control plane
 
-Web is not a required trust boundary for Agent use. Headless Agents may call `POST /api/v1/rooms`, claim a Join capability, and use MCP directly.
+Because Web is optional, security must be server-side for:
 
-Therefore security/rate limits must live at HTTP/DO boundaries, not only in Web UI affordances.
+```text
+POST /api/v1/rooms
+Join claim
+/control
+/fallback
+Human play/pass/hint
+```
 
-Public room creation and Join claim are current alpha surfaces; rate limiting/abuse controls remain required before broad public exposure.
+Browser button visibility is never authorization.
 
-## Event replay and staleness
+## Remaining hardening
 
-Reject/ignore as appropriate:
+Still future work:
 
-- duplicate lifecycle mutation IDs;
-- stale source sequences;
-- stale game revisions;
-- moves from non-active Controllers;
-- out-of-turn/illegal moves;
-- control delegation by non-owners;
-- delegation to an Actor not bound to the same Seat;
-- delegation to a disconnected connected Agent;
-- invalid/expired/already-claimed Join codes;
-- invalid viewer/Actor credentials;
-- invalid/oversized comments.
+- lifecycle/pairing-specific rate limits;
+- hosted inference budgets/quotas and accounting;
+- stronger CSP/CORS/security headers review;
+- private vulnerability reporting path;
+- explicit retention/cleanup observability;
+- more persisted-schema migration/recovery tests;
+- account/cross-device identity only if product needs it.
 
-## Adapter behavior
-
-Lifecycle hooks/adapters must use bounded timeouts, fail open with respect to coding work, preserve unrelated configuration, and never weaken host-agent trust/security settings.
-
-## Web/API security baseline
-
-Production controls should include HTTPS, restrictive CORS/origin behavior, CSRF protections for cookie mutations, CSP/security headers, bounded bodies, stable errors, and rate limits for pairing, room create, Join claim, MCP, lifecycle ingest, control delegation, comments, and hosted inference.
-
-Model-backed seats additionally need cost/usage budgets.
-
-## Supply chain and CI
-
-CI validates frozen installs, strict TypeScript/tests, repository-contract synchronization, CLI package contents, browser JavaScript, and Worker dry-run bundling. Security-sensitive Actor/Seat changes require capability and hidden-information regression tests.
-
-Secret/advisory scanning should expand as the public surface grows.
-
-## Security reporting
-
-A dedicated private security reporting path remains part of production hardening; public issues should not become the place for exploit details once that path exists.
+CI continues to validate strict typing/tests, repository contract, browser JS, CLI package, and Worker dry-run.

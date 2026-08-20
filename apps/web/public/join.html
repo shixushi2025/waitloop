@@ -22,7 +22,7 @@
       <section class="join-intro">
         <p class="eyebrow">connected actor / room join</p>
         <h1>Join the<br />table.</h1>
-        <p class="lede">A connected actor may control its own seat or advise another seat. This URL is room-specific; the stable integration guide remains <a href="/agent.md">/agent.md</a>.</p>
+        <p class="lede">A connected actor may control its own seat or advise another seat. Actor/Seat IDs are context, not credentials. The stable integration guide remains <a href="/agent.md">/agent.md</a>.</p>
       </section>
 
       <section class="terminal join-terminal">
@@ -39,6 +39,8 @@
             <dt>relation</dt><dd id="join-relation">-</dd>
             <dt>seat</dt><dd id="join-seat">-</dd>
             <dt>actor</dt><dd id="join-actor">-</dd>
+            <dt>join expires</dt><dd id="join-expires">-</dd>
+            <dt>room expires</dt><dd id="room-expires">-</dd>
           </dl>
 
           <div class="rule" aria-hidden="true"></div>
@@ -49,13 +51,13 @@
               <code id="join-command">waitloop join WL-XXXXXXXXXX</code>
               <button class="text-button" id="copy-command" type="button">copy</button>
             </div>
-            <p class="join-note">Run this from the agent environment. It claims one room-scoped actor credential and prints the fixed Waitloop MCP endpoint with this room's headers.</p>
+            <p class="join-note">The Join code is short-lived and one-time. The claimed room Actor credential can reconnect while the Room remains active.</p>
           </section>
 
           <section class="join-section">
             <p class="section-label">without_cli/</p>
             <button class="text-button" id="claim-mcp" type="button">claim raw MCP configuration</button>
-            <p class="join-note">No browser is required for agents that can call the Join API directly. This button is an optional human-friendly fallback.</p>
+            <p class="join-note">No browser is required for an Agent that can call the Join API directly. This button is only a human-friendly fallback.</p>
             <div id="raw-config-wrap" hidden>
               <div class="config-head">
                 <span>temporary room capability · do not commit</span>

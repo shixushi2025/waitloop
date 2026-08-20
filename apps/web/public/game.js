@@ -174,6 +174,10 @@ function actorLabel(current, actorId) {
   return actorFor(current, actorId)?.label ?? actorId;
 }
 
+function canManageRoom(current) {
+  return Array.isArray(current?.capabilities) && current.capabilities.includes("room:manage");
+}
+
 function updateUrl() {
   const url = new URL(window.location.href);
   if (roomId) url.searchParams.set("room", roomId);
@@ -237,6 +241,7 @@ function promptFor(current) {
       const elapsed = formatElapsed(current.turnStartedAt);
       return `${controller.label} controls your seat${elapsed ? ` · ${elapsed}` : ""}`;
     }
+    if (controller?.temporary === true) return "temporary bot controls your seat · restore owner when ready";
     return "your seat is delegated";
   }
   if (controller?.kind === "connected-agent") {
@@ -245,6 +250,7 @@ function promptFor(current) {
     return `${controller.label} turn${elapsed ? ` · ${elapsed}` : ""}${slow ? " · taking a little longer" : ""}`;
   }
   if (controller?.kind === "hosted-agent") return `${controller.label} is thinking`;
+  if (controller?.temporary === true) return `${seatLabel(current, current.currentPlayerId)} · temporary bot moving`;
   return `${seatLabel(current, current.currentPlayerId)} is moving`;
 }
 
@@ -260,6 +266,9 @@ function playerRuntimeText(current, seatId) {
     return "READY";
   }
 
+  if (controller?.temporary === true) {
+    return current.currentPlayerId === seatId ? "TURN · BOT TAKEOVER" : "BOT TAKEOVER";
+  }
   const controlledBy = controller ? actorLabel(current, controller.id) : "unknown";
   if (current.currentPlayerId === seatId && controller?.kind === "connected-agent") {
     const elapsed = formatElapsed(current.turnStartedAt);
@@ -269,6 +278,28 @@ function playerRuntimeText(current, seatId) {
   if (current.currentPlayerId === seatId) return `TURN · ${controlledBy}`;
   if (controller?.kind === "connected-agent" && state?.status === "connected") return `CONTROL · ${controlledBy}`;
   return controlledBy === seatLabel(current, seatId) ? "READY" : `CONTROL · ${controlledBy}`;
+}
+
+function managementActionForSeat(current, seatId) {
+  if (!canManageRoom(current) || phaseOf(current) === "waiting_for_players") return null;
+  const seat = seatDescriptor(current, seatId);
+  if (!seat) return null;
+  const owner = actorFor(current, seat.ownerActorId);
+  const controller = controllerActorForSeat(current, seatId);
+  if (owner?.kind !== "human" && owner?.kind !== "connected-agent") return null;
+  if (controller?.temporary === true) {
+    const ownerState = actorStateFor(current, owner.id);
+    return {
+      action: "owner",
+      label: owner.kind === "connected-agent" ? "restore agent" : "restore owner",
+      disabled: owner.kind === "connected-agent" && ownerState?.status !== "connected",
+    };
+  }
+  return {
+    action: "bot",
+    label: seatId === viewerSeatId(current) ? "let bot play" : "replace with bot",
+    disabled: false,
+  };
 }
 
 function renderPlayers(current) {
@@ -289,7 +320,7 @@ function renderPlayers(current) {
 
     const role = document.createElement("span");
     role.className = "role";
-    const kind = controller?.kind ?? "player";
+    const kind = controller?.temporary === true ? "temporary-bot" : controller?.kind ?? "player";
     role.textContent = waiting ? `pending · ${kind}` : `${player.role} · ${kind}`;
     if (seat?.ownerActorId && seat.ownerActorId !== seat.activeControllerActorId) {
       role.title = `seat owner: ${actorLabel(current, seat.ownerActorId)}`;
@@ -301,7 +332,21 @@ function renderPlayers(current) {
 
     const runtime = document.createElement("span");
     runtime.className = "runtime";
-    runtime.textContent = playerRuntimeText(current, player.id);
+    const runtimeState = document.createElement("span");
+    runtimeState.textContent = playerRuntimeText(current, player.id);
+    runtime.append(runtimeState);
+
+    const manage = managementActionForSeat(current, player.id);
+    if (manage) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "text-button seat-fallback-button";
+      button.textContent = manage.label;
+      button.disabled = manage.disabled;
+      if (manage.disabled) button.title = "seat owner must reconnect first";
+      button.addEventListener("click", () => void setSeatFallback(player.id, manage.action));
+      runtime.append(button);
+    }
 
     row.append(name, role, count, runtime);
     playersElement.append(row);
@@ -394,7 +439,7 @@ function renderControl(current) {
   const companionState = actorStateFor(current, companion.id);
   controlStatus.textContent = humanActive
     ? `${actorLabel(current, viewerActorId(current))} control this seat · ${companion.label} advises`
-    : `${companion.label} controls this seat · you can take back control anytime`;
+    : `${actorLabel(current, activeId)} controls this seat · you can take back control anytime`;
   if (controlHumanButton instanceof HTMLButtonElement) controlHumanButton.disabled = humanActive;
   if (controlAgentButton instanceof HTMLButtonElement) {
     controlAgentButton.disabled = !humanActive || companionState?.status !== "connected";
@@ -495,7 +540,10 @@ function renderActions(current) {
     return;
   }
   if (current.controls?.canPlay === false && current.currentPlayerId === viewerSeatId(current)) {
-    selectionSummary.textContent = "agent controls your seat · take control to play yourself";
+    const controller = controllerActorForSeat(current, viewerSeatId(current));
+    selectionSummary.textContent = controller?.temporary === true
+      ? "temporary bot controls your seat · restore owner when ready"
+      : "agent controls your seat · take control to play yourself";
     return;
   }
   if (!turn) {
@@ -729,6 +777,26 @@ async function setController(targetActorId) {
   }
 }
 
+async function setSeatFallback(targetSeatId, action) {
+  if (!roomId || !snapshot || (action !== "bot" && action !== "owner")) return;
+  try {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/fallback`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1, targetSeatId, action }),
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "fallback change rejected");
+    clearSelection();
+    render(body.snapshot);
+    setConnection("live");
+  } catch (error) {
+    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "fallback change rejected";
+    void refreshRoom({ quiet: true });
+  }
+}
+
 function rememberJoinCode(code) {
   currentJoinCode = code;
   if (roomId && code) sessionStorage.setItem(`waitloop.join.${roomId}`, code);
@@ -757,6 +825,7 @@ function updateConnectedSetup(current) {
   if (currentJoinCode) showConnectedSetup(currentJoinCode, `/join/${encodeURIComponent(currentJoinCode)}`);
   const state = actorStateFor(current, connected[0].id);
   if (isElement(mcpClaimStatus) && state?.status === "connected") mcpClaimStatus.textContent = "agent connected";
+  else if (isElement(mcpClaimStatus) && state?.status === "disconnected") mcpClaimStatus.textContent = "agent away · temporary control may continue";
   else if (isElement(mcpClaimStatus) && state?.status === "connecting") mcpClaimStatus.textContent = "credential claimed · waiting for MCP client";
 }
 
@@ -787,7 +856,7 @@ async function loadRoom() {
   if (!roomId) return false;
   currentJoinCode = sessionStorage.getItem(`waitloop.join.${roomId}`);
   const ok = await refreshRoom();
-  if (!ok) setCreateError("This browser does not have access to that room, or the room no longer exists.");
+  if (!ok) setCreateError("This browser cannot recover access to that room, or the room has expired.");
   return ok;
 }
 

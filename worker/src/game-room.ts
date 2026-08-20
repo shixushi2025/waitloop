@@ -34,6 +34,12 @@ import {
   seatForActor,
   validateActorRoomModel,
 } from "./room-actors";
+import {
+  activateTemporaryBotControl,
+  hasTemporaryBotControl,
+  restoreSeatOwnerControl,
+  setBoundSeatController,
+} from "./room-control";
 
 export interface GameRoomEnv extends HostedAgentEnv {}
 
@@ -58,6 +64,7 @@ interface PersistedGameRoomV1 {
   // in new rooms and player IDs (actor==seat) in old rooms.
   seatTokenHashes: Record<string, string>;
   viewerTokenHashes?: Record<string, string>;
+  actorCredentialHashes?: Record<string, string>;
   participants?: GameParticipantV1[];
   seatStates?: Record<string, GameSeatRuntimeV1>;
   actors?: GameActorV1[];
@@ -67,13 +74,18 @@ interface PersistedGameRoomV1 {
   comments?: GameRoomCommentV1[];
   hostedAgents?: Record<string, HostedAgentDescriptorV1>;
   hostedAgentStats?: Record<string, HostedAgentRuntimeStatsV1>;
+  roomOwnerActorId?: string;
+  temporaryBotSeatIds?: string[];
   roomPhase?: GameRoomPhaseV1;
   turnStartedAt?: number;
+  createdAt?: number;
+  expiresAt?: number;
   join?: GameJoinStateV1;
 }
 
 interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
   viewerTokenHashes: Record<string, string>;
+  actorCredentialHashes: Record<string, string>;
   actors: GameActorV1[];
   seats: GameSeatV1[];
   bindings: GameActorBindingV1[];
@@ -81,8 +93,18 @@ interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
   comments: GameRoomCommentV1[];
   hostedAgents: Record<string, HostedAgentDescriptorV1>;
   hostedAgentStats: Record<string, HostedAgentRuntimeStatsV1>;
+  roomOwnerActorId: string;
+  temporaryBotSeatIds: string[];
   roomPhase: GameRoomPhaseV1;
   turnStartedAt: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+interface RateBucketV1 {
+  version: 1;
+  startedAt: number;
+  count: number;
 }
 
 interface SocketAttachmentV1 {
@@ -101,10 +123,13 @@ export type GameRoomSnapshotV1 = StoredGameSnapshot & {
   comments: GameRoomCommentV1[];
   viewerActorId: string;
   viewerSeatId: string;
+  roomOwnerActorId: string;
   capabilities: GameCapabilityV1[];
   hostedAgentStats: HostedAgentRuntimeStatsV1[];
   roomPhase: GameRoomPhaseV1;
   turnStartedAt: number;
+  createdAt: number;
+  expiresAt: number;
 };
 
 export interface GameJoinInfoV1 {
@@ -118,6 +143,7 @@ export interface GameJoinInfoV1 {
   relation: GameActorBindingV1["relation"];
   seatStatus: GameSeatStatusV1;
   expiresAt: number;
+  roomExpiresAt: number;
   claimedAt?: number;
 }
 
@@ -139,9 +165,11 @@ export interface InitializeGameRoomRequest {
   // snapshot; viewerActorId is preferred when actor and seat IDs differ.
   viewerId: string;
   viewerActorId?: string;
+  roomOwnerActorId?: string;
   botPlayerIds: string[];
   seatTokens?: Record<string, string>;
   viewerTokens?: Record<string, string>;
+  actorCredentials?: Record<string, string>;
   participants?: GameParticipantV1[];
   actors?: GameActorV1[];
   seats?: GameSeatV1[];
@@ -162,6 +190,7 @@ export interface InitializeGameRoomRequest {
 const STATE_KEY = "game-room-v1";
 const MAX_AUTOMATED_MOVES = 8;
 const MAX_COMMENTS = 50;
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
 function failure(error: unknown): GameRoomRpcResult<never> {
   if (error instanceof GameRoomError) {
@@ -266,10 +295,16 @@ function normalizeState(state: PersistedGameRoomV1): NormalizedGameRoomV1 {
     }
   }
 
-  validateActorRoomModel({ actors, seats, bindings, actorStates });
+  const roomOwnerActorId = state.roomOwnerActorId ?? seats[0]?.ownerActorId ?? actors[0]?.id;
+  if (!roomOwnerActorId) throw new Error("Room has no owner actor.");
+  const createdAt = state.createdAt ?? state.turnStartedAt ?? Date.now();
+  const expiresAt = state.expiresAt ?? createdAt + ROOM_TTL_MS;
+
+  validateActorRoomModel({ actors, seats, bindings, actorStates, roomOwnerActorId });
   return {
     ...state,
     viewerTokenHashes: { ...(state.viewerTokenHashes ?? {}) },
+    actorCredentialHashes: { ...(state.actorCredentialHashes ?? {}) },
     actors,
     seats,
     bindings,
@@ -277,8 +312,12 @@ function normalizeState(state: PersistedGameRoomV1): NormalizedGameRoomV1 {
     comments: [...(state.comments ?? [])],
     hostedAgents: { ...(state.hostedAgents ?? {}) },
     hostedAgentStats: { ...(state.hostedAgentStats ?? {}) },
+    roomOwnerActorId,
+    temporaryBotSeatIds: [...(state.temporaryBotSeatIds ?? [])],
     roomPhase: state.roomPhase ?? phaseFromRoom(state.room),
-    turnStartedAt: state.turnStartedAt ?? 0,
+    turnStartedAt: state.turnStartedAt ?? createdAt,
+    createdAt,
+    expiresAt,
     ...(normalizeJoin(state.join) ? { join: normalizeJoin(state.join)! } : {}),
   };
 }
@@ -318,12 +357,31 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
   }
 
   private async readState(): Promise<NormalizedGameRoomV1 | null> {
-    const state = (await this.ctx.storage.get<PersistedGameRoomV1>(STATE_KEY)) ?? null;
-    return state ? normalizeState(state) : null;
+    const stored = (await this.ctx.storage.get<PersistedGameRoomV1>(STATE_KEY)) ?? null;
+    if (!stored) return null;
+    const state = normalizeState(stored);
+    if (Date.now() > state.expiresAt) {
+      await this.ctx.storage.delete(STATE_KEY);
+      return null;
+    }
+    return state;
   }
 
   private async writeState(state: NormalizedGameRoomV1): Promise<void> {
     await this.ctx.storage.put(STATE_KEY, state);
+  }
+
+  private async consumeRateLimit(scope: string, limit: number, windowMs: number): Promise<boolean> {
+    const key = `rate:${scope}`;
+    const now = Date.now();
+    const current = await this.ctx.storage.get<RateBucketV1>(key);
+    if (!current || current.version !== 1 || now - current.startedAt >= windowMs) {
+      await this.ctx.storage.put(key, { version: 1, startedAt: now, count: 1 } satisfies RateBucketV1);
+      return true;
+    }
+    if (current.count >= limit) return false;
+    await this.ctx.storage.put(key, { ...current, count: current.count + 1 });
+    return true;
   }
 
   private resolveActorForLegacyViewer(state: NormalizedGameRoomV1, value: string): string | null {
@@ -350,10 +408,13 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       comments: state.comments.map((comment) => ({ ...comment })),
       viewerActorId: actorId,
       viewerSeatId: binding.seatId,
+      roomOwnerActorId: state.roomOwnerActorId,
       capabilities: capabilitiesForActor(state, actorId),
       hostedAgentStats: Object.values(state.hostedAgentStats).map((stats) => ({ ...stats })),
       roomPhase: state.roomPhase,
       turnStartedAt: state.turnStartedAt,
+      createdAt: state.createdAt,
+      expiresAt: state.expiresAt,
     };
   }
 
@@ -372,6 +433,17 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
 
   private resolveViewer(state: NormalizedGameRoomV1, token: string): Promise<string | null> {
     return this.resolveToken(state.viewerTokenHashes, token);
+  }
+
+  private async resolveActorCredential(
+    state: NormalizedGameRoomV1,
+    actorId: string,
+    credential: string,
+  ): Promise<boolean> {
+    if (!actorById(state, actorId) || credential.length < 24 || credential.length > 256) return false;
+    const expectedHash = state.actorCredentialHashes[actorId];
+    if (!expectedHash) return false;
+    return constantTimeEqual(await hashToken(credential), expectedHash);
   }
 
   private updateHostedStats(
@@ -535,7 +607,8 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
           statusChangedAt: now,
         };
       }
-      validateActorRoomModel({ actors, seats, bindings, actorStates });
+      const roomOwnerActorId = request.roomOwnerActorId ?? seats[0]?.ownerActorId ?? request.viewerActorId ?? request.viewerId;
+      validateActorRoomModel({ actors, seats, bindings, actorStates, roomOwnerActorId });
       for (const seat of seats) game.snapshot(room, seat.id);
       for (const botId of request.botPlayerIds) {
         if (!seatById({ seats }, botId)) throw new Error(`Unknown bot seat ${botId}.`);
@@ -550,6 +623,11 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       for (const [actorId, token] of Object.entries(request.viewerTokens ?? {})) {
         if (!actorById({ actors }, actorId)) throw new Error(`Unknown viewer actor ${actorId}.`);
         viewerTokenHashes[actorId] = await hashToken(token);
+      }
+      const actorCredentialHashes: Record<string, string> = {};
+      for (const [actorId, token] of Object.entries(request.actorCredentials ?? {})) {
+        if (!actorById({ actors }, actorId)) throw new Error(`Unknown persistent actor ${actorId}.`);
+        actorCredentialHashes[actorId] = await hashToken(token);
       }
 
       const hostedAgents = { ...(request.hostedAgents ?? {}) };
@@ -584,6 +662,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         botPlayerIds: [...request.botPlayerIds],
         seatTokenHashes,
         viewerTokenHashes,
+        actorCredentialHashes,
         actors: actors.map((actor) => ({ ...actor })),
         seats: seats.map((seat) => ({ ...seat })),
         bindings: bindings.map((binding) => ({ ...binding })),
@@ -591,8 +670,12 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         comments: [],
         hostedAgents,
         hostedAgentStats: {},
+        roomOwnerActorId,
+        temporaryBotSeatIds: [],
         roomPhase: waitingForPlayers ? "waiting_for_players" : phaseFromRoom(room),
         turnStartedAt: now,
+        createdAt: now,
+        expiresAt: now + ROOM_TTL_MS,
         ...(join ? { join } : {}),
       };
       state = await this.runAutomatedPlayers(state);
@@ -623,6 +706,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         relation: binding.relation,
         seatStatus: runtime.status,
         expiresAt: join.expiresAt,
+        roomExpiresAt: state.expiresAt,
       };
       if (join.claimedAt !== undefined) value.claimedAt = join.claimedAt;
       return { ok: true, value };
@@ -637,6 +721,9 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const join = normalizeJoin(state?.join);
       if (!state || !join?.actorId || !join.seatId || !constantTimeEqual(join.codeHash, joinCodeHash)) {
         return denied("join_not_found", "Join code does not identify an active actor.");
+      }
+      if (!(await this.consumeRateLimit("join-claim", 8, 60_000))) {
+        return denied("rate_limited", "Too many join attempts. Try again shortly.");
       }
       if (Date.now() > join.expiresAt) return denied("join_expired", "This join code has expired.");
       if (state.roomPhase !== "waiting_for_players") return denied("seat_already_connected", "The joined actor is already active.");
@@ -654,6 +741,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
             actorId: join.actorId,
             status: "connecting",
             statusChangedAt: now,
+            lastSeenAt: now,
           },
         },
         join: { ...join, claimedAt: now },
@@ -666,18 +754,49 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     }
   }
 
+  async restoreViewerByActorCredential(
+    actorId: string,
+    actorCredential: string,
+    viewerToken: string,
+  ): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return denied("room_not_found", "Game room is not initialized.");
+      if (!(await this.consumeRateLimit(`actor-recovery:${actorId}`, 20, 60_000))) {
+        return denied("rate_limited", "Too many recovery attempts. Try again shortly.");
+      }
+      if (!(await this.resolveActorCredential(state, actorId, actorCredential))) {
+        return denied("invalid_actor_credential", "Actor credential is invalid for this room.");
+      }
+      if (viewerToken.length < 24 || viewerToken.length > 256) return denied("invalid_viewer_token", "Viewer credential is invalid.");
+
+      const next: NormalizedGameRoomV1 = {
+        ...state,
+        viewerTokenHashes: {
+          ...state.viewerTokenHashes,
+          [actorId]: await hashToken(viewerToken),
+        },
+      };
+      await this.writeState(next);
+      return { ok: true, value: this.snapshot(next, actorId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
   async connectSeatByToken(seatToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
     try {
       const state = await this.readState();
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const actorId = await this.resolveSeatToken(state, seatToken);
       if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
-      const runtime = state.actorStates[actorId];
-      if (runtime?.status === "connected" && state.roomPhase !== "waiting_for_players") {
-        return { ok: true, value: this.snapshot(state, actorId) };
+      if (!(await this.consumeRateLimit(`mcp-connect:${actorId}`, 240, 60_000))) {
+        return denied("rate_limited", "Too many MCP requests. Slow down and retry.");
       }
 
+      const runtime = state.actorStates[actorId];
       const now = Date.now();
+      const statusChanged = runtime?.status !== "connected";
       let next: NormalizedGameRoomV1 = {
         ...state,
         actorStates: {
@@ -686,12 +805,14 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
             version: 1,
             actorId,
             status: "connected",
-            statusChangedAt: now,
+            statusChangedAt: statusChanged ? now : runtime?.statusChangedAt ?? now,
             connectedAt: runtime?.connectedAt ?? now,
+            lastSeenAt: now,
           },
         },
       };
-      if (next.roomPhase === "waiting_for_players") {
+      const started = next.roomPhase === "waiting_for_players";
+      if (started) {
         const game = getRegisteredGame(next.room.gameId);
         next = {
           ...next,
@@ -702,7 +823,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         next = await this.runAutomatedPlayers(next);
       }
       await this.writeState(next);
-      await this.broadcast(next);
+      if (statusChanged || started) await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -739,6 +860,9 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const actorId = await this.resolveSeatToken(state, seatToken);
       if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
+      if (!(await this.consumeRateLimit(`mcp-read:${actorId}`, 240, 60_000))) {
+        return denied("rate_limited", "Too many game reads. Slow down and retry.");
+      }
       return { ok: true, value: this.snapshot(state, actorId) };
     } catch (error) {
       return failure(error);
@@ -797,6 +921,9 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const actorId = await this.resolveViewer(state, viewerToken);
       if (!actorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
+      if (!(await this.consumeRateLimit(`viewer-move:${actorId}`, 60, 60_000))) {
+        return denied("rate_limited", "Too many game mutations. Slow down and retry.");
+      }
       const moved = await this.applyActorMove(state, actorId, expectedRevision, moveId);
       if (!moved.ok) return moved;
       await this.writeState(moved.value);
@@ -813,6 +940,9 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const actorId = await this.resolveSeatToken(state, seatToken);
       if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
+      if (!(await this.consumeRateLimit(`mcp-move:${actorId}`, 60, 60_000))) {
+        return denied("rate_limited", "Too many game mutations. Slow down and retry.");
+      }
       const moved = await this.applyActorMove(state, actorId, expectedRevision, moveId);
       if (!moved.ok) return moved;
       await this.writeState(moved.value);
@@ -829,21 +959,149 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const ownerActorId = await this.resolveViewer(state, viewerToken);
       if (!ownerActorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
+      if (!(await this.consumeRateLimit(`viewer-control:${ownerActorId}`, 30, 60_000))) {
+        return denied("rate_limited", "Too many control changes. Try again shortly.");
+      }
       const seat = seatForActor(state, ownerActorId);
       if (!seat || seat.ownerActorId !== ownerActorId) return denied("not_seat_owner", "Only the seat owner may change its controller.");
       if (!canActorBecomeController(state, seat.id, targetActorId)) return denied("invalid_controller", "Target actor is not bound to this seat.");
-      const actor = actorById(state, targetActorId);
+      const target = actorById(state, targetActorId);
       const runtime = state.actorStates[targetActorId];
-      if (actor?.kind === "connected-agent" && runtime?.status !== "connected") {
+      if (target?.kind === "connected-agent" && runtime?.status !== "connected") {
         return denied("controller_not_ready", "Connected agent must be online before it can control the seat.");
       }
-      const next: NormalizedGameRoomV1 = {
-        ...state,
-        seats: state.seats.map((item) => item.id === seat.id ? { ...item, activeControllerActorId: targetActorId } : item),
-      };
+      const next = setBoundSeatController(state, seat.id, targetActorId) as NormalizedGameRoomV1;
       await this.writeState(next);
       await this.broadcast(next);
       return { ok: true, value: this.snapshot(next, ownerActorId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async replaceSeatWithBotByViewerToken(
+    viewerToken: string,
+    seatId: string,
+  ): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return denied("room_not_found", "Game room is not initialized.");
+      const actorId = await this.resolveViewer(state, viewerToken);
+      if (!actorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
+      const seat = seatById(state, seatId);
+      if (!seat) return denied("seat_not_found", "Seat does not exist in this room.");
+      if (actorId !== state.roomOwnerActorId && actorId !== seat.ownerActorId) {
+        return denied("room_manage_forbidden", "Only the room owner or seat owner may replace this controller.");
+      }
+      if (!(await this.consumeRateLimit(`viewer-fallback:${actorId}`, 12, 60_000))) {
+        return denied("rate_limited", "Too many fallback changes. Try again shortly.");
+      }
+      if (hasTemporaryBotControl(state, seatId)) return { ok: true, value: this.snapshot(state, actorId) };
+      const owner = actorById(state, seat.ownerActorId);
+      if (owner?.kind !== "human" && owner?.kind !== "connected-agent") {
+        return denied("fallback_not_supported", "Only human or connected-agent seats support temporary bot takeover.");
+      }
+
+      let next = activateTemporaryBotControl(
+        state,
+        seatId,
+        `actor_temp_bot_${crypto.randomUUID().replaceAll("-", "")}`,
+        Date.now(),
+      ) as NormalizedGameRoomV1;
+      next = await this.runAutomatedPlayers(next);
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, actorId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async restoreSeatOwnerByViewerToken(
+    viewerToken: string,
+    seatId: string,
+  ): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return denied("room_not_found", "Game room is not initialized.");
+      const actorId = await this.resolveViewer(state, viewerToken);
+      if (!actorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
+      const seat = seatById(state, seatId);
+      if (!seat) return denied("seat_not_found", "Seat does not exist in this room.");
+      if (actorId !== state.roomOwnerActorId && actorId !== seat.ownerActorId) {
+        return denied("room_manage_forbidden", "Only the room owner or seat owner may restore this controller.");
+      }
+      const owner = actorById(state, seat.ownerActorId);
+      const runtime = state.actorStates[seat.ownerActorId];
+      if (owner?.kind === "connected-agent" && runtime?.status !== "connected") {
+        return denied("controller_not_ready", "The seat owner must reconnect before control can be restored.");
+      }
+      const next = restoreSeatOwnerControl(state, seatId) as NormalizedGameRoomV1;
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, actorId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async yieldSeatToBotBySeatToken(seatToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return denied("room_not_found", "Game room is not initialized.");
+      const actorId = await this.resolveSeatToken(state, seatToken);
+      if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
+      const seat = seatForActor(state, actorId);
+      if (!seat || seat.ownerActorId !== actorId) return denied("not_seat_owner", "Only a seat owner can yield that seat to a bot.");
+      if (seat.activeControllerActorId !== actorId) return denied("not_active_controller", "This actor is not currently controlling the seat.");
+      if (!(await this.consumeRateLimit(`mcp-control:${actorId}`, 20, 60_000))) {
+        return denied("rate_limited", "Too many control changes. Try again shortly.");
+      }
+      let next = activateTemporaryBotControl(
+        state,
+        seat.id,
+        `actor_temp_bot_${crypto.randomUUID().replaceAll("-", "")}`,
+        Date.now(),
+      ) as NormalizedGameRoomV1;
+      next = await this.runAutomatedPlayers(next);
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, actorId) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  async takeControlBySeatToken(seatToken: string): Promise<GameRoomRpcResult<GameRoomSnapshotV1>> {
+    try {
+      const state = await this.readState();
+      if (!state) return denied("room_not_found", "Game room is not initialized.");
+      const actorId = await this.resolveSeatToken(state, seatToken);
+      if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
+      const seat = seatForActor(state, actorId);
+      if (!seat || seat.ownerActorId !== actorId) return denied("not_seat_owner", "Only the seat owner can reclaim this seat.");
+      if (!(await this.consumeRateLimit(`mcp-control:${actorId}`, 20, 60_000))) {
+        return denied("rate_limited", "Too many control changes. Try again shortly.");
+      }
+      const now = Date.now();
+      const restored = restoreSeatOwnerControl(state, seat.id) as NormalizedGameRoomV1;
+      const next: NormalizedGameRoomV1 = {
+        ...restored,
+        actorStates: {
+          ...restored.actorStates,
+          [actorId]: {
+            version: 1,
+            actorId,
+            status: "connected",
+            statusChangedAt: now,
+            connectedAt: restored.actorStates[actorId]?.connectedAt ?? now,
+            lastSeenAt: now,
+          },
+        },
+      };
+      await this.writeState(next);
+      await this.broadcast(next);
+      return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
     }
@@ -855,6 +1113,9 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const actorId = await this.resolveSeatToken(state, seatToken);
       if (!actorId) return denied("invalid_seat_token", "Seat token is invalid.");
+      if (!(await this.consumeRateLimit(`mcp-comment:${actorId}`, 12, 60_000))) {
+        return denied("rate_limited", "Too many comments. Slow down and retry.");
+      }
       if (!actorHasCapability(state, actorId, "room:comment")) return denied("comment_forbidden", "Actor cannot comment in this room.");
       const value = text.trim();
       if (value.length === 0 || value.length > 280) return denied("invalid_comment", "Comment must contain 1 to 280 characters.");

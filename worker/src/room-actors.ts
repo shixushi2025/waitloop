@@ -11,6 +11,7 @@ export interface ActorRoomModelV1 {
   seats: GameSeatV1[];
   bindings: GameActorBindingV1[];
   actorStates: Record<string, GameActorRuntimeV1>;
+  roomOwnerActorId?: string;
 }
 
 export function actorById(model: Pick<ActorRoomModelV1, "actors">, actorId: string): GameActorV1 | null {
@@ -37,18 +38,16 @@ export function seatForActor(
 }
 
 export function capabilitiesForActor(
-  model: Pick<ActorRoomModelV1, "seats" | "bindings">,
+  model: Pick<ActorRoomModelV1, "seats" | "bindings" | "roomOwnerActorId">,
   actorId: string,
 ): GameCapabilityV1[] {
-  const binding = bindingForActor(model, actorId);
-  if (!binding) return ["room:view-public"];
+  const capabilities: GameCapabilityV1[] = ["room:view-public"];
+  if (model.roomOwnerActorId === actorId) capabilities.push("room:manage");
 
-  const capabilities: GameCapabilityV1[] = [
-    "room:view-public",
-    "seat:view-private",
-    "seat:inspect-legal",
-    "room:comment",
-  ];
+  const binding = bindingForActor(model, actorId);
+  if (!binding) return capabilities;
+
+  capabilities.push("seat:view-private", "seat:inspect-legal", "room:comment");
   const seat = seatById(model, binding.seatId);
   if (!seat) return capabilities;
   if (seat.ownerActorId === actorId) capabilities.push("seat:control");
@@ -57,7 +56,7 @@ export function capabilitiesForActor(
 }
 
 export function actorHasCapability(
-  model: Pick<ActorRoomModelV1, "seats" | "bindings">,
+  model: Pick<ActorRoomModelV1, "seats" | "bindings" | "roomOwnerActorId">,
   actorId: string,
   capability: GameCapabilityV1,
 ): boolean {
@@ -88,6 +87,10 @@ export function validateActorRoomModel(model: ActorRoomModelV1): void {
 
   const actorIds = new Set(model.actors.map((actor) => actor.id));
   const seatIds = new Set(model.seats.map((seat) => seat.id));
+  if (model.roomOwnerActorId && !actorIds.has(model.roomOwnerActorId)) {
+    throw new Error("Room owner must identify an actor in the room.");
+  }
+
   for (const seat of model.seats) {
     if (!actorIds.has(seat.ownerActorId)) throw new Error(`Seat ${seat.id} has an unknown owner actor.`);
     if (!actorIds.has(seat.activeControllerActorId)) throw new Error(`Seat ${seat.id} has an unknown controller actor.`);

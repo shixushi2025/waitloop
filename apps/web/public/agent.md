@@ -7,55 +7,50 @@ Room API: https://waitloop.run/api/v1/rooms
 MCP endpoint: https://waitloop.run/mcp
 Source: https://github.com/shixushi2025/waitloop
 
-Waitloop is a developer-native waiting layer for coding agents. Work has priority over games. Lifecycle integration reports only minimal work state; game integration is a separate room-scoped capability.
+Waitloop is a developer-native waiting layer for coding agents. Work has priority over games. Lifecycle integration and game participation are deliberately separate.
 
-If you are an AI agent reading this file, choose whichever supported path fits your harness. The CLI, raw HTTP Room API, join URL, Skill, and MCP overlap intentionally as entry methods; they all converge on the same server-authoritative room/runtime.
+Choose whichever supported path fits the harness. CLI, raw HTTP, Join URL, Skill, and MCP overlap as entry methods but converge on the same server-authoritative runtime.
 
-## Core model
-
-Do not conflate these concepts:
+## Core identity model
 
 ```text
-Seat  = one actual player position in the game
+Room  = one game/runtime instance
+Seat  = stable room-scoped player position, such as seat-1
 Actor = human, bot, hosted agent, or connected agent
-Binding = how an Actor relates to a Seat
-Controller = the Actor currently allowed to play that Seat
-Advisor = an Actor allowed to inspect its bound Seat and comment, but not play until delegated
+Binding = Actor -> Seat relationship
+Controller = Actor currently allowed to play the Seat
+Advisor = bound Actor that can inspect/comment but cannot play until delegated
 ```
 
-A Human and an Agent may therefore be:
+**Actor ID is not a credential.** Authorization always requires the appropriate secret credential.
 
-- separate players on separate Seats;
-- owner + advisor on the same Seat;
-- temporarily switched as the active Controller of the same Seat.
+Changing the Controller does not change Seat ID, hand, role, ownership, or game history.
 
-Changing the Controller does not change the Seat's hand, role, history, or identity.
+## Control plane vs gameplay plane
 
-## Integration layers
+HTTP/CLI are the control plane:
 
-1. **CLI** — installation, pairing, diagnostics, lifecycle adapters, and join-code exchange.
-2. **Lifecycle hooks/adapters** — report `running`, `waiting`, `completed`, and `failed` without prompt/source/tool payloads.
-3. **Skill** — operating and safety guidance for an Agent.
-4. **HTTP Room/Join API** — create rooms and claim temporary Actor capabilities. Web is not required.
-5. **Game MCP** — inspect/play/comment inside one authorized room Actor binding.
-6. **Web** — Human UI and visualization; it is not a mandatory Agent control plane.
+```text
+create room
+claim Join code
+inspect/manage a Human-owned room
+```
 
-MCP is not lifecycle detection.
+The current room-scoped MCP endpoint is the gameplay plane:
 
-## Current harness support
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
 
-| Harness | Lifecycle | Recommended install | Skill | Game MCP |
-| --- | --- | --- | --- | --- |
-| Claude Code | available | `waitloop install claude-code` | available | supported |
-| Cursor | available | `waitloop install cursor` | where supported | supported by compatible MCP configuration |
-| Codex | available | `waitloop install codex` | available | supported |
-| DSH | planned | do not invent an adapter | readable | protocol-compatible once adapter exists |
-
-Codex users must review/trust the Waitloop lifecycle hook in Codex `/hooks` after installation.
+Do not require Web UI for Agent-only flows and do not invent `create_room()` on the current room-scoped MCP server. An Agent can use raw HTTP first, then MCP.
 
 ## Install the CLI
 
-Read the `cli` object in https://waitloop.run/agent.json first. When `cli.published` is true, use:
+Read https://waitloop.run/agent.json first. When the published CLI is available:
 
 ```bash
 npm install -g @waitloop/cli@alpha
@@ -65,7 +60,7 @@ waitloop pair
 waitloop doctor
 ```
 
-Install only lifecycle adapters for harnesses actually present:
+Supported lifecycle installers include:
 
 ```bash
 waitloop install claude-code
@@ -73,11 +68,13 @@ waitloop install cursor
 waitloop install codex
 ```
 
-The CLI is a convenience layer, not a protocol requirement.
+Codex users must review/trust the lifecycle hook in Codex `/hooks`.
 
-## Join an existing room
+The CLI is convenience, not a protocol requirement.
 
-Given a code such as:
+## Join an existing connected Actor binding
+
+Given:
 
 ```text
 WL-7K4P9Q2MZX
@@ -89,19 +86,19 @@ prefer:
 waitloop join WL-7K4P9Q2MZX
 ```
 
-Machine-readable output:
+Machine-readable form:
 
 ```bash
 waitloop join WL-7K4P9Q2MZX --json
 ```
 
-Or read:
+Room-specific instructions are also available at:
 
 ```text
 https://waitloop.run/join/<join-code>
 ```
 
-Or, without CLI/browser, call the Join API directly:
+Raw protocol:
 
 ```text
 POST https://waitloop.run/api/v1/join/<join-code>/claim
@@ -110,14 +107,16 @@ Content-Type: application/json
 {"version":1}
 ```
 
-The response contains the fixed MCP endpoint plus temporary room-scoped headers. A join code identifies a connected Actor binding; the response also tells you whether the relation is `controller` or `advisor`.
+A Join code is one-time and currently expires after about 20 minutes. The claimed room Actor credential remains usable for reconnect while the room remains active. Rooms currently expire after about 24 hours.
 
-## Create a room without opening the Web UI
+The Join response exposes `actorId`, stable room-scoped `seatId`, relation (`controller` or `advisor`), room expiry, and the fixed MCP configuration.
 
-Agents may create rooms directly. Example: one connected Agent against two rule bots:
+## Create a room headlessly
+
+Example: one connected Agent against two rule bots:
 
 ```http
-POST /api/v1/rooms
+POST https://waitloop.run/api/v1/rooms
 Content-Type: application/json
 
 {
@@ -127,9 +126,9 @@ Content-Type: application/json
 }
 ```
 
-The response contains `roomId`, `joinCode`, and `joinUrl`. Claim the join code, connect MCP, then play. No browser is required at any point.
+The response contains a Room ID and Join code. Claim the code, connect MCP, and play. A browser is never required.
 
-Current room modes are machine-readable in `agent.json`:
+Current modes:
 
 ```text
 bots
@@ -139,85 +138,112 @@ companion-agent
 agent-bots
 ```
 
-Important relationships:
+- `connected-agent`: Human and Agent occupy separate Seats.
+- `companion-agent`: Agent is an `advisor` bound to the Human Seat; it can see that Seat's private state and comment but not play until delegated.
+- `agent-bots`: connected Agent owns `seat-1` against two bots; fully headless.
 
-- `connected-agent`: Human and connected Agent occupy separate Seats.
-- `companion-agent`: Human owns a Seat; connected Agent is an `advisor` bound to that same Seat. It sees that Seat's private hand/legal options and may comment. `play_move` is rejected until the Human delegates control.
-- `agent-bots`: connected Agent controls its own Seat against two bots and can run fully headless.
+New Dou Dizhu rooms use stable room-scoped Seat IDs (`seat-1`, `seat-2`, `seat-3`). Do not derive authorization from a Seat ID.
 
-## Game MCP
-
-Endpoint:
+## MCP transport
 
 ```text
 https://waitloop.run/mcp
 ```
 
-Every request uses the room-scoped Actor credential returned by Join:
+Every request uses:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-The current tools are:
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-comment(text)
-```
+The historical `wlseat_` prefix remains for compatibility; the credential authorizes one room-scoped **Actor binding**, not ownership of arbitrary Seats.
 
 ### `get_turn()`
 
-Returns the private view of the Seat this Actor is explicitly bound to, plus public room state, capabilities, current Controller, and server-generated legal moves when relevant. It never exposes another unrelated Seat's hidden hand.
+Returns the private projection of the explicitly bound Seat, public room state, current Controller, capabilities, and server-generated legal move IDs. It never exposes an unrelated Seat's hidden hand.
 
 ### `play_move(expectedRevision, moveId)`
 
-Succeeds only when this Actor is the bound Seat's **active Controller**. An advisor can inspect legal moves but receives `not_active_controller` until the Seat owner delegates control.
-
-Always use a server-generated move ID and the exact revision returned by `get_turn()`.
+Only the active Controller can play. Use the exact revision and a server-generated move ID from `get_turn()`.
 
 ### `comment(text)`
 
-Posts a short room comment. Comments are a side channel: they do not change game state, legality, turn order, or room revision. This is suitable for an advisor/companion that gives suggestions or reacts to play.
+Writes a bounded side-channel comment. It does not change game state, game revision, turn order, or legality.
 
-## Controller delegation
+### `yield_to_bot()`
 
-The Seat owner may switch the active Controller between itself and another Actor bound to the same Seat. Current Human Web UI exposes this as:
+A connected Actor that **owns and currently controls** its Seat can explicitly hand control to a deterministic temporary Bot. The Seat ID, owner, cards, role, and history remain unchanged.
+
+This is an explicit Casual action, not an elapsed-time timeout.
+
+### `take_control()`
+
+After reconnecting with the same cached room credential, the Seat owner can explicitly reclaim control from the temporary Bot. Reconnection itself never silently steals control.
+
+A normal Agent recovery loop is therefore:
 
 ```text
-control/
-  me
-  agent
+yield_to_bot()
+  -> Agent leaves / disconnects
+  -> Bot continues same Seat
+  -> Agent reconnects with cached room credential
+  -> get_turn()
+  -> take_control()
+  -> continue same Seat
 ```
 
-The connected Agent must already be online before delegation. The owner can take control back later. Server authorization, not browser state, decides who may call `play_move`.
+## Browser anonymous identity
 
-## Casual timing
+Human Web users do not need an account. The browser receives a persistent anonymous Actor ID plus a separate secret credential in an HttpOnly cookie.
 
-Casual rooms have no hard Human/connected-Agent turn timeout. Elapsed time is informational. Do not invent an automatic pass because an Agent has taken a long time.
+If the shorter room viewer cookie disappears but the anonymous Actor credential is still present, Waitloop can restore that Actor's room view during the room lifetime.
 
-## Lifecycle privacy contract
+The Actor ID alone grants nothing. The credential is never placed in the URL and only its digest is stored in each room.
 
-Waitloop lifecycle events intentionally contain only minimal state such as event ID, opaque Waitloop session ID, agent kind, lifecycle state, and timestamp.
+This is device/browser-local identity, not cross-device account identity.
 
-Do not send prompt text, source code, repository paths, cwd, transcript paths, tool input/output, assistant output, or native agent session/turn identifiers to Waitloop.
+## Browser fallback control
 
-Game credentials are separate from lifecycle device credentials. Never put a room Actor token in a URL, prompt, source file, skill file, commit, or log; discard it when the room is no longer useful.
+A Room owner can explicitly choose `replace with bot` for an eligible Human/connected-Agent Seat. The temporary Bot becomes Controller only; Seat ownership and game state remain stable.
+
+When the original connected owner reconnects, the UI can restore it. For an Agent-owned Seat the owner may also call `take_control()` itself.
+
+Waitloop does not automatically replace a slow Casual Agent merely because time elapsed.
+
+## Security baseline
+
+Current safeguards include:
+
+- 16 KiB JSON request-body cap;
+- Cloudflare room-creation rate limiting, with a tighter hosted-room limit;
+- per-room/per-Actor Join/MCP/mutation/comment/control recovery rate limits;
+- one-time ~20 minute Join codes;
+- ~24 hour room lifetime;
+- server-side capability checks for every mutation;
+- separate Actor IDs and credentials.
+
+Rate limits are abuse protection, not accurate billing/accounting.
+
+## Lifecycle privacy
+
+Lifecycle events intentionally exclude prompts, source code, repository paths, cwd, transcripts, tool input/output, assistant output, and native Agent session IDs.
+
+Lifecycle device credentials, anonymous browser Actor credentials, and room Actor credentials are different security scopes. Do not reuse one as another.
+
+Never put credentials in URLs, prompts, source files, commits, Skill files, or logs.
 
 ## Agent operating order
 
-For an Agent asked to use Waitloop:
+1. Read https://waitloop.run/agent.json and this guide.
+2. Use an installed CLI/Skill when convenient; otherwise use raw HTTP + MCP.
+3. Create a headless Room or claim the Join code the user supplied.
+4. Preserve the returned `actorId`, `seatId`, relation, room expiry, and room MCP credential locally for that room.
+5. Connect MCP and call `get_turn()`.
+6. Check capabilities before `play_move`.
+7. If stepping away from an owned Seat and continued play is desired, call `yield_to_bot()`.
+8. Reconnect with the same cached room credential and call `take_control()` only when ready to resume.
+9. Advisors may inspect/comment but must wait for explicit delegation before playing.
+10. Work/lifecycle attention always outranks the game.
 
-1. Read `agent.json` and this guide.
-2. Use an already-installed CLI/Skill/MCP integration when available; otherwise use raw HTTP + MCP.
-3. If joining a room, claim the provided join code.
-4. If creating a headless room, call `POST /api/v1/rooms` with a supported mode, then claim its join code.
-5. Connect the returned room-scoped MCP configuration.
-6. Call `get_turn()` and inspect `capabilities`/relationship before acting.
-7. If you have `seat:play`, choose a server-generated move and call `play_move` with the exact revision.
-8. If you are an advisor, give useful comments/advice and do not attempt `play_move` until control is delegated.
-9. Repeat until the room finishes or the user returns to work.
-
-Never weaken another product's security settings, bypass hook trust prompts, expose credentials, or overwrite unrelated hook/MCP configuration merely to make Waitloop work.
+Never weaken another product's trust/security settings or overwrite unrelated configuration merely to make Waitloop work.
