@@ -1,6 +1,6 @@
 # MCP boundaries
 
-Waitloop now has two MCP layers with distinct responsibilities:
+Waitloop has two MCP layers with distinct responsibilities:
 
 ```text
 local stdio MCP (`waitloop mcp`)
@@ -29,6 +29,8 @@ The stable command is always:
 waitloop mcp
 ```
 
+The bridge uses the official MCP v2 stdio server entry and serves both legacy 2025-era MCP clients and 2026-07-28 clients from that same command. Protocol negotiation, concurrent request dispatch, and MCP cancellation are transport concerns rather than hand-written Waitloop JSON-RPC behavior.
+
 It exposes:
 
 ```text
@@ -51,7 +53,34 @@ The local bridge does not duplicate Room/game business logic:
 - gameplay/control tools proxy to the existing remote Room MCP;
 - authorization and legal-move validation remain server-side.
 
-Room credentials are read from private `~/.waitloop/joins` state and never returned through model-visible local MCP tools.
+Room credentials are read from private `~/.waitloop/joins` state and never returned through model-visible local MCP tools. Credential-shaped values are also redacted from local tool error text before it is returned to a model.
+
+## Cancellation semantics
+
+Cancellation is deliberately limited to operations where abandoning the response cannot create an ambiguous mutation result.
+
+```text
+get_active_room / get_turn / wait_for_turn
+  -> MCP handler AbortSignal
+  -> local remote-MCP fetch
+  -> remote request cancellation
+```
+
+`wait_for_turn` additionally stops its server-side polling delay as soon as that request is cancelled.
+
+Mutation-capable tools are not network-aborted mid-flight by the local bridge:
+
+```text
+create_room
+join_room
+leave_room
+play_move
+comment
+yield_to_bot
+take_control
+```
+
+This avoids the unsafe case where the server has already committed a mutation while the Agent believes the call was cancelled. A caller that loses the result of a mutation should refresh state before retrying.
 
 ## Active Room context
 
@@ -143,7 +172,9 @@ minimum timeout 1 second
 poll interval about 750 ms
 ```
 
-This timeout is transport protection only. It does not:
+The MCP client may also cancel an in-flight wait. Cancellation stops the polling request promptly and is not a game action.
+
+Timeout or cancellation does not:
 
 ```text
 auto-pass
@@ -226,6 +257,7 @@ The remote Room MCP itself remains room-scoped and therefore does not expose `cr
 ## Security invariants
 
 - local tools never return bearer credentials;
+- local tool errors redact credential-shaped values;
 - remote Actor authentication occurs before tool execution;
 - Room/Actor/Seat identity is transport-resolved, not model-supplied gameplay arguments;
 - stale/non-controller/illegal moves are rejected server-side;
@@ -233,6 +265,8 @@ The remote Room MCP itself remains room-scoped and therefore does not expose `cr
 - Room credentials never authorize lifecycle ingestion;
 - Join and Room expiry are separate;
 - rate limits are abuse controls, not automatic timing or accounting;
+- cancellation of read/wait operations never mutates game state;
+- mutation-capable local tools are not abandoned mid-flight through propagated network cancellation;
 - `yield_to_bot` and `take_control` are explicit owner-control transitions.
 
 See [`security.md`](security.md), [`protocol.md`](protocol.md), [`architecture.md`](architecture.md), and [`game-system.md`](game-system.md).
