@@ -60,8 +60,7 @@ jobs:
         run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
 
   diagnose-release-stabilization:
-    if: always() && github.ref == 'refs/heads/fix/release-stabilization' && needs.check.result != 'success'
-    needs: check
+    if: github.ref == 'refs/heads/fix/release-stabilization'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     permissions:
