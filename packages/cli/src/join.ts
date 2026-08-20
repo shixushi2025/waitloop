@@ -187,7 +187,11 @@ function parseClaim(body: unknown, code: string, serverUrl: string): JoinCredent
   };
 }
 
-export async function claimJoinCredential(codeInput: string, serverUrlInput: string): Promise<JoinCredentialV1> {
+export async function claimJoinCredential(
+  codeInput: string,
+  serverUrlInput: string,
+  signal?: AbortSignal,
+): Promise<JoinCredentialV1> {
   const code = normalizeJoinCode(codeInput);
   const serverUrl = normalizeUrl(serverUrlInput);
   const cached = await readCachedJoinCredential(code, serverUrl);
@@ -197,6 +201,7 @@ export async function claimJoinCredential(codeInput: string, serverUrlInput: str
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ version: 1 }),
+    ...(signal ? { signal } : {}),
   });
   let body: unknown = null;
   try {
