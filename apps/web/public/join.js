@@ -4,7 +4,9 @@ const stateValue = document.querySelector("#join-state");
 const gameValue = document.querySelector("#join-game");
 const roomValue = document.querySelector("#join-room");
 const phaseValue = document.querySelector("#join-phase");
+const relationValue = document.querySelector("#join-relation");
 const seatValue = document.querySelector("#join-seat");
+const actorValue = document.querySelector("#join-actor");
 const commandValue = document.querySelector("#join-command");
 const promptValue = document.querySelector("#join-prompt");
 const copyCommandButton = document.querySelector("#copy-command");
@@ -33,9 +35,17 @@ function render(info) {
   setText(gameValue, info.gameId ?? "-");
   setText(roomValue, info.roomId ?? "-");
   setText(phaseValue, info.phase ?? "-");
-  setText(seatValue, info.seatStatus ?? "-");
+  setText(relationValue, info.relation ?? "controller");
+  setText(seatValue, info.seatId ?? info.playerId ?? "-");
+  setText(actorValue, info.actorId ?? info.playerId ?? "-");
   setText(commandValue, info.joinCommand ?? `waitloop join ${code}`);
-  setText(promptValue, info.seatStatus === "connected" ? "agent connected · room is active" : "waiting for agent connection");
+  const relation = info.relation === "advisor" ? "advisor" : "controller";
+  setText(
+    promptValue,
+    info.seatStatus === "connected"
+      ? `${relation} connected · room is active`
+      : `waiting for ${relation} connection`,
+  );
   if (claimButton instanceof HTMLButtonElement) claimButton.disabled = info.claimed || info.seatStatus === "connected";
 }
 
@@ -60,12 +70,12 @@ async function claimRaw() {
       body: JSON.stringify({ version: 1 }),
     });
     const body = await readJson(response);
-    if (!response.ok || !body?.mcp) throw new Error(body?.error?.message ?? "could not claim MCP seat");
+    if (!response.ok || !body?.mcp) throw new Error(body?.error?.message ?? "could not claim MCP actor");
     rawConfigText = JSON.stringify({ mcpServers: { waitloop: body.mcp } }, null, 2);
     setText(rawConfig, rawConfigText);
     if (rawWrap instanceof HTMLElement) rawWrap.hidden = false;
     render(body);
-    setText(promptValue, "credential claimed · connect the MCP client to start the room");
+    setText(promptValue, `${body.relation ?? "controller"} credential claimed · connect the MCP client`);
   } catch (error) {
     setText(promptValue, error instanceof Error ? error.message : "MCP claim failed");
   } finally {
