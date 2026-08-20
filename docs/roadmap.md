@@ -2,47 +2,62 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-## 1. Public hardening
+## 1. Connected Actor runtime efficiency
 
-Before broader public exposure:
-
-- rate limiting for room creation, Join claim, pairing, lifecycle ingest, MCP mutation/comments, and hosted inference;
-- room/temporary Actor credential cleanup and expiry policy;
-- hosted-agent budgets/quotas;
-- stronger CSP/CORS/security headers and production review;
-- private security-reporting path;
-- migration/recovery tests for persisted Durable Object state, including legacy participant -> Actor/Seat normalization.
-
-Acceptance: anonymous traffic cannot create unbounded cost/state; expired capabilities are unusable; production boundaries match [`security.md`](security.md).
-
-## 2. Connected Actor runtime efficiency/resilience
-
-The current Actor/Seat/control model is in place. Improve the runtime without adding a hard casual clock:
+The Seat/Actor identity, anonymous browser recovery, explicit temporary Bot takeover, and reconnectable room credentials are implemented. Next improve Agent waiting/transport ergonomics:
 
 - `wait_for_turn` or equivalent server-side long poll so Agents do not repeatedly poll `get_turn`;
-- reconnect/disconnect state and clearer MCP client identity where available;
-- explicit owner-controlled replace-with-bot takeover for stalled/disconnected controllers;
-- stable local MCP bridge / optional automatic harness configuration so `waitloop join` does not require copying temporary MCP JSON;
-- cleanup of temporary MCP configuration after room end;
-- clearer recovery when a Join code is claimed but the Actor never connects.
+- transport-level disconnect detection and richer presence state, without timer-forced Casual moves;
+- stable local MCP bridge / optional automatic harness configuration so `waitloop join` need not require copying temporary MCP JSON;
+- cleanup of local temporary MCP configuration after Room end;
+- clearer MCP `clientInfo` labeling when the harness exposes it.
 
-Acceptance: normal Agent gameplay can wait efficiently; disconnects do not force room abandonment; takeover remains explicit rather than timer-triggered.
+Acceptance: an Agent can join once, wait efficiently, disconnect/reconnect, and explicitly recover control with minimal model/tool churn.
 
-## 3. Expand Actor relationships only when demanded
+## 2. Multiple connected Actors and richer relationships
 
-The current durable relations are `controller` and `advisor`, with one connected Actor Join per current mode. Future extensions may include:
+Current Room modes intentionally have one joined connected Actor. Extend only through the Seat/Actor/Binding/capability model:
 
+- multiple Join capabilities per Room;
+- all-ready gating for multiple connected player Seats;
 - multiple advisors on one Seat;
 - public-only spectator/commentator Actors that cannot see private Seat state;
-- multiple connected player Seats with all-ready gating;
-- per-turn one-shot delegation rather than persistent control;
-- richer comment/event policies.
+- per-turn one-shot delegation leases;
+- explicit leave/revoke flows for individual Actor credentials.
 
-Do not add these as `participant.kind` special cases. Extend the Actor/Seat/Binding/capability model.
+Do not add these as `participant.kind` special cases.
 
-Acceptance: new relations preserve explicit private-view consent and server-side capability authorization.
+Acceptance: every connected Actor has independent identity/credential/scope and hidden-information access is explicit.
 
-## 4. Dou Dizhu completeness
+## 3. Public hardening
+
+Current room creation, hosted-room creation, Join, MCP, comments, recovery, and control operations have baseline rate/expiry protection. Remaining work before broader public exposure:
+
+- rate limiting for lifecycle ingest and pairing flows;
+- hosted inference budgets/quotas and stronger cost accounting;
+- explicit finished/expired Room cleanup/retention policy beyond lazy expiry;
+- stronger CSP/CORS/security headers and production review;
+- private security-reporting path;
+- persisted Durable Object migration/recovery tests, including legacy participant -> Actor/Seat normalization;
+- observability for rate-limit/recovery/fallback events without logging credentials/private hands.
+
+Acceptance: abusive anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
+
+## 4. Cross-device identity only when needed
+
+Current Human identity is anonymous and browser/device-local. Do not introduce a database/account system solely for one-Room resume.
+
+If product needs become cross-Room/cross-device:
+
+- optional account attachment/claim of anonymous Actor identity;
+- device list/revoke/rotation;
+- Room/history indexing across Durable Objects;
+- explicit profile/nickname/avatar semantics;
+- D1/other global index only when cross-Room querying actually requires it.
+
+Accounts must remain optional for core headless/public game rooms unless product requirements change.
+
+## 5. Dou Dizhu completeness
 
 - bidding / rob-landlord;
 - landlord resolution from bidding rather than pre-game random assignment;
@@ -53,17 +68,6 @@ Acceptance: new relations preserve explicit private-view consent and server-side
 
 Acceptance: rules docs, engine, tests, Human UI, and Agent-visible state agree exactly.
 
-## 5. Lifecycle/browser account model
-
-If account-backed lifecycle/device management is introduced:
-
-- browser session/ticket flow for lifecycle sessions;
-- device list/revoke/rotation UX;
-- explicit account/device ownership;
-- no regression to Worker-wide browser secrets.
-
-Accounts are not currently required for headless/public game rooms.
-
 ## 6. Additional lifecycle adapters
 
 - DSH after its lifecycle contract is well understood;
@@ -72,21 +76,16 @@ Accounts are not currently required for headless/public game rooms.
 
 ## 7. Arena / benchmark
 
-Arena remains a separate policy from casual waiting:
+Arena remains separate from casual waiting:
 
-- deterministic agent-vs-agent runner;
+- deterministic Agent-vs-Agent runner;
 - reproducible seeds/config;
 - public-decision replay;
 - win/latency/fallback/tool-error metrics;
 - explicit hard turn limits only where benchmark fairness needs them.
 
-Do not import Arena hard timing or engagement behavior into casual Human/Agent tables.
+Do not import Arena hard timing or engagement behavior into Casual Human/Agent tables.
 
 ## Maintenance rule
 
-When an item ships:
-
-1. update its canonical docs;
-2. update [`status.md`](status.md);
-3. remove it here;
-4. delete transitional design notes after extracting durable decisions.
+When an item ships, update canonical docs/status and remove it here. Do not preserve implementation chronology as permanent design files.
