@@ -1,132 +1,134 @@
 # Protocol
 
-Waitloop uses small canonical protocols so the core runtime does not depend on coding-agent vendor vocabularies and external callers cannot bypass authoritative game rules.
+Waitloop uses small canonical protocols so vendor-specific coding-agent details stay outside core runtime and game clients cannot bypass authoritative rules/authorization.
 
 ## Versioning
 
-Externally exchanged JSON objects use `version: 1` unless nested inside another versioned envelope. Breaking changes require a new protocol version. Additive optional fields are allowed when old consumers can safely ignore them.
+Externally exchanged JSON uses `version: 1` unless nested in another versioned envelope. Breaking changes require a new version; additive optional fields are allowed when old consumers can ignore them safely.
 
-## Agent kinds
+## Lifecycle protocol
 
-```ts
-type AgentKind =
-  | "claude-code"
-  | "codex"
-  | "cursor"
-  | "dsh"
-  | "unknown";
+Canonical coding-agent states remain:
+
+```text
+idle | running | waiting | completed | failed
 ```
 
-`unknown` is allowed at trust boundaries but should not be emitted by a first-party adapter that knows its own identity.
-
-## Agent states
-
-```ts
-type AgentState =
-  | "idle"
-  | "running"
-  | "waiting"
-  | "completed"
-  | "failed";
-```
-
-Semantics:
-
-- `idle`: session exists but no active work is known;
-- `running`: work is active and the user is not currently required;
-- `waiting`: user input/approval/attention is likely required;
-- `completed`: tracked work completed normally;
-- `failed`: tracked work ended abnormally.
-
-## Canonical lifecycle event
+Conceptual event:
 
 ```ts
 interface WaitloopAgentEventV1 {
   version: 1;
   eventId: string;
   sessionId: string;
-  agent: AgentKind;
-  state: AgentState;
+  agent: "claude-code" | "codex" | "cursor" | "dsh" | "unknown";
+  state: "running" | "waiting" | "completed" | "failed";
   occurredAt: number;
   sequence?: number;
 }
 ```
 
-The event intentionally contains no prompt, source code, command output, repository path, working directory, transcript, tool arguments/output, assistant output, model reasoning, or native agent session/turn ID.
+Lifecycle events intentionally contain no prompt/source/repository/cwd/transcript/tool/assistant/native-session payloads.
 
-`eventId` provides idempotency. `sequence`, when present, provides source ordering. Without sequence, timestamps are handled conservatively.
+Lifecycle is separate from game MCP.
 
-Nominal flow:
+## Game identity protocol
 
-```text
-idle -> running -> waiting -> running -> completed
-                   │
-                   └──────────────-> failed
-running ---------------------------> failed
-```
-
-A new logical unit of work after a terminal state should use a new Waitloop session ID unless an adapter has an explicitly documented resumable-session model.
-
-## Agent snapshot
-
-Conceptually:
+The runtime distinguishes:
 
 ```ts
-interface AgentSessionSnapshotV1 {
+interface GameSeatV1 {
   version: 1;
-  sessionId: string;
-  agent: AgentKind;
-  state: AgentState;
-  startedAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  revision: number;
+  id: string;
+  label: string;
+  ownerActorId: string;
+  activeControllerActorId: string;
+}
+
+interface GameActorV1 {
+  version: 1;
+  id: string;
+  kind: "human" | "bot" | "hosted-agent" | "connected-agent";
+  label: string;
+}
+
+interface GameActorBindingV1 {
+  version: 1;
+  actorId: string;
+  seatId: string;
+  relation: "controller" | "advisor";
 }
 ```
 
-Clients use `revision` to discard stale updates.
+The pure game engine sees Seat IDs. Runtime authorization resolves Actor -> Binding -> Seat before deriving a private view or applying a move.
 
-## Game room state
+Current capabilities include:
 
-The generic `game-core` room owns authoritative game state and revision. Game status is:
+```text
+room:view-public
+seat:view-private
+seat:inspect-legal
+seat:play
+seat:control
+room:comment
+```
+
+Only the Seat's active Controller has `seat:play`. The Seat owner has `seat:control` and can delegate/take back control.
+
+## Room/game status
+
+Game status:
 
 ```text
 playing | paused | finished
 ```
 
-The Worker runtime additionally exposes a room phase used for connected-agent onboarding:
+Runtime room phase:
 
 ```text
 waiting_for_players | playing | paused | finished
 ```
 
-`waiting_for_players` is not a game-rule status. It is runtime metadata around a game instance. See [`game-system.md`](game-system.md).
+Connected Actor readiness:
 
-## Viewer-specific room snapshot
-
-A machine room snapshot conceptually contains:
-
-```ts
-interface GameRoomSnapshotV1<TPublicState, TMoveMeta> {
-  version: 1;
-  roomId: string;
-  gameId: string;
-  status: "playing" | "paused" | "finished";
-  revision: number;
-  viewerId: string;
-  currentPlayerId: string | null;
-  state: TPublicState;
-  legalMoves: LegalMove<TMoveMeta>[];
-}
+```text
+waiting -> connecting -> connected
 ```
 
-The Worker augments this with runtime participant/seat/phase metadata.
+`waiting_for_players` is runtime metadata, not a game-rule state.
 
-A snapshot is viewer-specific. Hidden-information games construct the public view for the authenticated viewer; they do not serialize internal state and remove private fields later.
+## Machine room snapshot
 
-Browser human snapshots intentionally strip exhaustive `legalMoves[]` and expose small input controls instead.
+The underlying game snapshot remains viewer/Seat-specific. Worker runtime augments it with Actor data such as:
 
-## Legal move
+```text
+actors[]
+seats[]
+bindings[]
+actorStates[]
+comments[]
+viewerActorId
+viewerSeatId
+capabilities[]
+roomPhase
+turnStartedAt
+```
+
+A connected advisor therefore receives the private projection of the single Seat it is explicitly bound to, while `capabilities` determines whether it may mutate that Seat.
+
+Browser Human snapshots intentionally remove exhaustive `legalMoves[]` and expose small controls:
+
+```text
+canPlay
+canPass
+canHint
+```
+
+`canPlay=false` when the Human Seat is delegated to another Actor even though the Human may still see its own hand.
+
+## Legal moves and revision
+
+Conceptual legal move:
 
 ```ts
 interface LegalMove<TMeta = unknown> {
@@ -136,73 +138,68 @@ interface LegalMove<TMeta = unknown> {
 }
 ```
 
-Move IDs are generated by the authoritative engine for the current state/revision.
+Game mutations use the current authoritative room revision. Stale/out-of-turn/non-legal actions are rejected before mutation.
 
-## Move command
-
-```ts
-interface GameMoveCommandV1 {
-  version: 1;
-  roomId: string;
-  playerId: string;
-  expectedRevision: number;
-  moveId: string;
-}
-```
-
-A move is rejected if the expected revision is stale, the caller is not the acting player, or the move ID is not currently legal.
-
-## Human game operations
-
-Browser humans use the human-safe projection and dedicated operations:
+## Human room operations
 
 ```text
+POST /api/v1/rooms
+GET  /api/v1/rooms/:roomId
 POST /api/v1/rooms/:roomId/play
 POST /api/v1/rooms/:roomId/pass
 POST /api/v1/rooms/:roomId/hint
+POST /api/v1/rooms/:roomId/control
 POST /api/v1/rooms/:roomId/pause
 POST /api/v1/rooms/:roomId/resume
 ```
 
-`/play` submits selected card IDs. The server maps that selection to an authoritative legal move for the current revision. `/hint` returns one suggested selection rather than the exhaustive legal-move set.
+`/control` currently lets the authenticated Human Seat owner select another Actor already bound to that Seat as active Controller.
 
-## MCP-facing game operations
+## Client-neutral room creation
 
-The MCP tool surface is deliberately transport-bound and model-small:
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-```
-
-Room ID and seat token are supplied in HTTP transport headers, not model-visible tool arguments:
+`POST /api/v1/rooms` is not a browser-only API. Current mode values include:
 
 ```text
-Authorization: Bearer <wlseat_...>
-X-Waitloop-Room: <room-id>
+bots
+hosted-agent
+connected-agent
+companion-agent
+agent-bots
 ```
 
-`get_turn()` returns only the authenticated seat's viewer-specific machine snapshot and legal moves.
+Example headless create:
 
-## Connected-agent join operations
+```json
+{
+  "version": 1,
+  "gameId": "doudizhu",
+  "mode": "agent-bots"
+}
+```
 
-Connected-agent rooms use a separate join flow before MCP participation.
+The response contains a `roomId` and join capability; no browser cookie/viewer is required for the headless mode.
 
-Conceptually:
+## Join operations
 
 ```text
-GET/POST room-specific join endpoint using <join-code>
-  -> one temporary seat credential
-  -> configure /mcp with room + wlseat credential
-  -> first authenticated MCP request marks seat ready
-  -> room leaves waiting_for_players
+GET  /api/v1/join/<join-code>
+POST /api/v1/join/<join-code>/claim
+GET  /join/<join-code>
 ```
 
-Public room-specific onboarding is:
+Claim result includes room-scoped Actor context:
 
 ```text
-GET /join/<join-code>
+actorId
+seatId
+relation
+seatStatus
+roomId
+wlseat_... credential
+MCP endpoint + headers
 ```
+
+The historical `wlseat_` prefix is retained for compatibility; the credential now authorizes one Actor binding, which may be a controller or advisor.
 
 CLI convenience:
 
@@ -210,36 +207,32 @@ CLI convenience:
 waitloop join <join-code>
 ```
 
-The join code is one-time capability material; the resulting seat token is the ongoing room authorization credential.
+## MCP operations
 
-## Important HTTP endpoints
-
-Current public/runtime surface includes:
+MCP transport is bound by headers:
 
 ```text
-POST /api/v1/agent-events
-
-POST /api/v1/pairings/...
-POST /api/v1/devices/...
-
-GET  /api/v1/hosted-agents
-POST /api/v1/rooms
-GET  /api/v1/rooms/:roomId
-POST /api/v1/rooms/:roomId/play
-POST /api/v1/rooms/:roomId/pass
-POST /api/v1/rooms/:roomId/hint
-POST /api/v1/rooms/:roomId/pause
-POST /api/v1/rooms/:roomId/resume
-
-GET  /join/<join-code>
-POST /mcp
+Authorization: Bearer <wlseat_...>
+X-Waitloop-Room: <room-id>
 ```
 
-Private/development compatibility endpoints may exist in addition to this list. The Worker implementation is the source of runtime truth; update this document whenever the public contract changes.
+Model-visible tools:
+
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
+```
+
+`get_turn()` returns the authenticated Actor's bound-Seat view and capability metadata.
+
+`play_move` additionally requires `seat:play`; advisors receive `not_active_controller` until delegated.
+
+`comment` writes a bounded room comment side channel and does not change game revision/turn/legal state.
 
 ## Error shape
 
-JSON API errors use the stable shape:
+JSON errors use:
 
 ```ts
 interface ApiErrorV1 {
@@ -251,4 +244,8 @@ interface ApiErrorV1 {
 }
 ```
 
-Do not expose stack traces or raw internal Durable Object errors to clients.
+Relevant authorization/runtime codes include `not_active_controller`, `not_seat_owner`, `invalid_controller`, and `controller_not_ready` in addition to stale/illegal/join errors.
+
+Do not expose stack traces or raw Durable Object errors to clients.
+
+The Worker implementation is runtime truth; this canonical document must be updated in the same change whenever the public protocol changes.
