@@ -186,6 +186,8 @@ Result text decodes to:
 
 `stillWaiting` appears for transport timeout. Actionable Room states return immediately. Transport timeout never mutates game state or authorizes fallback.
 
+The MCP HTTP request signal is also part of the transport contract for waiting. If the client cancels/disconnects the request, the wait loop aborts promptly; cancellation produces no game mutation and does not become a synthetic `timeout` result.
+
 ### Mutations
 
 `play_move` requires `seat:play`, active Controller, authoritative turn, exact revision, and a server-generated move ID.
@@ -227,6 +229,33 @@ take_control()
 
 Control tools reuse HTTP; gameplay tools proxy remote MCP. The local server returns safe metadata/snapshots only. Raw credentials remain in private local cache.
 
+### Stdio negotiation
+
+The stable command accepts:
+
+```text
+MCP 2026-07-28  server/discover
+legacy clients  initialize for supported protocol versions
+```
+
+The bridge does not blindly echo unsupported legacy versions; it negotiates within its supported legacy set.
+
+### In-flight request cancellation
+
+Each JSON-RPC request ID has an independent local cancellation scope. A notification:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/cancelled",
+  "params": { "requestId": 7 }
+}
+```
+
+aborts the matching in-flight request when present. The matching `AbortSignal` is passed into proxied Room HTTP/MCP fetches. After cancellation, the local bridge suppresses any late/stale result for that request ID.
+
+A long `wait_for_turn` therefore does not prevent the bridge from reading cancellation or unrelated requests. Duplicate concurrent request IDs are rejected.
+
 Active Room state:
 
 ```json
@@ -255,7 +284,7 @@ The pair is transported in an HttpOnly cookie. Only the credential digest is sto
 
 ## Revisions and errors
 
-Relevant error codes include:
+Relevant server/game error codes include:
 
 ```text
 stale_revision
@@ -271,7 +300,35 @@ join_expired
 join_already_claimed
 ```
 
+Local bridge classification additionally uses codes such as:
+
+```text
+no_active_room
+request_cancelled
+network_unavailable
+remote_unavailable
+room_auth_failed
+room_not_found
+room_expired
+invalid_mcp_response
+```
+
 HTTP errors remain versioned JSON. Remote/local MCP tool failures are returned as MCP tool errors with structured JSON text.
+
+When known, a local tool error may also include:
+
+```json
+{
+  "error": {
+    "code": "network_unavailable",
+    "message": "...",
+    "nextAction": "...",
+    "retrySafe": true
+  }
+}
+```
+
+`retrySafe` is conservative. Read-only operations can be marked safe to repeat. Mutating operations are not marked retry-safe after cancellation/network uncertainty; clients should obtain a fresh snapshot before deciding whether to replay.
 
 ## Continuation boundary
 
