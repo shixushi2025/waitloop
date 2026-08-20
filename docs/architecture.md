@@ -59,6 +59,8 @@ gameplay tools
   -> existing remote Room MCP
 ```
 
+The same stdio process supports MCP 2026-07-28 discovery and supported legacy initialize clients. The current implementation keeps this compatibility layer small and local rather than adding a second business/runtime stack.
+
 The bridge owns no long-lived server state. It resolves one local active Room pointer and private cached Room credential under `~/.waitloop/joins`.
 
 Security boundary:
@@ -71,6 +73,28 @@ server           credential digest + authoritative Room state
 
 No raw credential is returned by local MCP tools.
 
+### In-flight request and cancellation model
+
+Stdio input remains readable while long tools are pending. Each request with an ID receives its own `AbortController`:
+
+```text
+stdio request id N
+  -> local handler
+      -> Room HTTP / remote MCP fetch
+          -> Worker request signal
+              -> wait_for_turn poll loop
+
+notifications/cancelled { requestId: N }
+  -> abort controller N
+  -> abort proxied fetch
+  -> abort Worker wait delay
+  -> suppress stale local response for N
+```
+
+Requests are not globally serialized behind `wait_for_turn`. Duplicate in-flight request IDs are rejected. Stdio shutdown aborts remaining requests before bridge exit.
+
+Cancellation affects transport execution only. Game mutation still requires the ordinary capability/revision-controlled tools.
+
 ## Active Room model
 
 ```text
@@ -81,6 +105,8 @@ No raw credential is returned by local MCP tools.
 `waitloop join`, local `join_room`, and local `create_room` update active selection. A new bridge process can resume the same selection while the Room credential is valid.
 
 `leave_room` removes only active selection; it does not revoke or mutate the remote Room.
+
+Remote Room expiry/authentication failures clear a stale active pointer. The cached credential file remains governed by the existing cache/expiry policy.
 
 ## GameRoom storage model
 
@@ -144,7 +170,22 @@ remote MCP handler
 
 This avoids model-driven tight polling without adding a Casual game clock. The wait returns on turn, terminal/lifecycle state, Controller change, or transport timeout.
 
-The local bridge simply proxies this tool. It does not run a background Agent scheduler; the harness must keep the current Agent run alive for continuous play.
+The HTTP request `AbortSignal` is checked before/after snapshot reads and drives an abort-aware poll delay. Client cancellation therefore ends remote waiting promptly instead of leaving the Worker loop alive until the 25-second bound.
+
+The local bridge does not run a background Agent scheduler; the harness must keep the current Agent run alive for continuous play.
+
+## Local client failure classification
+
+Transport and remote tool failures are normalized into model-safe local MCP errors when the bridge can classify them:
+
+```text
+code
+message
+nextAction?   safe corrective action when known
+retrySafe?   conservative repeatability signal
+```
+
+Read-only `get_turn`/`wait_for_turn` transport failures can be retry-safe. Mutating transport failures are not automatically retry-safe because the remote outcome may be uncertain; the recovery step is `get_turn()` before deciding whether to replay.
 
 ## Anonymous Human identity
 
@@ -179,13 +220,13 @@ Hosted Room create   5/min
 
 Join claim, recovery, remote MCP connect/read/move/comment/control, and Human mutations have bounded counters.
 
-`wait_for_turn` uses authenticated reads within the existing MCP-read budget and caps one call at 25 seconds. Rate limits are abuse controls, not accounting or game timing.
+`wait_for_turn` uses authenticated reads within the existing MCP-read budget and caps one call at 25 seconds. Cancellation can release a pending wait early. Rate limits are abuse controls, not accounting or game timing.
 
 Request JSON is capped at 16 KiB.
 
 ## HTTP vs MCP
 
-The durable separation is now:
+The durable separation is:
 
 ```text
 HTTP
@@ -209,6 +250,8 @@ Older Rooms where participant==Seat==Actor are normalized on read. New code uses
 
 CLI `--raw-mcp` preserves advanced remote configuration access, but default Join output is credential-safe and local bridge-first.
 
+The local stdio compatibility layer currently accepts modern 2026-07-28 discovery and a bounded set of legacy initialize protocol versions. Real Codex/Claude compatibility remains part of stabilization acceptance testing.
+
 ## Trust/concurrency
 
 - all HTTP/local-MCP/remote-MCP inputs are validated;
@@ -216,7 +259,9 @@ CLI `--raw-mcp` preserves advanced remote configuration access, but default Join
 - hidden projection derives from bound Seat;
 - capability checks decide Controller/owner actions;
 - Durable Object serialization + revision reject stale concurrent moves;
-- wait timeout never authorizes game mutation;
+- local MCP in-flight request IDs have independent cancellation scopes;
+- cancelled waits suppress stale result delivery;
+- wait timeout/cancellation never authorize game mutation;
 - reconnect/fallback never bypasses ownership or revision.
 
 ## Future database boundary
