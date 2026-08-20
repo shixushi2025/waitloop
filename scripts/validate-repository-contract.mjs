@@ -48,13 +48,22 @@ const expectedTag = prerelease ? prerelease.split(".")[0] : "latest";
 if (manifest.cli?.distTag !== expectedTag) fail("agent.json CLI distTag is out of sync");
 if (manifest.cli?.installCommand !== `npm install -g ${cliPackage.name}@${expectedTag}`) fail("agent.json CLI installCommand is out of sync");
 if (manifest.cli?.joinCommand !== "waitloop join <join-code>") fail("agent.json joinCommand is missing or changed unexpectedly");
-if (manifest.mcp?.endpoint !== "https://waitloop.run/mcp") fail("agent.json MCP endpoint is out of sync");
-if (manifest.mcp?.joinUrlPattern !== "https://waitloop.run/join/<join-code>") fail("agent.json joinUrlPattern is out of sync");
+if (manifest.cli?.roomCreateCommand !== "waitloop room create") fail("agent.json roomCreateCommand is out of sync");
+if (manifest.cli?.localMcpCommand !== "waitloop mcp") fail("agent.json localMcpCommand is out of sync");
 if (manifest.rooms?.createEndpoint !== "https://waitloop.run/api/v1/rooms") fail("agent.json Room API endpoint is out of sync");
-
-for (const tool of ["get_turn", "play_move", "comment", "yield_to_bot", "take_control"]) {
-  requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+if (manifest.mcp?.endpoint !== "https://waitloop.run/mcp") fail("agent.json remote MCP endpoint is out of sync");
+if (manifest.mcp?.joinUrlPattern !== "https://waitloop.run/join/<join-code>") fail("agent.json joinUrlPattern is out of sync");
+if (manifest.localMcp?.status !== "available") fail("agent.json local MCP must be available");
+if (manifest.localMcp?.transport !== "stdio" || manifest.localMcp?.command !== "waitloop mcp") {
+  fail("agent.json local MCP transport/command is out of sync");
 }
+
+const remoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];
+for (const tool of remoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+
+const localTools = ["create_room", "join_room", "get_active_room", "leave_room", ...remoteTools];
+for (const tool of localTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);
+
 for (const mode of ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"]) {
   requireIncludes("agent.json rooms.modes", manifest.rooms?.modes, mode);
 }
@@ -68,10 +77,15 @@ for (const needle of [
   "https://waitloop.run/agent.json",
   "https://waitloop.run/api/v1/rooms",
   "npm install -g @waitloop/cli@alpha",
+  "waitloop mcp",
   "waitloop join",
-  "https://waitloop.run/join/<join-code>",
   "https://waitloop.run/mcp",
+  "create_room()",
+  "join_room",
+  "get_active_room()",
+  "leave_room()",
   "get_turn()",
+  "wait_for_turn",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
   "yield_to_bot()",
@@ -80,16 +94,19 @@ for (const needle of [
   "Actor ID is not a credential",
   "companion-agent",
   "agent-bots",
-  "advisor",
+  "Advisor",
 ]) requireText("agent.md", agentGuide, needle);
 
 for (const needle of [
-  "https://waitloop.run/api/v1/rooms",
   "npm install -g @waitloop/cli@alpha",
-  "waitloop join",
-  "https://waitloop.run/join/<join-code>",
-  "https://waitloop.run/mcp",
+  "waitloop mcp",
+  "waitloop doctor",
+  "create_room()",
+  "join_room",
+  "get_active_room()",
+  "leave_room()",
   "get_turn()",
+  "wait_for_turn",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
   "yield_to_bot()",
@@ -106,12 +123,26 @@ for (const needle of [
   "https://waitloop.run/join/<join-code>",
   "https://waitloop.run/mcp",
   "npm install -g @waitloop/cli@alpha",
+  "waitloop mcp",
   "agent-bots",
+  "create_room()",
+  "join_room",
+  "wait_for_turn",
   "yield_to_bot()",
   "take_control()",
 ]) requireText("llms.txt", llms, needle);
 
-for (const needle of ["Seat", "Actor", "Controller", "seat-1", "yield_to_bot()", "take_control()", "credential"]) {
+for (const needle of [
+  "Seat",
+  "Actor",
+  "Controller",
+  "seat-1",
+  "waitloop mcp",
+  "wait_for_turn",
+  "yield_to_bot()",
+  "take_control()",
+  "credential",
+]) {
   requireText("README.md", rootReadme, needle);
   requireText("AGENTS.md", agents, needle);
 }
@@ -153,11 +184,11 @@ for (const path of stableInstallDocs) {
 
 for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/architecture.md", "docs/status.md"]) {
   const content = read(path);
-  for (const needle of ["Seat", "Actor", "credential", "seat-1"]) requireText(path, content, needle);
+  for (const needle of ["Seat", "Actor", "credential", "seat-1", "wait_for_turn", "waitloop mcp"]) requireText(path, content, needle);
 }
 for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/status.md"]) {
   const content = read(path);
   for (const needle of ["yield_to_bot", "take_control"]) requireText(path, content, needle);
 }
 
-console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/identity/recovery/MCP Agent surfaces synchronized.`);
+console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/local+remote MCP/wait/recovery Agent surfaces synchronized.`);
