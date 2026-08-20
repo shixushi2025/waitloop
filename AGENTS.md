@@ -4,56 +4,60 @@ This repository is edited by humans and coding agents. Keep changes typed, testa
 
 ## Read this first
 
-For non-trivial work, read in this order:
+For non-trivial work read, in order:
 
-1. `README.md` — product/repository entry point.
-2. `docs/README.md` — canonical-document map and source-of-truth rules.
-3. `docs/status.md` — current implementation and known gaps.
-4. The canonical document(s) for the subsystem you are changing.
-5. The implementation and tests.
+1. `README.md`
+2. `docs/README.md`
+3. `docs/status.md`
+4. canonical docs for the subsystem
+5. implementation + tests
 
-Do not reconstruct current behavior from old commits, closed PRs, or superseded design notes unless investigating a regression. `main` describes the system as it exists now.
+Do not reconstruct current behavior from old PRs/commits/superseded design notes unless investigating a regression. `main` describes current durable truth.
 
 ## Product invariant
 
-Waitloop is a waiting layer for coding agents, not an engagement platform. Coding-agent attention always takes priority over a game/secondary experience.
+Waitloop is a waiting layer for coding agents, not an engagement product. Coding-work attention always outranks the game.
 
 ## Architecture invariant
 
-- `packages/protocol`: canonical lifecycle contracts/validation.
-- `packages/game-core`: pure game-agnostic state/room contracts.
-- `packages/doudizhu`: pure Dou Dizhu rules/transitions.
-- `packages/cli`: local CLI, pairing, lifecycle installers, Join convenience.
-- `worker`: Cloudflare HTTP control plane, Durable Objects, hosted runtime, Join and MCP boundaries.
-- `apps/web`: Human presentation only; never source of truth.
-- `integrations`: vendor-specific coding-agent lifecycle adapters.
+```text
+packages/protocol       lifecycle contracts
+packages/game-core      pure game-agnostic contracts
+packages/doudizhu       pure Dou Dizhu rules
+packages/cli            local convenience/integration
+integrations/*          vendor lifecycle adapters
+worker/*                HTTP control plane, DO runtime, MCP, hosted inference
+apps/web                 Human presentation + public Agent surfaces
+```
 
-Do not import integration/vendor semantics into core packages. Web/CLI/MCP clients must converge on the same server-authoritative room/runtime rather than reimplement business rules.
+Web/CLI/MCP/Agent HTTP must converge on the same server runtime rather than duplicate rules/authorization.
 
 ## Privacy invariant
 
-Core lifecycle reporting must not require source code, prompts, repository contents/paths, filenames, cwd, tool arguments/output, terminal output, transcripts, assistant output, model reasoning, or native agent session/turn IDs.
+Core lifecycle reporting must not require prompt/source/repository/cwd/transcript/tool/terminal/assistant/native-session content.
 
-If a feature needs more user data, document the data flow, consent, and threat model before implementation.
+If a feature needs more user data, document consent/data-flow/threat model first.
 
 ## Game identity invariant
 
-**Seat is not Actor. Actor is not automatically Controller.**
+**Seat != Actor != Controller. Identifier != credential.**
 
 ```text
-Seat       one actual game player position / hand / role / history
+Room       one active runtime/game instance
+Seat       stable room-scoped player position / hand / role / history
 Actor      human | bot | hosted-agent | connected-agent
-Binding    Actor -> Seat relationship
-Controller Actor currently allowed to mutate that Seat
-Advisor    Actor explicitly bound to a Seat that may inspect/comment but not play until delegated
+Binding    Actor -> Seat
+Controller Actor currently allowed to mutate Seat
+Advisor    bound Actor that may inspect/comment but not play until delegated
 ```
 
-Game packages see Seat IDs only. They must not branch on Codex, Claude, MCP, browser, advisor, or provider concepts.
+New Dou Dizhu Rooms use stable `seat-1`, `seat-2`, `seat-3`. Controller changes must never rewrite Seat ID/hand/role/history/owner.
 
-Runtime authorization is capability-based. Relevant capabilities include:
+Relevant capabilities:
 
 ```text
 room:view-public
+room:manage
 seat:view-private
 seat:inspect-legal
 seat:play
@@ -61,157 +65,195 @@ seat:control
 room:comment
 ```
 
-Only the Seat's active Controller gets `seat:play`. The Seat owner retains `seat:control`. Delegating control changes authorization only; it must not change the Seat's hand, role, history, or ownership.
+Only active Controller gets `seat:play`; Seat owner keeps `seat:control`; Room owner gets `room:manage`. Advisor private view is limited to its explicitly bound Seat.
 
-An advisor may see the private state of the **single Seat it was explicitly bound to**. Never generalize that grant to another Seat or spectator-wide hidden information.
+Game packages see Seat IDs only. Never branch game rules on Codex/Claude/MCP/browser/advisor/provider concepts.
+
+## Identity / credential invariant
+
+Never use Room ID, Seat ID, Actor ID, or lifecycle session ID as authorization.
+
+Credential scopes are separate:
+
+```text
+wldev_   lifecycle device
+wlview_  one Room Human viewer
+WL-      one-time Join capability
+wlseat_  one Room connected Actor binding
+wla_     persistent anonymous browser Actor credential
+```
+
+Raw secrets must not be logged, put in URLs/prompts/source/commits, or returned to unrelated clients. Server persistence stores digests where applicable.
+
+Anonymous browser Actor identity is deliberately lightweight and browser/device-local. Do not introduce an account/database dependency merely to resume one active Room.
+
+## Room recovery invariant
+
+Current new-Room lifetime is bounded (~24h); Join capability is much shorter (~20m, one-time).
+
+If a Human's `wl_room_...` viewer cookie is missing, recovery may use the persistent anonymous Actor ID + credential to mint a fresh room viewer credential. **Actor ID alone must fail.**
+
+Connected Actor credential may reconnect during the Room lifetime. Reconnect updates presence only and must not silently change `activeControllerActorId`.
+
+## Temporary Controller invariant
+
+Explicit temporary Bot takeover preserves the original Seat and owner.
+
+```text
+before: seat owner/controller = Actor A
+after:  seat owner = Actor A; controller = temporary Bot
+```
+
+Required properties:
+
+- stable Seat ID/hand/role/history;
+- temporary Bot Actor/binding is removable;
+- native Bot Seats cannot be re-wrapped by fallback;
+- elapsed Casual time alone never triggers takeover;
+- original connected owner must reconnect before browser restore;
+- owner explicitly calls `take_control()` to reclaim from MCP;
+- no simultaneous owner/temp-bot Controller mutation.
+
+Put takeover transition logic in pure runtime modules (currently `room-control.ts`), not scattered route/UI branches.
 
 ## Game projection invariant
 
-For hidden-information games, construct viewer projections explicitly. Never serialize internal state and delete private fields afterward.
-
-- Browser Humans use `/play`, `/pass`, `/hint` and do not receive exhaustive machine `legalMoves[]`.
-- Human projection can keep the owner's private hand visible while control is delegated, but mutation controls must disable when `seat:play` is absent.
-- Hosted/connected Actors select server-generated move IDs.
-- Lobby projection must not expose dealt hand/landlord before connected readiness.
-- Stale, out-of-turn, illegal, and non-controller mutations must be rejected server-side.
+- construct public/private projections explicitly;
+- Browser Human does not receive exhaustive machine `legalMoves[]`;
+- Human owner may still see own hand while delegated, but mutation controls reflect `seat:play`;
+- lobby hides dealt hand/landlord before readiness;
+- connected/hosted Actors use server-generated move IDs;
+- stale/out-of-turn/illegal/non-controller moves are rejected server-side.
 
 ## MCP invariant
 
-MCP is game participation, not coding-agent lifecycle detection.
+MCP is gameplay, not lifecycle detection and not the current Room creation control plane.
 
-The fixed MCP endpoint is transport-bound to one room-scoped Actor capability. Model-visible tools stay constrained:
+Model-visible tools:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 comment(text)
+yield_to_bot()
+take_control()
 ```
 
-Room ID, Actor token, Seat binding, and Controller authority are resolved outside tool arguments.
+Room ID, Actor token, Seat binding, ownership, and Controller authority are transport/runtime context, not model arguments.
 
-`comment` is a side channel. It must never alter game state, game revision, turn order, or legal moves.
+`comment` never changes game revision/state/turn. `yield_to_bot`/`take_control` are explicit owner-control transitions, not timeout behavior.
 
 ## Client-neutral control plane
 
-Web is not required for operations that do not inherently need Human UI. Room creation and Join must remain usable headlessly through HTTP/CLI/Agent clients.
-
-Current examples:
+Web is not required for operations that do not inherently need Human UI.
 
 ```text
-connected-agent   Human and Agent on separate Seats
-companion-agent   Agent advisor bound to Human Seat
-agent-bots        Agent controls own Seat against two bots; fully headless
+POST /api/v1/rooms
+Join API
+room Human control/fallback API
 ```
 
-Do not make browser cookies/UI a hidden dependency of Agent-only create/join/play flows.
+must remain usable independently of browser presentation where authorization permits. `agent-bots` remains fully headless.
+
+Do not add `create_room()` to the room-scoped MCP merely to duplicate HTTP. If a future control MCP is useful, it should wrap/reuse the HTTP control-plane contract.
+
+## Abuse/safety invariant
+
+Public endpoints need server-side protection, not UI-only constraints.
+
+Current baseline includes:
+
+- 16 KiB JSON body limit;
+- Cloudflare Room-create and tighter Hosted Room-create Rate Limiting bindings;
+- per-Room/per-Actor Join/MCP/comment/control/recovery counters;
+- Join/Room expiry;
+- capability checks + game revision.
+
+Treat rate limiting as permissive abuse mitigation, not exact accounting. Hosted inference still requires explicit budgets/quotas before broad public exposure.
 
 ## Documentation model
 
-Documentation on `main` describes **current durable truth**, not design chronology.
+`main` contains durable current documentation, not chronology.
 
-Keep long-lived canonical docs: product intent, architecture, protocol, security, current rules, CLI/MCP/Join behavior, pairing, hosted agents, design language, release process, current status, and future roadmap.
-
-Do not leave permanent `*-v2.md`, design drafts, migration scratchpads, or completed phase notes after a feature lands. Use issues/PR descriptions or short-lived branch notes for implementation planning. On merge:
+Do not leave permanent `*-v2.md`, migration scratchpads, design drafts, or completed phase notes. On merge:
 
 1. extract durable decisions into canonical docs;
-2. update `docs/status.md` / `docs/roadmap.md` when relevant;
-3. remove transitional material.
+2. update `status.md` / `roadmap.md`;
+3. delete transitional material.
 
-When code/tests and docs disagree, code/tests describe runtime reality and the docs are stale. Fix the docs in the same change.
+When code/tests and docs disagree, docs are stale and must be fixed in the same change.
 
-Avoid duplicating changing machine-authoritative values. Exact CLI version belongs in `packages/cli/package.json` and `apps/web/public/agent.json`; stable docs should normally use `npm install -g @waitloop/cli@alpha`.
+Avoid duplicated machine-authoritative values. Exact CLI version belongs in package JSON + `agent.json`; stable docs use `@waitloop/cli@alpha`.
 
-## Public Agent surface is an API
+## Public Agent surface is API
 
-These are compatibility surfaces, not incidental docs:
+Always inspect/update as relevant:
 
 ```text
 apps/web/public/agent.md
 apps/web/public/agent.json
 apps/web/public/llms.txt
 apps/web/public/skills/waitloop/SKILL.md
-worker/src/mcp.ts
 worker/src/room-api.ts
+worker/src/mcp.ts
 packages/cli
 ```
 
-Changing Room modes, Join semantics, MCP tools, Actor capabilities, installation/pairing, lifecycle support, public endpoints, or capability status requires checking the entire relevant surface.
-
-`agent.md` is universal guidance; `agent.json` is machine capability truth; `llms.txt` is discovery; Skill is credential-free operating guidance; `/join/<code>` is one temporary Actor binding.
+Room modes, Join semantics, MCP tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
 
 ## Change completeness matrix
 
 | Change | Also inspect/update |
 | --- | --- |
-| CLI/install/release | CLI tests/readme, `docs/cli.md`, `agent.md`, `agent.json`, Skill, release docs |
-| Room modes / Join / connected Actor | Room/Join runtime, Web when Human-facing, CLI compatibility, `game-system.md`, `mcp.md`, protocol/security, all Agent surfaces |
-| Seat/Actor/Binding/Controller capability | pure capability tests, GameRoom authorization, Human projection, architecture/game/protocol/security/design/status docs, Agent surfaces |
-| MCP tool/auth | MCP + runtime tests, `docs/mcp.md`, protocol/security, `agent.md`, `agent.json`, Skill, `llms.txt` |
-| Lifecycle adapter/support | integration + CLI tests, protocol/CLI/status docs, Agent surfaces |
-| Game rule | pure rules regression tests, `doudizhu-rules.md`; `game-system.md` only if generic boundary changes |
-| Human UI/projection | browser JS validation, privacy/non-leakage tests, `game-system.md`, `design.md` |
-| Public endpoint/discovery URL | Worker/static routing, Agent surfaces, canonical protocol/docs |
-| Auth/privacy | negative/boundary tests, `security.md`, protocol/CLI/MCP/Agent docs |
-| Architecture/module boundary | `architecture.md`, `status.md`, repository map if needed |
+| CLI / package / Join cache | CLI package/readme/tests, `docs/cli.md`, manifest, Agent guide/Skill, release docs |
+| Room/Join modes/lifetime | Room API + GameRoom tests, architecture/game/protocol/security/status, all Agent surfaces |
+| Seat/Actor/capability | pure actor/control tests, GameRoom auth, Human projection, architecture/game/protocol/security/design/status |
+| Anonymous identity/recovery | identity parser tests, Room credential tests, security/protocol/architecture/status, browser UX |
+| Fallback/reconnect | pure room-control tests, DO auth, Web + MCP tools, game/design/MCP/protocol/security/status/Agent surfaces |
+| MCP tool/auth | MCP/DO tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
+| Hosted inference/public cost | hosted tests/docs, security/status/roadmap, rate/budget controls |
+| Lifecycle adapter | integration + CLI tests/docs + Agent surfaces |
+| Game rule | pure rules tests + `doudizhu-rules.md` |
+| Human UI/projection | browser JS, privacy tests, game/design docs |
+| Architecture boundary | architecture/status/repository map |
 
 If several rows apply, satisfy all of them.
 
 ## Testing contract
 
-A feature is not complete because one happy path works.
-
 - Rules bugs get regression tests.
-- New trust/capability boundaries get invalid-input/denial tests.
-- Hidden-information changes get explicit non-leakage tests.
-- Controller/delegation changes must prove only the active Controller can mutate a Seat.
-- Comments/side channels must prove they do not mutate game revision/state semantics.
-- CLI packaging changes run npm package validation.
-- Browser changes pass JS syntax validation and should isolate pure presentation logic for tests where practical.
+- Trust/capability/credential boundaries get negative tests.
+- Actor ID without credential must never authenticate.
+- Hidden-information changes get non-leakage tests.
+- Fallback tests prove owner/Seat preservation and cleanup of temporary Actor only.
+- Controller changes prove only active Controller can mutate.
+- Comments prove no game-revision/state mutation.
+- CLI packaging changes run package validation.
+- Browser changes pass JS syntax validation.
 - Public Agent changes pass `pnpm check:repo-contract`.
-- Worker changes pass Wrangler dry-run.
+- Worker/config changes pass `wrangler deploy --dry-run`.
 
-Do not weaken tests merely to fit an implementation unless the documented contract intentionally changed.
-
-## Engineering conventions
-
-- TypeScript strict mode; avoid `any`, validate `unknown` at trust boundaries.
-- Prefer small modules with explicit responsibilities/dependencies.
-- Pure domain logic must not depend on Cloudflare/browser globals where practical.
-- Validate input before mutation.
-- Reject stale/out-of-turn/non-controller actions.
-- No production secrets in the repository.
-- Keep dependencies minimal/justified.
-- Refactor a responsibility boundary before repeatedly adding unrelated special cases to a large file.
+Do not weaken tests to fit an implementation unless the contract intentionally changed.
 
 ## Refactoring cycle
 
-Early code may optimize for proving a product contract; it is not automatically permanent architecture.
+Early correct implementations may be replaced when patch pressure reveals better stable responsibilities.
 
 ```text
-small correct implementation
-  -> real usage/features
-  -> patch pressure appears
-  -> stable responsibilities emerge
-  -> structural refactor
-  -> stronger tests + canonical docs
-  -> continue feature work
+feature -> feature -> patch pressure
+-> lock behavior with tests
+-> structural refactor
+-> canonical docs/Agent surfaces sync
+-> continue
 ```
 
-Refactor based on structural evidence, not a calendar. Patch-pressure signals include repeated unrelated branches in one file, mixed protocol/auth/domain/persistence/presentation responsibility, duplicated validation/state transitions, features bypassing abstractions, tests becoming only end-to-end, docs no longer matching module ownership, or a new Agent needing substantial historical context to understand the current shape.
+Signals include giant mixed-responsibility files, repeated mode branches, duplicated validation, abstractions being bypassed, tests becoming only E2E, docs no longer matching ownership, or new Agents requiring historical context to understand current code.
 
-Prefer local refactors when boundaries are obvious. For structural refactors:
+Prefer local refactors during normal features. Structural refactors require behavior tests first and removal of superseded compatibility/transition paths when safe.
 
-1. identify behavior/contracts that must stay stable;
-2. strengthen tests first;
-3. move responsibilities without unnecessary product changes;
-4. update canonical architecture/status/docs;
-5. remove superseded compatibility/transitional paths when migration is complete.
-
-Do not abstract after one occurrence. Implement the first case, observe the second, and extract when repetition/responsibility are actually stable.
+Do not maximize abstraction; optimize for continued change.
 
 ## Required checks
-
-Before merging non-trivial work, run or rely on CI for:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -220,18 +262,15 @@ pnpm check:repo-contract
 pnpm check:cli-package
 ```
 
-CI additionally validates browser JavaScript and `wrangler deploy --dry-run`.
+CI also validates browser JS and Wrangler dry-run.
 
 ## Preferred implementation order
 
-1. identify/update durable contract;
-2. add/update shared types;
-3. implement pure domain/capability logic;
-4. add regression/negative tests;
-5. wire runtime/API;
-6. wire UI/platform adapter;
-7. synchronize public Agent surfaces + canonical docs;
-8. remove superseded transition material;
-9. run complete validation.
-
-Do not bypass layers merely to make a demo work.
+1. establish durable contract;
+2. shared types / pure capability logic;
+3. regression + negative tests;
+4. runtime/API wiring;
+5. UI/platform adapters;
+6. public Agent + canonical docs sync;
+7. remove transition material;
+8. run complete validation.
