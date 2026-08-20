@@ -1,11 +1,17 @@
+import { execFileSync } from "node:child_process";
+
 const REPOSITORY = "shixushi2025/waitloop";
 const DEFAULT_REQUIRED_CHECK_NAME = "ready-to-deploy";
 const REQUIRED_APP_SLUG = "github-actions";
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
-const DEFAULT_POLL_MS = 20 * 1000;
+const DEFAULT_POLL_MS = 60 * 1000;
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCommitSha(value) {
+  return typeof value === "string" && /^[a-f0-9]{40}$/i.test(value);
 }
 
 function requiredCheckName() {
@@ -93,6 +99,26 @@ export async function waitForRequiredCheck(sha, options = {}) {
   throw new Error(`Timed out waiting for GitHub Actions ${checkName} on ${sha}.`);
 }
 
+function currentGitSha() {
+  try {
+    const value = execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (isCommitSha(value)) return value;
+  } catch {
+    // The caller receives one stable error below.
+  }
+  throw new Error("Manual deployment requires a Git checkout with a valid HEAD commit.");
+}
+
+function deploymentSha(forceGate) {
+  const cloudflareSha = process.env.WORKERS_CI_COMMIT_SHA?.trim();
+  if (isCommitSha(cloudflareSha)) return cloudflareSha;
+  if (forceGate) return currentGitSha();
+  throw new Error("Cloudflare production build is missing a valid WORKERS_CI_COMMIT_SHA.");
+}
+
 function selfTest() {
   const sha = "0123456789abcdef0123456789abcdef01234567";
   const checkName = "check";
@@ -118,15 +144,14 @@ async function main() {
     return;
   }
 
-  if (process.env.WORKERS_CI !== "1" || process.env.WORKERS_CI_BRANCH !== "main") return;
+  const forceGate = process.argv.includes("--require");
+  const cloudflareProduction = process.env.WORKERS_CI === "1" && process.env.WORKERS_CI_BRANCH === "main";
+  if (!forceGate && !cloudflareProduction) return;
 
-  const sha = process.env.WORKERS_CI_COMMIT_SHA?.trim();
-  if (!sha || !/^[a-f0-9]{40}$/i.test(sha)) {
-    throw new Error("Cloudflare production build is missing a valid WORKERS_CI_COMMIT_SHA.");
-  }
-
+  const sha = deploymentSha(forceGate);
   const checkName = requiredCheckName();
-  console.log(`Waiting for GitHub Actions ${checkName} before Cloudflare deploy of ${sha}.`);
+  const source = cloudflareProduction ? "Cloudflare production build" : "manual deployment";
+  console.log(`Waiting for GitHub Actions ${checkName} before ${source} of ${sha}.`);
   await waitForRequiredCheck(sha, {
     checkName,
     timeoutMs: positiveInteger(process.env.WAITLOOP_CI_GATE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
