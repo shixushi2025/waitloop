@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTOR_IDENTITY_COOKIE_NAME,
   actorIdentityCookie,
+  actorIdentityFromRequest,
   createAnonymousActorIdentity,
   parseAnonymousActorIdentity,
   serializeAnonymousActorIdentity,
@@ -21,6 +22,18 @@ describe("anonymous actor identity", () => {
     expect(parseAnonymousActorIdentity(null)).toBeNull();
     expect(parseAnonymousActorIdentity("actor_deadbeef")).toBeNull();
     expect(parseAnonymousActorIdentity("actor_00000000000000000000000000000000.bad")).toBeNull();
+  });
+
+  it("reads the full Actor identity from Cookie headers but rejects an Actor ID without credential", () => {
+    const identity = createAnonymousActorIdentity();
+    const value = serializeAnonymousActorIdentity(identity);
+    expect(actorIdentityFromRequest({
+      headers: { get: (name) => name.toLowerCase() === "cookie" ? `other=x; ${ACTOR_IDENTITY_COOKIE_NAME}=${value}; last=y` : null },
+    })).toEqual(identity);
+
+    expect(actorIdentityFromRequest({
+      headers: { get: (name) => name.toLowerCase() === "cookie" ? `${ACTOR_IDENTITY_COOKIE_NAME}=${identity.actorId}` : null },
+    })).toBeNull();
   });
 
   it("creates a persistent HttpOnly cookie without exposing the credential in a URL", () => {
