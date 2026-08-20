@@ -125,3 +125,149 @@ jobs:
           fi
           git commit -m "chore: record Cloudflare gate validation"
           git push origin HEAD:fix/cloudflare-ci-gate-verify
+
+  verify-main-cloudflare-deployment:
+    if: always() && github.ref == 'refs/heads/fix/cloudflare-ci-gate-verify'
+    needs: record-cloudflare-gate-verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    permissions:
+      contents: write
+      checks: read
+      statuses: read
+    env:
+      TARGET_SHA: 4d7d73d9ba51d5960be1deaf0b1b6bd5dbd61916
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Observe actual main deployment checks
+        run: |
+          if test -f .main-deploy.result; then
+            cat .main-deploy.result
+            exit 0
+          fi
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const owner = 'shixushi2025';
+          const repo = 'waitloop';
+          const sha = process.env.TARGET_SHA;
+          const token = process.env.GITHUB_TOKEN;
+          const deadline = Date.now() + 15 * 60 * 1000;
+          const headers = {
+            accept: 'application/vnd.github+json',
+            authorization: `Bearer ${token}`,
+            'user-agent': 'waitloop-main-deployment-verifier',
+            'x-github-api-version': '2026-03-10',
+          };
+
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const lower = (value) => String(value ?? '').toLowerCase();
+          const terminalFailure = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale']);
+
+          async function json(url) {
+            const response = await fetch(url, { headers });
+            if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+            return response.json();
+          }
+
+          function latest(items, key = 'id') {
+            return [...items].sort((a, b) => Number(b?.[key] ?? 0) - Number(a?.[key] ?? 0))[0] ?? null;
+          }
+
+          let final = null;
+          while (Date.now() <= deadline) {
+            const [checksBody, statusBody] = await Promise.all([
+              json(`https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs?filter=all&per_page=100`),
+              json(`https://api.github.com/repos/${owner}/${repo}/commits/${sha}/status`),
+            ]);
+            const checks = Array.isArray(checksBody.check_runs) ? checksBody.check_runs : [];
+            const statuses = Array.isArray(statusBody.statuses) ? statusBody.statuses : [];
+
+            const ready = latest(checks.filter((run) =>
+              run?.name === 'ready-to-deploy' && run?.head_sha === sha && run?.app?.slug === 'github-actions'));
+            const cloudflareChecks = checks.filter((run) =>
+              run?.head_sha === sha && lower(`${run?.name} ${run?.app?.slug}`).includes('cloudflare'));
+            const cloudflareStatuses = statuses.filter((status) => lower(status?.context).includes('cloudflare'));
+            const cloudflareCheck = latest(cloudflareChecks);
+            const cloudflareStatus = cloudflareStatuses[0] ?? null;
+
+            const readySuccess = ready?.status === 'completed' && ready?.conclusion === 'success';
+            const cloudflareCheckSuccess = cloudflareCheck?.status === 'completed' && cloudflareCheck?.conclusion === 'success';
+            const cloudflareStatusSuccess = cloudflareStatus?.state === 'success';
+
+            const snapshot = {
+              version: 1,
+              observedAt: new Date().toISOString(),
+              targetSha: sha,
+              readyToDeploy: ready ? {
+                id: ready.id,
+                status: ready.status,
+                conclusion: ready.conclusion,
+                completedAt: ready.completed_at,
+                detailsUrl: ready.details_url,
+              } : null,
+              cloudflareCheck: cloudflareCheck ? {
+                id: cloudflareCheck.id,
+                name: cloudflareCheck.name,
+                app: cloudflareCheck.app?.slug,
+                status: cloudflareCheck.status,
+                conclusion: cloudflareCheck.conclusion,
+                startedAt: cloudflareCheck.started_at,
+                completedAt: cloudflareCheck.completed_at,
+                detailsUrl: cloudflareCheck.details_url,
+              } : null,
+              cloudflareStatus: cloudflareStatus ? {
+                id: cloudflareStatus.id,
+                context: cloudflareStatus.context,
+                state: cloudflareStatus.state,
+                createdAt: cloudflareStatus.created_at,
+                updatedAt: cloudflareStatus.updated_at,
+                targetUrl: cloudflareStatus.target_url,
+              } : null,
+            };
+
+            if (ready?.status === 'completed' && terminalFailure.has(ready?.conclusion)) {
+              final = { ...snapshot, result: 'failure', reason: `ready-to-deploy:${ready.conclusion}` };
+              break;
+            }
+            if (cloudflareCheck?.status === 'completed' && terminalFailure.has(cloudflareCheck?.conclusion)) {
+              final = { ...snapshot, result: 'failure', reason: `cloudflare-check:${cloudflareCheck.conclusion}` };
+              break;
+            }
+            if (cloudflareStatus && ['failure', 'error'].includes(cloudflareStatus.state)) {
+              final = { ...snapshot, result: 'failure', reason: `cloudflare-status:${cloudflareStatus.state}` };
+              break;
+            }
+            if (readySuccess && (cloudflareCheckSuccess || cloudflareStatusSuccess)) {
+              final = { ...snapshot, result: 'success', reason: cloudflareCheckSuccess ? 'cloudflare-check-success' : 'cloudflare-status-success' };
+              break;
+            }
+
+            fs.writeFileSync('.main-deploy.json', `${JSON.stringify({ ...snapshot, result: 'waiting' }, null, 2)}\n`);
+            await sleep(15_000);
+          }
+
+          if (!final) {
+            let last = null;
+            try { last = JSON.parse(fs.readFileSync('.main-deploy.json', 'utf8')); } catch {}
+            final = {
+              ...(last ?? { version: 1, targetSha: sha }),
+              observedAt: new Date().toISOString(),
+              result: 'timeout',
+              reason: 'cloudflare-check-not-observed-within-15-minutes',
+            };
+          }
+
+          fs.writeFileSync('.main-deploy.json', `${JSON.stringify(final, null, 2)}\n`);
+          fs.writeFileSync('.main-deploy.result', `${final.result}\n`);
+          console.log(JSON.stringify(final, null, 2));
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .main-deploy.result .main-deploy.json
+          git commit -m "chore: record actual main Cloudflare deployment"
+          git push origin HEAD:fix/cloudflare-ci-gate-verify
