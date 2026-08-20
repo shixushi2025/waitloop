@@ -2,17 +2,22 @@
   "name": "waitloop",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "pnpm@10.0.0",
+  "description": "Tiny games while your coding agent runs.",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck",
     "build:cli": "pnpm --filter @waitloop/cli build",
     "check:repo-contract": "node scripts/validate-repository-contract.mjs && node scripts/validate-onboarding-contract.mjs",
     "check:cli-package": "node scripts/validate-cli-package.mjs",
     "check:mcp-stdio": "pnpm build:cli && node scripts/validate-mcp-stdio.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck",
     "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
     "check": "pnpm typecheck && pnpm test"
   },
   "devDependencies": {
