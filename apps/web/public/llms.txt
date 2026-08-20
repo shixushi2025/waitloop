@@ -5,8 +5,10 @@
 Canonical agent integration guide: https://waitloop.run/agent.md
 Machine-readable manifest: https://waitloop.run/agent.json
 Waitloop skill: https://waitloop.run/skills/waitloop/SKILL.md
+Room-specific join pattern: https://waitloop.run/join/<join-code>
 Game MCP endpoint: https://waitloop.run/mcp
+CLI alpha install: npm install -g @waitloop/cli@alpha
 Health: https://waitloop.run/api/v1/health
 Source: https://github.com/shixushi2025/waitloop
 
-Important integration rule: lifecycle hooks and game MCP are separate. Hooks report running/waiting/completed/failed. MCP controls one authorized game seat and requires a room-specific seat token.
+Important integration rule: lifecycle hooks and game MCP are separate. Hooks report running/waiting/completed/failed. MCP controls one authorized temporary game seat. A connected-agent room may be joined with `waitloop join <code>` or raw room-scoped MCP configuration; the room starts when that MCP seat actually connects.

@@ -1,215 +1,96 @@
 # Roadmap
 
-This roadmap is ordered by dependency and proof value. A phase is complete only when its acceptance criteria pass; later phases should not bypass an incomplete core invariant.
+This document contains only **future work that is still relevant**. Completed implementation phases are removed; durable behavior belongs in the canonical subsystem docs instead.
 
-## Phase 0 — Product contract
+Current implemented state is tracked in [`status.md`](status.md).
 
-Status: **in progress**
+## 1. Public hardening
 
-Deliverables:
+Before broader public exposure:
 
-- product definition and non-goals
-- architecture boundaries
-- canonical lifecycle protocol
-- game-system contract
-- privacy/security baseline
-- visual language
-- repository instructions for coding agents
-
-Acceptance:
-
-- a new contributor can explain what belongs in integrations, core, worker, and game packages
-- documentation makes clear that MCP is not the lifecycle detector
-- documentation makes clear that Waitloop does not need prompt/source content
-
-## Phase 1 — Workspace foundation
-
-Deliverables:
-
-- pnpm workspace
-- strict shared TypeScript config
-- build/typecheck/test scripts
-- Worker entry point
-- Cloudflare configuration
-- minimal static web app
+- rate limiting for room creation, pairing, lifecycle ingest, MCP mutation, and hosted inference;
+- room/join/temporary credential cleanup and expiry policy;
+- hosted-agent usage budgets and quotas;
+- stronger CSP/CORS/security headers and production review;
+- clearer private security-reporting path;
+- migration/recovery tests for persisted Durable Object state.
 
 Acceptance:
 
-```bash
-pnpm install
-pnpm typecheck
-pnpm test
-```
+- abusive anonymous traffic cannot create unbounded inference/state cost;
+- expired rooms/credentials do not remain indefinitely useful;
+- production headers/auth boundaries match [`security.md`](security.md).
 
-complete successfully on a clean checkout.
+## 2. Connected-agent resilience
 
-## Phase 2 — Agent event protocol
+Improve long-running connected-agent tables without adding a hard casual turn clock:
 
-Deliverables:
-
-- protocol types
-- runtime validators
-- state-transition reducer
-- unit tests for duplicates, stale events, terminal states, and revisions
+- reconnect/disconnect state;
+- soft elapsed warnings;
+- explicit user-controlled `replace with bot` takeover;
+- temporary MCP configuration cleanup after the room ends;
+- better client identity/labeling when MCP client metadata is available;
+- clearer recovery when a join code is claimed but the MCP client never connects.
 
 Acceptance:
 
-- external JSON cannot mutate session state without validation
-- duplicate event IDs are idempotent
-- sequence/timestamp staleness behavior is deterministic
+- a disconnected/stalled connected agent never forces the user to abandon the table;
+- takeover is explicit, not triggered by an arbitrary casual-game timer;
+- seat credentials remain scoped to one room.
 
-## Phase 3 — AgentSession runtime
+## 3. Dou Dizhu completeness
 
-Deliverables:
+Add the missing rules layer after the current play loop is stable:
 
-- `POST /api/v1/agent-events`
-- AgentSession Durable Object
-- snapshot endpoint
-- WebSocket subscribers
-- minimal event/status UI
-
-Acceptance demo:
-
-```text
-curl/event producer -> Worker -> AgentSession DO -> browser updates in real time
-```
-
-No source/prompt content is sent.
-
-## Phase 4 — First real adapter
-
-Target: **Claude Code first**
-
-Deliverables:
-
-- installable adapter/plugin structure
-- lifecycle mapping into protocol v1
-- bounded/non-blocking event delivery
-- install/uninstall documentation
-
-Acceptance demo:
-
-```text
-real Claude Code task starts
--> waitloop shows running
-real task stops/waits
--> waitloop interrupts the waiting UI
-```
-
-## Phase 5 — Generic game runtime
-
-Deliverables:
-
-- game-core interfaces
-- authoritative room revision model
-- GameRoom Durable Object skeleton
-- viewer-specific snapshots
-- legal move / stale move handling
+- bidding / rob-landlord phase;
+- landlord resolution from bidding rather than pre-game random assignment;
+- bidding score and settlement model;
+- bomb/rocket multipliers;
+- spring / anti-spring rules;
+- regression coverage for the selected rule profile.
 
 Acceptance:
 
-- a trivial test game can run without any Dou Dizhu-specific code in GameRoom
-- stale move revisions are rejected
+- [`doudizhu-rules.md`](doudizhu-rules.md), engine behavior, tests, human UI, and agent-visible state agree exactly.
 
-## Phase 6 — Dou Dizhu engine
+## 4. Lifecycle/browser account model
 
-Deliverables:
+The current public game-room credential model is independent of coding-agent lifecycle-session access. If account-backed lifecycle UI/device management is introduced:
 
-- card/deck model
-- deterministic deal support
-- pattern classification
-- pattern comparison
-- legal move generation
-- bidding/play state machine
-- viewer-specific public state
-- regression-heavy unit tests
+- browser session/ticket flow for lifecycle sessions;
+- device list/revoke/rotation UX;
+- explicit account/device ownership boundaries;
+- no regression to Worker-wide browser secrets.
 
-Acceptance:
+Do not make accounts a prerequisite for the core game-room flow unless the product requirement changes.
 
-- complete legal game can be simulated deterministically to a winner
-- hidden cards cannot appear in another player's public projection
-- bombs/rocket and core combination rules are covered by tests
+## 5. Additional lifecycle adapters
 
-## Phase 7 — Web game UI
+- implement DSH only after its lifecycle integration contract is well understood;
+- add other coding agents based on real demand;
+- preserve the canonical Waitloop lifecycle protocol instead of adding vendor semantics to core packages.
 
-Deliverables:
+Each adapter must preserve fail-open delivery and the lifecycle privacy contract.
 
-- Waitloop shell
-- Dou Dizhu room view
-- keyboard and pointer move selection
-- pause/return behavior when linked agent state changes
-- responsive layout
+## 6. Arena / benchmark mode
 
-Acceptance demo:
+Arena is a separate experiment/evaluation policy, not the default waiting experience.
 
-```text
-agent running
--> user enters Dou Dizhu
--> game in progress
--> agent waiting/completed
--> game pauses and return-to-work dominates UI
-```
+Potential capabilities:
 
-## Phase 8 — MCP participation
+- deterministic agent-vs-agent match runner;
+- reproducible seeds/configurations;
+- public-decision replay logs;
+- win rate, latency, fallback, and tool-call error metrics;
+- explicit hard turn limits where benchmark fairness requires them.
 
-Deliverables:
+Do not import Arena timeout/engagement behavior into casual human waiting tables.
 
-- remote MCP endpoint
-- `get_turn`
-- `play_move`
-- player/session authorization boundary
-- agent-facing game instructions/skill
+## Roadmap maintenance rule
 
-Acceptance:
+When one of these items ships:
 
-- an agent can play a full seat without receiving hidden hands
-- model selects server-generated move IDs
-- invalid/stale tool calls cannot mutate state
-
-## Phase 9 — Additional adapters
-
-Order:
-
-1. Cursor
-2. Codex
-3. DSH
-4. other coding agents based on demand
-
-Each adapter must map into protocol v1 and preserve the fail-open/privacy invariants.
-
-## Phase 10 — Packaging and install UX
-
-Deliverables:
-
-- `waitloop` CLI or equivalent installer
-- detect supported agents
-- install/update/uninstall adapters safely
-- local pairing flow
-- clear diagnostic/status command
-
-Target UX:
-
-```text
-$ waitloop init
-
-detecting agents...
-✓ Claude Code
-✓ Codex
-✓ Cursor
-
-install integrations? [Y/n]
-```
-
-## Later — Arena
-
-Agent-vs-agent is an experiment layer, not a v0.1 dependency.
-
-Potential work:
-
-- deterministic match runner
-- model/agent adapters
-- replay logs containing public decisions only by default
-- metrics such as win rate and tool-call errors
-- reproducible seeds/configurations
-
-Do not let benchmark features complicate the human waiting experience.
+1. update the relevant canonical docs;
+2. update [`status.md`](status.md);
+3. remove the completed item from this roadmap;
+4. do not create a permanent `feature-v2.md` to preserve the implementation history.

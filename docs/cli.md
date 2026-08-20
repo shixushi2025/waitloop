@@ -1,59 +1,28 @@
 # Waitloop CLI
 
-The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, device pairing, lifecycle hook installation, diagnostics, and opening the current waiting session.
+The CLI is the local integration layer between Waitloop and coding agents. It owns local configuration, device pairing, lifecycle hook installation, diagnostics, opening the current waiting session, and connected-agent room join-code exchange.
 
 Game rules, room authority, hosted game agents, MCP tools, and remote session state remain server-side.
 
-## Goals
+## Install
 
-- one predictable local entry point: `waitloop`
-- no prompt, source, transcript, repository, or tool-payload collection
-- idempotent installs and safe uninstalls
-- platform adapters stay thin and map into the canonical Waitloop lifecycle protocol
-- local state is inspectable and removable
-- scoped device credentials replace Worker-wide lifecycle secrets
-
-## Local files
-
-```text
-~/.waitloop/
-├── config.json
-└── state/
-    ├── claude-code/
-    ├── cursor/
-    └── codex/
-```
-
-A paired configuration looks like:
-
-```json
-{
-  "version": 1,
-  "url": "https://waitloop.run",
-  "deviceId": "device-opaque-uuid",
-  "deviceToken": "wldev_..."
-}
-```
-
-The device ID is metadata only. Authorization comes from the scoped `deviceToken`. Raw device credentials are not stored server-side; the server persists only a SHA-256 digest.
-
-Native agent session identifiers are used only as local correlation inputs and are hashed before they become local temporary filenames. They are not emitted in Waitloop lifecycle events.
-
-## Current alpha install
-
-The CLI package exists in this repository as `@waitloop/cli`, but it is not yet a public npm release.
-
-Current source install:
+The public alpha channel is installed with:
 
 ```bash
-git clone https://github.com/shixushi2025/waitloop.git
-cd waitloop
-pnpm install --frozen-lockfile
-pnpm build:cli
-npm install -g ./packages/cli
+npm install -g @waitloop/cli@alpha
+waitloop --version
 ```
 
-Then:
+The exact published version is machine-readable in:
+
+```text
+packages/cli/package.json
+https://waitloop.run/agent.json
+```
+
+Do not hard-code a particular alpha patch version into general installation documentation.
+
+Then initialize and pair:
 
 ```bash
 waitloop init --url https://waitloop.run
@@ -61,27 +30,58 @@ waitloop pair
 waitloop doctor
 ```
 
-The canonical external-agent installation guide is also published at:
+Canonical external-agent instructions:
 
 ```text
 https://waitloop.run/agent.md
 ```
 
+## Local files
+
+```text
+~/.waitloop/
+├── config.json
+├── joins/
+└── state/
+    ├── claude-code/
+    ├── cursor/
+    └── codex/
+```
+
+`config.json` contains the stable local device identity and, after pairing, a scoped lifecycle device credential. Join credentials are separate room-scoped capabilities and must never be treated as lifecycle credentials.
+
+Raw device credentials are not stored server-side; the server stores only their digest. Native coding-agent session identifiers remain local correlation data and are not emitted in lifecycle events.
+
 ## Commands
 
-### Initialize
+```text
+waitloop init [--url URL] [--yes]
+waitloop pair [--no-open] [--bootstrap-token TOKEN]
+waitloop join <join-code> [--url URL] [--json]
+waitloop unpair
+waitloop doctor
+waitloop install <claude-code|cursor|codex|all>
+waitloop uninstall <claude-code|cursor|codex|all>
+waitloop status
+waitloop open [--print]
+waitloop config
+waitloop hook <claude-code|cursor|codex>
+waitloop --version
+```
+
+Development/migration options may exist in the binary but are not normal public setup instructions unless `agent.md`/`agent.json` expose them.
+
+## Initialize
 
 ```bash
 waitloop init --url https://waitloop.run
 ```
 
-Initialization creates or updates local config, preserves the existing device ID, detects installed coding agents, and can install supported lifecycle adapters.
+Initialization creates/updates local config, preserves the local device ID, detects installed coding agents, and can install supported lifecycle adapters.
 
-Development/migration options such as `--ingest-token` and `--access-token` remain available but are not part of the normal public setup path.
+## Pair a device
 
-### Pair a device
-
-Normal public flow:
+Normal flow:
 
 ```bash
 waitloop pair
@@ -92,46 +92,65 @@ The CLI:
 1. ensures a local device identity exists;
 2. creates a short-lived pairing request;
 3. keeps a high-entropy verifier locally;
-4. opens or prints the browser approval URL;
+4. opens the browser approval URL unless `--no-open` is used;
 5. waits for explicit browser approval;
 6. exchanges the verifier for one `agent:write` device credential;
-7. stores that credential privately;
-8. removes the saved legacy lifecycle ingest token from the normal path.
+7. stores that credential privately.
 
-Use:
+The privileged bootstrap path exists only for development/recovery and must not become the normal end-user setup path.
 
-```bash
-waitloop pair --no-open
+## Join a connected-agent game seat
+
+Connected-agent rooms expose a temporary code such as:
+
+```text
+WL-7K4P9Q2MZX
 ```
 
-when the CLI should print the approval URL without opening a browser.
-
-The privileged bootstrap path remains only for development/recovery:
+Claim it with:
 
 ```bash
-WAITLOOP_BOOTSTRAP_TOKEN=... waitloop pair
-waitloop pair --bootstrap-token TOKEN
+waitloop join WL-7K4P9Q2MZX
 ```
 
-Do not use the Worker-wide bootstrap/access authority as a normal end-user credential.
+For an automated agent that wants structured output:
 
-### Unpair
+```bash
+waitloop join WL-7K4P9Q2MZX --json
+```
+
+The command:
+
+1. normalizes the join code;
+2. calls the room-specific join API;
+3. exchanges the one-time code for a `wlseat_...` room credential;
+4. stores/caches only the room-scoped join information locally;
+5. prints the temporary MCP configuration for that room.
+
+Claiming the code moves the seat to `connecting`. The connected-agent room remains in `waiting_for_players` until the claimed MCP credential is actually used. The first authenticated MCP request marks the seat connected and starts the room.
+
+The CLI is a convenience layer. Agents without the CLI can use the `/join/<code>` onboarding path and raw MCP configuration.
+
+## Unpair
 
 ```bash
 waitloop unpair
 ```
 
-The CLI first self-revokes the remote device credential and then removes it locally. If Waitloop is unreachable or returns a server error, the local credential is retained so revocation can be retried.
+The CLI self-revokes the remote device credential and removes it locally. Device lifecycle credentials and game seat credentials are separate scopes.
 
-### Diagnostics
+## Diagnostics
 
 ```bash
 waitloop doctor
+waitloop status
+waitloop config
+waitloop open --print
 ```
 
-Checks local configuration, the Waitloop health endpoint, pairing state, and best-effort agent detection.
+`waitloop config` redacts secrets. `status` reads adapter-local latest-state files. `open` prefers a running/waiting coding-agent turn.
 
-### Install and uninstall adapters
+## Install and uninstall lifecycle adapters
 
 ```bash
 waitloop install claude-code
@@ -145,131 +164,62 @@ waitloop uninstall codex
 waitloop uninstall all
 ```
 
-Installers merge only Waitloop-owned hook entries and preserve unrelated user hooks. Uninstallers remove only Waitloop-owned handlers.
+Installers merge only Waitloop-owned hook entries and preserve unrelated user configuration. Uninstallers remove only Waitloop-owned handlers.
 
-## Claude Code lifecycle integration
+### Claude Code
 
-The CLI installer writes Waitloop hooks into the user's Claude configuration and runs:
+Lifecycle mapping includes running/waiting/completed/failed signals from supported Claude hooks. Prompt text, working directory, transcript path, tool input, and tool output are ignored.
 
-```text
-waitloop hook claude-code
-```
+A source-only Claude Code plugin also exists under `integrations/claude-code/`, but normal product setup should prefer the CLI installer so pairing/configuration remain centralized.
 
-Lifecycle mapping:
+### Cursor
 
-```text
-UserPromptSubmit                    running
-PermissionRequest                   waiting
-Notification(permission/idle/etc.) waiting
-Stop                                completed
-StopFailure                         failed
-SessionEnd                          local cleanup
-```
+The Cursor installer maps supported user/stop/session lifecycle events into the canonical Waitloop protocol. Native conversation/generation identifiers stay local.
 
-The hook receives Claude hook JSON on stdin but reads only the native session correlation field and hook event name. Prompt text, current directory, transcript path, tool input, and tool output are ignored.
+### Codex
 
-A source-only alpha Claude Code plugin also exists at:
+The Codex installer adds Waitloop hooks and the user must review/trust the Waitloop hook through Codex's `/hooks` UI. Waitloop must not bypass that trust step.
 
-```text
-integrations/claude-code/
-```
+Prompt text, working directory, tool payloads, assistant output, and native session/turn identifiers are not emitted to Waitloop.
 
-For normal product setup, prefer the CLI installer so lifecycle configuration and pairing stay centralized.
+### DSH
 
-## Cursor lifecycle integration
-
-The Cursor installer writes version-1 Waitloop hooks to the user Cursor hook configuration and installs:
-
-```text
-waitloop hook cursor
-```
-
-Current mapping:
-
-```text
-beforeSubmitPrompt   running
-stop/completed       completed
-stop/aborted|error   failed
-sessionEnd           local cleanup
-```
-
-Cursor native conversation/generation identifiers remain local correlation inputs and are not emitted in Waitloop lifecycle network events.
-
-## Codex lifecycle integration
-
-The Codex installer writes user-level Waitloop hooks and installs:
-
-```text
-waitloop hook codex
-```
-
-Current mapping:
-
-```text
-UserPromptSubmit   running
-PermissionRequest  waiting
-Stop               completed
-SessionEnd         local cleanup
-```
-
-After installation, the user must review/trust the Waitloop hook in Codex's `/hooks` UI. Waitloop must not bypass that trust step.
-
-Prompt text, working directory, transcript data, tool input, assistant output, native `session_id`, and native `turn_id` are not emitted to Waitloop.
-
-## DSH
-
-DSH detection exists, but the lifecycle adapter is still planned. Do not invent a `waitloop install dsh` command until the implementation/status manifest says it is available.
-
-## Current turn
-
-```bash
-waitloop status
-waitloop open
-waitloop open --print
-```
-
-`status` reads only adapter-local latest-state files. `open` prefers a running/waiting turn and includes only the opaque Waitloop session ID in the browser URL.
-
-### Inspect configuration safely
-
-```bash
-waitloop config
-```
-
-Secret values are redacted.
+DSH detection may exist, but the lifecycle adapter is still planned. Do not invent a `waitloop install dsh` command until implementation and `agent.json` mark it available.
 
 ## Lifecycle credential order
 
-Lifecycle delivery prefers:
+Normal lifecycle delivery prefers a scoped device credential. Legacy Worker-wide ingest/access values are migration/development mechanisms, not recommended user credentials.
 
-```text
-1. WAITLOOP_DEVICE_TOKEN
-2. config deviceToken
-3. WAITLOOP_INGEST_TOKEN       (legacy migration)
-4. config ingestToken          (legacy migration)
-```
-
-The device credential is scoped to lifecycle ingestion (`agent:write`). It does not grant arbitrary game, browser, admin, or MCP access.
+The device credential grants lifecycle ingestion (`agent:write`) only. It does not grant arbitrary browser, game, admin, or MCP access.
 
 ## Hook delivery behavior
 
-Lifecycle delivery is best-effort and fail-open. The default HTTP timeout is short so a Waitloop outage cannot become an agent outage. Development can override the timeout with:
-
-```text
-WAITLOOP_HOOK_TIMEOUT_MS
-```
-
-The value is bounded.
+Lifecycle delivery is best-effort and fail-open. A Waitloop outage must not become a coding-agent outage. Network delivery uses a bounded timeout.
 
 ## Game MCP is separate
 
 Installing lifecycle hooks does not globally install a playable MCP seat.
 
-A connected-agent room creates a separate room/seat capability for:
+A connected-agent room creates a separate temporary capability for:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 ```
 
-That seat credential is temporary and must remain separate from the long-lived device lifecycle credential. See [`mcp.md`](mcp.md).
+Room/seat authentication remains outside model-visible tool arguments. See [`mcp.md`](mcp.md).
+
+## Maintenance rule
+
+When CLI behavior changes, update the same change set across:
+
+- CLI implementation/tests;
+- `packages/cli/README.md`;
+- this document;
+- `apps/web/public/agent.md`;
+- `apps/web/public/agent.json`;
+- `apps/web/public/skills/waitloop/SKILL.md`;
+- `llms.txt` when discovery/entrypoints change;
+- release documentation when release mechanics change.
+
+`pnpm check:repo-contract` enforces a subset of these synchronization invariants.

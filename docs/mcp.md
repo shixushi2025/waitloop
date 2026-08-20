@@ -1,27 +1,69 @@
 # MCP game boundary
 
-Waitloop exposes a remote MCP endpoint at `/mcp` for an agent that occupies one game seat.
+Waitloop exposes a remote MCP endpoint at `/mcp` for an agent that occupies one temporary game seat.
 
-MCP is intentionally **not** used to detect whether a coding agent is running. Lifecycle detection belongs to platform adapters and hooks. MCP only gives an already-authorized agent a constrained way to inspect and act on its own game turn.
+MCP is intentionally **not** used to detect whether a coding agent is running. Lifecycle detection belongs to platform adapters/hooks. MCP only lets an already-authorized agent inspect and act on its own game seat.
+
+## Connected-agent onboarding
+
+Connected-agent rooms start in `waiting_for_players` and expose a short-lived human-readable join code such as:
+
+```text
+WL-7K4P9Q2MZX
+```
+
+Two connection paths are first-class:
+
+```text
+waitloop join <code>
+raw room-scoped MCP configuration
+```
+
+Room-specific instructions are available at:
+
+```text
+https://waitloop.run/join/<join-code>
+```
+
+`/agent.md` remains the stable universal Waitloop integration guide. `/join/<code>` is temporary onboarding for one room.
+
+## Join-code and seat lifecycle
+
+A join code is a temporary capability to issue **one** room-scoped seat credential.
+
+Current flow:
+
+```text
+room created
+  -> connected seat waiting
+  -> join code claimed
+  -> wlseat_... credential issued
+  -> seat connecting
+  -> first authenticated MCP request
+  -> seat connected
+  -> room begins playing
+```
+
+The join code itself is not the ongoing game credential and should not be used as a tool argument. The room ID is derived independently from the raw code so the public room identifier is not a substitute for the join capability.
 
 ## Authentication model
 
-Each agent seat receives a one-time opaque seat token when the room is created. The server stores only a SHA-256 hash of that token.
-
-Every MCP HTTP request must carry:
+After claim, every MCP HTTP request carries:
 
 ```text
-Authorization: Bearer <seat-token>
+Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Neither the room ID nor the seat token is exposed as a tool argument. The MCP server resolves the authenticated seat before constructing the tool surface, so the model cannot ask `get_turn` for another player's ID.
+The server stores only a SHA-256 digest of the seat token.
 
-A seat token authorizes exactly one player seat in one room. It is not an account token and should be discarded when the room is no longer useful.
+Neither the room ID nor the seat token is exposed as a model-visible tool argument. The transport resolves the authenticated seat before constructing the tool surface, so the model cannot ask for another player's view.
+
+A seat token authorizes exactly one player seat in one room. It is not an account/device/lifecycle token and should be discarded when the room ends.
 
 ## Tools
 
-The initial surface is deliberately small.
+The tool surface is deliberately small.
 
 ### `get_turn`
 
@@ -31,14 +73,13 @@ Input:
 {}
 ```
 
-Returns the authenticated player's viewer-specific room snapshot:
+Returns the authenticated player's viewer-specific machine snapshot, including:
 
-- role
-- own hand
-- public player/card counts
-- current/last move
-- room revision
-- server-generated legal move IDs
+- role and own hand after the room starts;
+- public remaining-card counts and move history;
+- current player/current trick context;
+- room revision;
+- server-generated legal move IDs when it is this seat's turn.
 
 It never returns another player's private hand.
 
@@ -53,32 +94,35 @@ Input:
 }
 ```
 
-The agent must use a move ID returned by `get_turn` and the exact revision associated with that turn. Stale revisions and non-legal move IDs are rejected before game state changes.
+The agent must use a `moveId` returned by `get_turn` and the exact associated revision. Stale revisions, out-of-turn calls, and non-legal move IDs are rejected before state mutation.
 
-The model does not submit raw cards or arbitrary game state.
+The agent does not submit raw authoritative cards or arbitrary game state.
 
-## Why the room is bound through HTTP headers
+## Why room/seat identity lives in transport headers
 
-A first draft could have exposed this tool:
+This is intentionally **not** the tool API:
 
 ```text
 get_turn(roomId, playerId, seatToken)
+play_move(roomId, playerId, seatToken, ...)
 ```
 
-That is undesirable because credentials become normal model-visible arguments and a malicious prompt can attempt to substitute another `playerId`.
+Putting identity/credentials in normal model-visible arguments makes substitution easier and unnecessarily expands the tool schema.
 
-Instead, the MCP transport is bound to a room and seat outside the model tool schema. The model sees only:
+The model sees only:
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 ```
 
-This makes the tool boundary smaller and the information-isolation rule enforceable on the server.
+while the HTTP transport is already bound to the room and seat.
 
-## Claude Code alpha configuration
+## Raw MCP configuration
 
-Claude Code supports remote HTTP MCP servers with custom headers. For an alpha room the equivalent configuration is:
+Users/agents without the Waitloop CLI can claim the room through the `/join/<code>` page/API and use the returned room-scoped configuration directly.
+
+Equivalent HTTP MCP configuration:
 
 ```json
 {
@@ -95,18 +139,37 @@ Claude Code supports remote HTTP MCP servers with custom headers. For an alpha r
 }
 ```
 
-For local development use `http://127.0.0.1:8787/mcp`.
+Do not commit, log, place in a prompt, or persist the raw seat token beyond its room lifetime.
 
-Do not commit `WAITLOOP_SEAT_TOKEN`.
+## CLI path
+
+With the public CLI installed:
+
+```bash
+waitloop join WL-7K4P9Q2MZX
+```
+
+For machine-readable output:
+
+```bash
+waitloop join WL-7K4P9Q2MZX --json
+```
+
+The CLI performs the same join-code exchange and prints the temporary MCP configuration. It does not change the MCP server protocol.
+
+## Timing and readiness
+
+The first authenticated MCP request is the connected seat readiness signal. Merely creating or claiming the room does not start the table.
+
+Casual Waitloop tables have no hard connected-agent turn timeout. Elapsed time may be displayed as a reminder, but the server does not force a pass/move because a casual timer expired.
 
 ## Transport/security notes
 
-- `/mcp` uses the current MCP TypeScript server SDK's web-standard HTTP handler.
-- Requests with a browser `Origin` are accepted only when the origin matches the Waitloop endpoint origin.
-- A valid seat token is checked before the MCP handler is invoked.
-- Tool handlers re-check the seat token against the authoritative room before every read or mutation.
-- HTTP-level account/device authentication will be added separately for room creation and normal web access; seat authentication remains narrower than account authentication.
+- `/mcp` uses the MCP TypeScript server SDK web-standard HTTP handler.
+- browser `Origin` requests are accepted only when the origin matches the Waitloop endpoint origin.
+- seat authentication happens before the MCP handler exposes the seat tools.
+- tool handlers re-check the seat token against authoritative room state for reads/mutations.
+- room IDs are routing/context identifiers, not authorization secrets.
+- seat credentials are narrower than lifecycle device credentials and must never be reused for lifecycle ingestion.
 
-## Later
-
-The seat-scoped model is intentionally compatible with future installers. A Waitloop CLI/plugin can create or join a room, receive a seat token, inject it into the platform's MCP configuration, and clear it when the room ends without changing the server tool protocol.
+See [`security.md`](security.md) for the complete credential/trust model and [`game-system.md`](game-system.md) for room/seat phases.

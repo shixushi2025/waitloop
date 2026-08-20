@@ -6,132 +6,118 @@ Waitloop publishes the local integration CLI as the public scoped package:
 @waitloop/cli
 ```
 
-The first published release is:
-
-```text
-0.1.0-alpha.1
-```
-
-Alpha installs use the `alpha` npm dist-tag:
+Alpha users install the channel rather than a hard-coded patch version:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 ```
 
+The exact current version is authoritative in `packages/cli/package.json` and `apps/web/public/agent.json`.
+
 ## Release invariants
 
-A CLI release is not ready unless all of these agree:
+A CLI release is not ready unless these agree:
 
-- `packages/cli/package.json` package name and version;
-- `apps/web/public/agent.json` CLI package name, version, dist-tag, and install command;
-- `waitloop --version` from the built package;
-- the GitHub Release tag `cli-v<version>` for normal post-bootstrap releases.
+- `packages/cli/package.json` package name/version;
+- `apps/web/public/agent.json` package/version/dist-tag/install/join capability metadata;
+- packaged `waitloop --version`;
+- GitHub Release tag `cli-v<version>`;
+- public Agent documentation when CLI-visible behavior changed.
 
-CI enforces the package/manifest/binary invariants. The normal publish workflow enforces the release tag.
+`pnpm check:cli-package` validates the npm tarball contents and packaged CLI version. `pnpm check:repo-contract` validates cross-surface documentation/manifest invariants.
 
-The package is restricted to the built `dist/` output plus package README/LICENSE. `pnpm check:cli-package` runs `npm pack --dry-run --json`, checks the tarball contents, and executes the built CLI's `--version` command.
+## Trusted publishing
+
+Normal publication uses npm Trusted Publishing with GitHub Actions OIDC.
+
+Trusted Publisher identity:
+
+```text
+GitHub owner:      shixushi2025
+Repository:        waitloop
+Workflow filename: publish-cli.yml
+Environment:       none
+Allowed action:    npm publish
+```
+
+Workflow requirements:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
+
+Do not add a long-lived `NPM_TOKEN`/`NODE_AUTH_TOKEN` back to the normal publication path unless there is an explicit, reviewed emergency migration reason.
 
 ## Publish workflow
 
-The normal workflow is:
+Canonical workflow:
 
 ```text
 .github/workflows/publish-cli.yml
 ```
 
-It runs only for a published GitHub Release whose tag starts with `cli-v`.
-
-For `0.1.0-alpha.1`, the canonical release tag is:
+Normal trigger: a published GitHub Release whose tag is exactly:
 
 ```text
-cli-v0.1.0-alpha.1
+cli-v<packages/cli/package.json version>
 ```
 
 The workflow:
 
 1. checks out the release tag;
-2. installs pnpm and Node 24;
-3. uses npm 11;
-4. performs a frozen dependency install;
-5. runs TypeScript/tests;
-6. validates browser JavaScript;
-7. validates the npm tarball and CLI version;
-8. verifies the release tag matches `package.json`;
-9. checks whether that exact npm version already exists;
-10. publishes only when necessary;
-11. verifies the expected version is visible from npm.
+2. sets up pnpm and a Trusted-Publishing-compatible Node/npm version;
+3. installs dependencies from the frozen lockfile;
+4. runs TypeScript/tests;
+5. validates browser JavaScript;
+6. validates the CLI npm package/tarball;
+7. verifies release tag == package version;
+8. checks whether the exact npm version already exists;
+9. publishes with provenance only when necessary;
+10. verifies the expected version is visible on npm.
 
-Pre-release identifiers determine the npm dist-tag. For example:
-
-```text
-0.1.0-alpha.1 -> alpha
-0.1.0-beta.1  -> beta
-0.1.0-rc.1    -> rc
-0.1.0         -> latest
-```
-
-## First publish bootstrap — completed
-
-The first publication was bootstrapped with a temporary granular npm credential because Trusted Publishing is configured after the npm package exists.
-
-Verified result:
+Prerelease identifiers determine the npm dist-tag:
 
 ```text
-@waitloop/cli@0.1.0-alpha.1
-npm dist-tag: alpha
+x.y.z-alpha.n -> alpha
+x.y.z-beta.n  -> beta
+x.y.z-rc.n    -> rc
+x.y.z         -> latest
 ```
 
-The temporary bootstrap workflow path was removed from `main` after publication. Normal future publishing goes through a GitHub Release.
+## Preparing a release
 
-`apps/web/public/agent.json` is now marked:
-
-```json
-{
-  "cli": {
-    "published": true
-  }
-}
-```
-
-so installer agents can use the npm package directly.
-
-## Switch to npm Trusted Publishing
-
-Configure the npm package Trusted Publisher to GitHub Actions with:
-
-```text
-GitHub user/organization: shixushi2025
-Repository:              waitloop
-Workflow filename:       publish-cli.yml
-Environment:             none
-```
-
-The workflow already grants `id-token: write` and uses a supported Node/npm version. Once trusted publishing is configured, npm can authenticate publication with short-lived OIDC credentials and generate provenance from the public GitHub repository.
-
-After Trusted Publishing is configured:
-
-1. remove the `NODE_AUTH_TOKEN` / `NPM_TOKEN` fallback from `publish-cli.yml`;
-2. delete the GitHub repository secret `NPM_TOKEN`;
-3. optionally configure npm package publishing access to disallow traditional publish tokens;
-4. keep the workflow filename stable unless the npm Trusted Publisher configuration is updated at the same time.
-
-## Preparing the next version
-
-For each later release:
-
-1. update `packages/cli/package.json` version;
-2. update `apps/web/public/agent.json` CLI version and dist-tag/install command if the release channel changes;
-3. run:
+1. Update `packages/cli/package.json` version.
+2. Update `apps/web/public/agent.json`:
+   - exact version/candidate version as appropriate;
+   - dist-tag if the channel changes;
+   - capability fields if commands changed.
+3. If CLI behavior changed, update in the same change:
+   - `packages/cli/README.md`;
+   - `docs/cli.md`;
+   - `apps/web/public/agent.md`;
+   - `apps/web/public/skills/waitloop/SKILL.md`;
+   - `llms.txt` if discovery/entrypoints changed.
+4. Run:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
+pnpm check:repo-contract
 pnpm check:cli-package
 ```
 
-4. wait for `main` CI to pass;
-5. create a GitHub Release with exact tag `cli-v<version>`;
-6. verify the `publish-cli` workflow succeeds;
-7. verify the package/version and expected dist-tag on npm.
+5. Wait for `main` CI.
+6. Create/publish GitHub Release `cli-v<version>`.
+7. Verify `publish-cli` succeeds through OIDC.
+8. Verify npm package/dist-tag.
+9. Ensure `agent.json` reports the newly published version rather than a candidate.
 
-Never reuse a previously published npm version.
+Never reuse a published npm version.
+
+## Version documentation rule
+
+Do not update every Markdown file with each alpha patch number. Stable human-facing docs should use the channel install command. Exact version belongs in machine/package metadata and release records.
+
+This minimizes documentation drift while keeping automated agents able to discover the precise current package version from `agent.json`.
