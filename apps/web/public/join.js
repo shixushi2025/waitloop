@@ -7,6 +7,8 @@ const phaseValue = document.querySelector("#join-phase");
 const relationValue = document.querySelector("#join-relation");
 const seatValue = document.querySelector("#join-seat");
 const actorValue = document.querySelector("#join-actor");
+const joinExpiresValue = document.querySelector("#join-expires");
+const roomExpiresValue = document.querySelector("#room-expires");
 const commandValue = document.querySelector("#join-command");
 const promptValue = document.querySelector("#join-prompt");
 const copyCommandButton = document.querySelector("#copy-command");
@@ -19,6 +21,15 @@ let rawConfigText = "";
 
 function setText(element, value) {
   if (element instanceof HTMLElement) element.textContent = value;
+}
+
+function formatExpiry(value) {
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  try {
+    return new Date(value).toISOString();
+  } catch {
+    return "-";
+  }
 }
 
 async function readJson(response) {
@@ -38,12 +49,14 @@ function render(info) {
   setText(relationValue, info.relation ?? "controller");
   setText(seatValue, info.seatId ?? info.playerId ?? "-");
   setText(actorValue, info.actorId ?? info.playerId ?? "-");
+  setText(joinExpiresValue, formatExpiry(info.expiresAt));
+  setText(roomExpiresValue, formatExpiry(info.roomExpiresAt));
   setText(commandValue, info.joinCommand ?? `waitloop join ${code}`);
   const relation = info.relation === "advisor" ? "advisor" : "controller";
   setText(
     promptValue,
     info.seatStatus === "connected"
-      ? `${relation} connected · room is active`
+      ? `${relation} connected · room credential can reconnect until room expiry`
       : `waiting for ${relation} connection`,
   );
   if (claimButton instanceof HTMLButtonElement) claimButton.disabled = info.claimed || info.seatStatus === "connected";
@@ -75,7 +88,7 @@ async function claimRaw() {
     setText(rawConfig, rawConfigText);
     if (rawWrap instanceof HTMLElement) rawWrap.hidden = false;
     render(body);
-    setText(promptValue, `${body.relation ?? "controller"} credential claimed · connect the MCP client`);
+    setText(promptValue, `${body.relation ?? "controller"} credential claimed · connect or reconnect MCP while the room is active`);
   } catch (error) {
     setText(promptValue, error instanceof Error ? error.message : "MCP claim failed");
   } finally {
