@@ -2,7 +2,7 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current product priority is **stabilization before feature expansion**. Stable local MCP and `wait_for_turn` are now part of the existing path; the next work is proving and hardening that path rather than immediately adding more modes/tools.
+The current product priority is **stabilization before feature expansion**. Stable local MCP, cancellable `wait_for_turn`, and recoverable local transport errors are now part of the existing path; the next work is proving that path repeatedly in real harnesses rather than adding more modes/tools.
 
 ## 1. Current-flow stabilization
 
@@ -16,6 +16,7 @@ Agent discovery
 -> stable MCP install
 -> create_room / join_room
 -> wait_for_turn / play / advice
+-> cancel/interruption when requested
 -> yield / bridge restart / reconnect / take_control
 -> finish / leave / expire cleanly
 ```
@@ -24,25 +25,27 @@ Near-term work:
 
 - run this entire path repeatedly in real Codex Desktop/CLI and Claude Code environments;
 - verify stdio MCP configuration survives harness restarts and existing definitions are never overwritten;
+- verify MCP 2026-07-28 discovery, legacy initialize, and cancellation behavior against actual harness clients rather than only protocol regressions;
 - test `waitloop join`, local `join_room`, and raw fallback against expired/already-claimed/missing cache scenarios;
-- test continuous-play instructions over slow Human turns and repeated 25-second transport timeouts;
-- make every common failure return the next corrective action;
+- test continuous-play instructions over slow Human turns, repeated 25-second transport timeouts, user cancellation, and Agent interruption;
+- continue making uncommon failures return a safe next corrective action when one is knowable;
 - keep discovery mirrors, `doctor`, Skill, llms, package docs, and machine manifest synchronized;
 - verify Windows/macOS/Linux local file permissions/path/CLI subprocess behavior;
-- add integration/smoke tests against a deployed test Worker without exposing credentials.
+- add integration/smoke tests against a deployed test Worker without exposing credentials;
+- evaluate replacing the small local protocol shim with the official MCP `serveStdio()` entry when the CLI dependency/lockfile change can be regenerated and validated through the full package pipeline.
 
-Acceptance: a new Agent can install once, create/join, remain active through the requested game loop, restart/reconnect, and recover control without manual HTTP, credential-file parsing, or remote MCP JSON-RPC construction.
+Acceptance: a new Agent can install once, create/join, remain active through the requested game loop, cancel a wait cleanly, restart/reconnect, and recover control without manual HTTP, credential-file parsing, or remote MCP JSON-RPC construction.
 
 ## 2. Presence, cleanup, and revocation
 
-Stable bridge/waiting are implemented. Remaining runtime lifecycle work:
+Stable bridge/waiting/cancellation are implemented. Remaining runtime lifecycle work:
 
 - transport-level disconnect detection and richer presence state without timer-forced Casual moves;
 - explicit connected Actor leave/revoke endpoint and local tool semantics distinct from local-only `leave_room`;
 - proactive cleanup/retention for expired local Join cache and finished/expired Room state beyond lazy access;
 - safe rotation/revocation of one Room Actor credential;
 - clearer MCP `clientInfo` labeling when the harness exposes it;
-- observability for connect/wait/timeout/yield/reconnect/take-control without logging credentials/private hands.
+- observability for connect/wait/timeout/cancel/yield/reconnect/take-control without logging credentials/private hands.
 
 Acceptance: presence and cleanup are explicit, recoverable, and auditable without hidden game mutations.
 
@@ -59,14 +62,14 @@ Acceptance: each harness uses its supported configuration surface and does not r
 
 ## 4. Public hardening
 
-Current Room creation, Hosted Room creation, Join, MCP, comments, recovery, wait, and control operations have baseline rate/expiry protection. Remaining:
+Current Room creation, Hosted Room creation, Join, MCP, comments, recovery, wait, cancellation, and control operations have baseline rate/expiry protection. Remaining:
 
 - lifecycle ingest and pairing rate limits;
 - hosted inference budgets/quotas/accounting;
 - stronger CSP/CORS/security-header review;
 - private vulnerability reporting path;
 - persisted Durable Object migration/recovery tests, including legacy participant -> Actor/Seat normalization;
-- abuse/latency metrics for `wait_for_turn` and local bridge failures;
+- abuse/latency/cancellation metrics for `wait_for_turn` and local bridge failures;
 - concurrency review if many long waits target the same Room.
 
 Acceptance: anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
