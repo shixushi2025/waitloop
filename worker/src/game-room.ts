@@ -42,12 +42,12 @@ export type GameRoomPhaseV1 = "waiting_for_players" | "playing" | "paused" | "fi
 interface GameJoinStateV1 {
   version: 1;
   codeHash: string;
-  actorId?: string;
-  seatId?: string;
+  actorId?: string | undefined;
+  seatId?: string | undefined;
   // Legacy rooms stored only playerId. It was both actor and seat.
-  playerId?: string;
+  playerId?: string | undefined;
   expiresAt: number;
-  claimedAt?: number;
+  claimedAt?: number | undefined;
 }
 
 interface PersistedGameRoomV1 {
@@ -152,9 +152,9 @@ export interface InitializeGameRoomRequest {
   join?: {
     version: 1;
     codeHash: string;
-    actorId?: string;
-    seatId?: string;
-    playerId?: string;
+    actorId?: string | undefined;
+    seatId?: string | undefined;
+    playerId?: string | undefined;
     expiresAt: number;
   };
 }
