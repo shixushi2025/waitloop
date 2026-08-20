@@ -14,20 +14,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
         with:
-          version: 10
-          run_install: false
+          fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Refresh lockfile
-        run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Restore base lock and add only CLI importer
+        env:
+          BASE_SHA: 8f07bc3f2e8adcd8d0d696f40af9585b162c108a
+        run: |
+          git show "${BASE_SHA}:pnpm-lock.yaml" > pnpm-lock.yaml
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path("pnpm-lock.yaml")
+          text = path.read_text()
+          old = "  packages/cli: {}\n"
+          new = """  packages/cli:\n    dependencies:\n      '@modelcontextprotocol/server':\n        specifier: 2.0.0\n        version: 2.0.0\n"""
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one packages/cli importer")
+          path.write_text(text.replace(old, new))
+          PY
 
       - name: Commit lockfile when changed
         run: |
@@ -38,5 +42,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- pnpm-lock.yaml
-          git commit -m "chore: sync pnpm lockfile"
+          git commit -m "chore: keep lockfile update scoped"
           git push origin HEAD:fix/mcp-wait-cancellation
