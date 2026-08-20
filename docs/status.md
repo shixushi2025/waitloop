@@ -79,7 +79,11 @@ The bridge:
 - keeps Room Actor credentials in private local cache;
 - never returns raw credentials through model-visible tools;
 - stores one active Room pointer that survives bridge restart until Room expiry;
-- supports Codex/Claude Code configuration through their CLI MCP surfaces.
+- supports Codex/Claude Code configuration through their CLI MCP surfaces;
+- serves modern MCP 2026-07-28 discovery and supported legacy initialize clients from the same stdio command;
+- processes in-flight requests independently so a long `wait_for_turn` does not block cancellation handling;
+- maps `notifications/cancelled` to an `AbortSignal`, aborts the proxied remote request, and suppresses stale cancelled results;
+- returns structured recoverable errors with `nextAction` and conservative `retrySafe` metadata when known.
 
 Cursor lifecycle integration remains available, while stable stdio MCP setup is currently manual where supported.
 
@@ -169,7 +173,9 @@ take_control()
 
 `wait_for_turn` uses authenticated snapshot reads, about 750 ms polling, and a maximum 25-second transport wait. It returns on turn, finish, lobby, pause, Controller change, or timeout.
 
-Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback.
+The remote wait loop observes the MCP HTTP request `AbortSignal`; client cancellation interrupts snapshot polling/delay promptly rather than waiting for the transport timeout.
+
+Transport timeout or cancellation never auto-passes, auto-plays, changes Controller, or triggers Casual fallback.
 
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
@@ -196,6 +202,7 @@ Web can:
 - server capability/revision checks;
 - hidden-information projection tests;
 - local MCP credential custody and credential-safe default output;
+- local MCP cancellation does not return stale results and does not mutate game state;
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
 - side-effect-free nested CLI help.
 
@@ -204,11 +211,13 @@ Rate limiting remains abuse protection, not accounting.
 ## Tests currently covering this flow
 
 - 80+ unit/regression tests across rules, identity, controller fallback, CLI, and MCP;
-- local bridge tool/instruction contract;
+- local bridge tool/instruction and modern/legacy negotiation contract;
+- in-flight local MCP cancellation with stale-result suppression;
+- remote Room fetch abort propagation and retry-safety classification;
 - headless create -> Join claim -> authenticated MCP connect;
 - active Room pointer and expired cache handling;
 - Codex/Claude MCP installer command/idempotency;
-- wait-for-turn reason/timeout classification;
+- wait-for-turn reason/timeout classification and abort-aware poll delay;
 - package/onboarding/public-surface consistency.
 
 ## Known gaps
