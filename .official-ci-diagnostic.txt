@@ -5,7 +5,7 @@ Lockfile is up to date, resolution step is skipped
 Progress: resolved 1, reused 0, downloaded 0, added 0
 Packages: +91
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-Progress: resolved 91, reused 0, downloaded 89, added 55
+Progress: resolved 91, reused 0, downloaded 90, added 90
 Progress: resolved 91, reused 0, downloaded 91, added 91, done
 
 devDependencies:
@@ -47,33 +47,33 @@ exit=0
 
 [1m[46m RUN [49m[22m [36mv3.2.7 [39m[90m/home/runner/work/waitloop/waitloop[39m
 
- [32m✓[39m packages/game-core/src/room.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
- [32m✓[39m packages/protocol/src/protocol.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
- [32m✓[39m packages/cli/test/room-client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 28[2mms[22m[39m
- [32m✓[39m worker/src/room-control.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
- [32m✓[39m packages/cli/test/pairing.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 63[2mms[22m[39m
- [32m✓[39m packages/doudizhu/src/pattern.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 23[2mms[22m[39m
- [32m✓[39m packages/cli/test/join.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 23[2mms[22m[39m
- [32m✓[39m packages/doudizhu/src/move-generator.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 38[2mms[22m[39m
- [32m✓[39m packages/cli/test/lifecycle.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 31[2mms[22m[39m
- [32m✓[39m worker/src/room-actors.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
- [32m✓[39m packages/cli/test/diagnostics.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 29[2mms[22m[39m
- [32m✓[39m packages/doudizhu/src/game.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 87[2mms[22m[39m
- [32m✓[39m worker/src/wait-for-turn.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m packages/game-core/src/room.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m packages/protocol/src/protocol.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m packages/cli/test/room-client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m worker/src/room-control.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/pattern.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m packages/cli/test/pairing.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m packages/cli/test/join.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/move-generator.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m packages/cli/test/lifecycle.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m worker/src/room-actors.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/game.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m worker/src/wait-for-turn.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m packages/cli/test/diagnostics.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 37[2mms[22m[39m
  [32m✓[39m worker/src/human-game.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
- [32m✓[39m worker/src/actor-identity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
- [32m✓[39m packages/cli/test/claude-code.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 25[2mms[22m[39m
- [32m✓[39m packages/cli/test/codex.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m worker/src/actor-identity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m packages/cli/test/claude-code.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m packages/cli/test/codex.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
  [32m✓[39m packages/cli/test/mcp-install.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
- [32m✓[39m packages/cli/test/mcp-bridge.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 35[2mms[22m[39m
- [32m✓[39m packages/cli/test/cursor.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 32[2mms[22m[39m
- [32m✓[39m packages/cli/test/config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
- [32m✓[39m worker/src/room-code.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m packages/cli/test/cursor.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m packages/cli/test/mcp-bridge.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m worker/src/room-code.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m packages/cli/test/config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
 
 [2m Test Files [22m [1m[32m22 passed[39m[22m[90m (22)[39m
 [2m      Tests [22m [1m[32m85 passed[39m[22m[90m (85)[39m
-[2m   Start at [22m 14:48:38
-[2m   Duration [22m 3.43s[2m (transform 875ms, setup 0ms, collect 1.82s, tests 538ms, environment 7ms, prepare 2.78s)[22m
+[2m   Start at [22m 14:49:14
+[2m   Duration [22m 3.30s[2m (transform 784ms, setup 0ms, collect 1.72s, tests 555ms, environment 5ms, prepare 2.45s)[22m
 
 
 exit=0
