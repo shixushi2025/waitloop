@@ -1,63 +1,19 @@
 # MCP game boundary
 
-Waitloop exposes a fixed remote MCP endpoint at `/mcp` for one temporary room-scoped **Actor binding**.
+Waitloop exposes one fixed remote gameplay endpoint at `/mcp` for a room-scoped **Actor binding**.
 
-MCP is intentionally not lifecycle detection. Lifecycle hooks report coding-agent work state; MCP lets an already-authorized game Actor inspect/play/comment within one room.
+MCP is not coding-agent lifecycle detection and is not the current Room creation control plane. HTTP/CLI create/claim/manage Rooms; MCP operates inside an already-authorized Room.
 
-## Seat vs Actor
-
-MCP authenticates an Actor, not an abstract game rule player ID.
+## Authentication and identity
 
 ```text
-Seat = game player position
-Actor = connected runtime identity
-Binding = Actor -> Seat relationship
+Room ID  = routing context
+Seat ID  = stable room-scoped game position
+Actor ID = runtime identity
+credential = authorization secret
 ```
 
-A connected Actor may be:
-
-- `controller` of its own Seat;
-- `advisor` bound to another Actor's Seat.
-
-Both receive only the private projection of their explicitly bound Seat. An advisor does not receive `seat:play` until the Seat owner delegates active control.
-
-## Onboarding and headless use
-
-Join code paths are equivalent entry methods:
-
-```text
-waitloop join <code>
-POST /api/v1/join/<code>/claim
-https://waitloop.run/join/<code>
-```
-
-The Web page is optional. Agents can create a headless room directly:
-
-```http
-POST /api/v1/rooms
-Content-Type: application/json
-
-{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
-```
-
-Then claim the returned code and connect MCP. `companion-agent` creates an advisor bound to the Human Seat; `connected-agent` creates an independent Agent Seat.
-
-## Join/Actor lifecycle
-
-```text
-room created
-  -> connected Actor waiting
-  -> join code claimed
-  -> wlseat_... Actor credential issued
-  -> Actor connecting
-  -> first authenticated MCP request
-  -> Actor connected
-  -> room begins playing
-```
-
-The historical token prefix remains `wlseat_` for compatibility, but its durable meaning is now a room-scoped **Actor capability**. The Actor's Join response includes `actorId`, `seatId`, and `relation`.
-
-## Authentication
+IDs never substitute for credentials.
 
 Every MCP request carries:
 
@@ -66,147 +22,101 @@ Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-The server stores only a digest of the raw credential.
+The legacy `wlseat_` prefix authorizes one room-scoped Actor binding. The raw token is stored only by the client; Waitloop stores its digest.
 
-Room ID and credential are transport/auth context, never model-visible tool arguments. The transport resolves the authenticated Actor and its bound Seat before tools execute.
+## Join / reconnect
 
-## Tools
+Join paths:
 
-Current surface:
+```text
+waitloop join <code>
+POST /api/v1/join/<code>/claim
+https://waitloop.run/join/<code>
+```
+
+Current Join code lifetime is about 20 minutes and it can issue one credential. The resulting Actor credential remains reconnectable while the Room remains active (about 24 hours for new Rooms).
+
+The CLI caches the claimed room credential plus `actorId`, `seatId`, relation, and Room expiry under `~/.waitloop/joins`.
+
+Every authenticated MCP request refreshes Actor presence. Reconnecting does not automatically change the Seat Controller.
+
+## Tool surface
 
 ```text
 get_turn()
 play_move(expectedRevision, moveId)
 comment(text)
+yield_to_bot()
+take_control()
 ```
 
 ### `get_turn()`
 
-Returns the Actor's room snapshot, including:
+Returns the private projection of the Actor's explicitly bound Seat plus public Room state, Actor/Seat/binding metadata, capabilities, Controller, revision, and server-generated legal moves.
 
-- `viewerActorId` and `viewerSeatId`;
-- Actor/Seat/binding metadata;
-- capability list;
-- private hand/state of the explicitly bound Seat;
-- public player/card counts and history;
-- current Controller;
-- room revision;
-- server-generated legal move IDs when relevant.
-
-An advisor is intentionally allowed to inspect its bound Seat's hand/legal options. It cannot use this mechanism to request a different unrelated Seat's private view.
+An Advisor may see the private Seat it was explicitly bound to but never an unrelated Seat.
 
 ### `play_move(expectedRevision, moveId)`
 
-Input:
-
-```json
-{
-  "expectedRevision": 12,
-  "moveId": "play:..."
-}
-```
-
-A move succeeds only when all are true:
-
-- this Actor has `seat:play`;
-- this Actor is the bound Seat's active Controller;
-- it is that Seat's authoritative turn;
-- the revision is current;
-- the move ID is server-generated and legal.
-
-An advisor that has not been delegated control receives `not_active_controller` even if it can see a legal move list.
+Succeeds only if the Actor has `seat:play`, is the active Controller, is acting on the authoritative turn, supplies the current revision, and selects a server-generated legal move ID.
 
 ### `comment(text)`
 
-Input:
+Bounded room comment side channel. It does not mutate game state, game revision, turn, or legal moves.
 
-```json
-{"text":"I would probably pass here."}
+### `yield_to_bot()`
+
+Available to a connected Actor that owns and currently controls its Seat.
+
+It creates a temporary deterministic Bot Actor bound as Controller of the **same Seat**. It preserves:
+
+```text
+Seat ID
+ownerActorId
+hand
+role
+history
 ```
 
-Comments are a room side channel for advice/reactions. They do not mutate:
+The connected owner is marked away/disconnected in runtime metadata. This is explicit; elapsed Casual time never triggers it automatically.
 
-- game state;
-- game revision;
-- turn order;
-- legal moves.
+### `take_control()`
 
-The current input is trimmed and bounded to 280 characters. Companions should be useful rather than noisy.
+Available to a connected Seat owner after reconnecting. It removes the temporary Bot Actor/binding and restores the owner as active Controller.
+
+Reconnect intentionally does not call this automatically. This prevents a returning client from silently racing the current Controller.
+
+## Headless use
+
+MCP cannot create its own Room because it is room-scoped. Headless Agents first call:
+
+```http
+POST https://waitloop.run/api/v1/rooms
+Content-Type: application/json
+
+{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
+```
+
+then claim Join and use MCP. A future separate control MCP could wrap HTTP if needed, but the current gameplay MCP stays narrow.
 
 ## Controller delegation
 
-Controller changes are control-plane operations, currently exposed to the Human Seat owner through the room API/Web UI.
+Human Seat owners may delegate to an Advisor through Room API/Web. That is a control-plane mutation. Once delegated, the same Advisor MCP token gains `seat:play` because server-side `activeControllerActorId` changed.
 
-```text
-Seat owner: Human
-Advisor: connected Agent
-activeControllerActorId: Human
+Temporary Bot fallback uses the same rule: Controller changes; Seat identity does not.
 
-Human delegates
-  -> activeControllerActorId: Agent
-  -> Human retains private view but browser play controls disable
-  -> Agent play_move becomes authorized
+## Timing and rate protection
 
-Human takes back control
-  -> activeControllerActorId: Human
-```
-
-Changing Controller never changes the underlying Seat/hand/role/history.
-
-## Raw MCP configuration
-
-Equivalent configuration:
-
-```json
-{
-  "mcpServers": {
-    "waitloop": {
-      "type": "http",
-      "url": "https://waitloop.run/mcp",
-      "headers": {
-        "Authorization": "Bearer ${WAITLOOP_ACTOR_TOKEN}",
-        "X-Waitloop-Room": "${WAITLOOP_ROOM_ID}"
-      }
-    }
-  }
-}
-```
-
-Do not commit, log, put in prompts, or persist the raw room credential beyond its useful room lifetime.
-
-## Why identity is outside tool arguments
-
-This is intentionally not the API:
-
-```text
-get_turn(roomId, playerId, token)
-play_move(roomId, playerId, token, ...)
-```
-
-The model sees only the constrained gameplay schema. Room/Actor/Seat identity is resolved by the authenticated transport, which prevents model argument substitution from selecting another private view.
-
-## CLI relationship
-
-```bash
-waitloop join WL-7K4P9Q2MZX
-waitloop join WL-7K4P9Q2MZX --json
-```
-
-The CLI performs the same Join API exchange and prints/caches the temporary MCP configuration. It does not implement game authorization or rules itself.
-
-## Timing
-
-The first authenticated MCP request is readiness. Casual connected Actors have no hard game timeout; elapsed time may be shown but does not authorize forced moves/passes.
-
-A future Arena/benchmark policy may add hard timing separately.
+Casual has no hard turn timeout. Current server safeguards include per-Actor limits for MCP connection/read/move/comment/control operations. Rate limiting protects abuse; it is not accounting and does not authorize automatic moves.
 
 ## Security invariants
 
-- browser `Origin` is restricted for MCP HTTP requests;
-- Actor auth happens before MCP tool execution;
-- move/comment handlers re-check room-scoped credential/capability;
-- an advisor can see only the private Seat explicitly granted by its binding;
-- game Actor credentials are narrower than lifecycle device credentials and are never reused for lifecycle ingestion;
-- room IDs are routing/context identifiers, not authorization secrets.
+- Actor authentication occurs before tool execution.
+- Room/Actor/Seat identity is transport-resolved, not model-supplied tool arguments.
+- stale/non-controller/illegal moves are rejected server-side.
+- Advisors see only their bound Seat's private state.
+- room Actor credentials never authorize lifecycle ingestion.
+- Join expiry and Room expiry are separate.
+- cached credential enables reconnect only for the same Actor binding.
 
-See [`security.md`](security.md) and [`game-system.md`](game-system.md).
+See [`security.md`](security.md), [`protocol.md`](protocol.md), and [`game-system.md`](game-system.md).
