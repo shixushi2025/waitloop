@@ -59,6 +59,53 @@ jobs:
       - name: Validate Worker bundle
         run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
 
+  diagnose-release-stabilization:
+    if: always() && github.ref == 'refs/heads/fix/release-stabilization' && needs.check.result != 'success'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Re-run and capture all validation output
+        run: |
+          set +e
+          : > .official-ci-diagnostic.txt
+          run_check() {
+            label="$1"
+            shift
+            printf '\n===== %s =====\n' "$label" >> .official-ci-diagnostic.txt
+            "$@" >> .official-ci-diagnostic.txt 2>&1
+            printf '\nexit=%s\n' "$?" >> .official-ci-diagnostic.txt
+          }
+          run_check "install frozen" pnpm install --frozen-lockfile
+          run_check "typecheck and tests" pnpm check
+          run_check "repository contract" pnpm check:repo-contract
+          run_check "CLI package" pnpm check:cli-package
+          run_check "MCP stdio wire" pnpm check:mcp-stdio
+          run_check "browser JavaScript" bash -lc "find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check"
+          run_check "agent discovery" bash -lc "test -s apps/web/public/agent.md && test -s apps/web/public/llms.txt && test -s apps/web/public/skills/waitloop/SKILL.md && node -e \"JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))\""
+          run_check "Worker dry run" pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .official-ci-diagnostic.txt
+          git commit -m "chore: record official CI diagnostics" || true
+          git push origin HEAD:fix/release-stabilization
+
   record-release-stabilization:
     if: always() && github.ref == 'refs/heads/fix/release-stabilization'
     needs: check
