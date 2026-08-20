@@ -1,46 +1,44 @@
 # Game system
 
-This document defines the durable game/runtime contract. Game-specific legality belongs in game packages; room identity, Actor bindings, readiness, authorization, and presentation belong in the runtime.
+This document defines the durable game/runtime contract. Game legality belongs in pure game packages; Room identity, Actor bindings, readiness, authorization, recovery, and presentation belong in the runtime.
 
 ## Authority model
 
-The authoritative game state lives server-side. Clients receive viewer-specific projections and submit constrained actions.
+`packages/game-core` owns generic game-room revision/stale-turn checks. `packages/doudizhu` owns Dou Dizhu rules. `GameRoom` owns runtime identity/capability/persistence around the pure game.
 
-`packages/game-core` owns generic room revision/stale-turn checks. `packages/doudizhu` owns Dou Dizhu cards, patterns, legal moves, turn/pass/win behavior. `GameRoom` owns runtime identity and authorization around the pure game.
+Clients never become state authority.
 
-## Seat, Actor, Binding, Controller
-
-A **Seat** is one actual player position known by the game engine. An **Actor** is an entity that can relate to a Seat.
+## Stable Seat vs Actor
 
 ```text
-Seat
-  id
-  ownerActorId
-  activeControllerActorId
-
-Actor
-  human | bot | hosted-agent | connected-agent
-
-Binding
-  actorId -> seatId
-  relation: controller | advisor
+Room
+  Seat        stable room-scoped player position
+  Actor       human | bot | hosted-agent | connected-agent
+  Binding     Actor -> Seat
+  Controller  Actor currently allowed to play Seat
+  Advisor     bound Actor that can inspect/comment but not play until delegated
 ```
 
-This distinction is intentional:
+New three-player Dou Dizhu Rooms use `seat-1`, `seat-2`, `seat-3`. These IDs remain stable through Controller changes.
 
-- Human and connected Agent can own/control separate Seats and be independent players.
-- A connected Agent can be an `advisor` bound to the Human's Seat without occupying a fourth Dou Dizhu Seat.
-- The Human Seat owner can delegate `activeControllerActorId` to that advisor and later take control back.
-- Delegation never changes the Seat's hand, role, history, or identity.
+A Seat owns the game identity: hand, landlord/farmer role, history, and turn position. Actor changes do not rewrite that identity.
 
-Game packages see only Seat IDs. They do not know whether the current Seat is controlled by a Human, Bot, hosted model, or connected Agent.
+Actor ID and Seat ID are identifiers, never authorization secrets.
 
-## Capabilities
+## Ownership and capabilities
 
-Runtime authorization is capability-based. Current capabilities include:
+Seats track:
+
+```text
+ownerActorId
+activeControllerActorId
+```
+
+Current important capabilities:
 
 ```text
 room:view-public
+room:manage
 seat:view-private
 seat:inspect-legal
 seat:play
@@ -48,135 +46,136 @@ seat:control
 room:comment
 ```
 
-A bound advisor receives public room state plus the private state/legal options of the Seat it is explicitly bound to and may comment. It does **not** receive `seat:play` until it is the Seat's active Controller.
+- Room owner gets `room:manage`.
+- Seat owner keeps `seat:control`.
+- Only active Controller gets `seat:play`.
+- Advisor can inspect/comment on its explicitly bound Seat but cannot play until delegated.
 
-The Seat owner retains `seat:control`, so it can delegate/take back control. The server capability check is authoritative; UI button state is not authorization.
+Server capability checks are authoritative.
 
-## Current relationship examples
+## Anonymous Human Actor recovery
 
-### Independent Agent player
+Public browser rooms do not require an account.
 
-```text
-Seat A -> Human controller
-Seat B -> Connected Agent controller
-Seat C -> Bot controller
-```
-
-Current room mode: `connected-agent`.
-
-### Agent companion / advisor
+A browser receives:
 
 ```text
-Seat A
-  owner: Human
-  active controller: Human
-  bindings:
-    Human -> controller
-    Connected Agent -> advisor
-
-Seat B -> Bot
-Seat C -> Bot
+Actor ID      actor_...
+credential    wla_...  (separate secret)
 ```
 
-Current room mode: `companion-agent`.
+Both travel only in an HttpOnly cookie. The Actor credential digest is stored in each Room where that Actor participates.
 
-The advisor can see Seat A's hand/legal options and call `comment`, but `play_move` returns `not_active_controller` until the Human delegates the Seat.
+The shorter `wl_room_...` viewer cookie authorizes normal Human room operations. If it is lost/expired while the anonymous Actor cookie remains valid, the Room can verify the Actor credential and mint a fresh room viewer credential.
 
-### Fully headless Agent table
+This is browser/device-local anonymous persistence. It is not cross-device identity or a global account database.
 
-```text
-Seat A -> Connected Agent controller
-Seat B -> Bot
-Seat C -> Bot
-```
+## Runtime phases and Actor state
 
-Current room mode: `agent-bots`.
-
-This table can be created, joined, and played entirely through HTTP + MCP with no Web UI.
-
-## Runtime phase and readiness
-
-Underlying game status remains:
-
-```text
-playing | paused | finished
-```
-
-Waitloop runtime adds:
+Room phase:
 
 ```text
 waiting_for_players -> playing -> paused -> playing -> finished
 ```
 
-Connected Actor runtime state includes:
+Actor runtime state:
 
 ```text
-ready | waiting | connecting | connected
+ready | waiting | connecting | connected | disconnected
 ```
 
-A connected Actor begins waiting, becomes connecting when a join code issues its room credential, and becomes connected on its first authenticated MCP request. That request is the readiness signal that starts a connected table.
+The first authenticated MCP request marks a joined connected Actor ready and starts a one-joined-Actor waiting Room.
 
-During `waiting_for_players`:
+Current fallback/disconnect behavior is explicit; there is no transport idle detector that automatically declares a slow Agent disconnected.
 
-- game input is inactive;
-- the Human lobby projection does not expose dealt cards or landlord assignment;
-- no casual countdown can force a move.
+## Temporary Bot takeover
 
-## Hidden information
-
-Internal state and public state are different types. Never serialize internal state and remove secret fields afterward.
-
-A bound Actor receives only the private projection of its own bound Seat. An advisor sees the Human Seat's private hand because the user explicitly created that binding; it must never gain an unrelated Seat's private hand.
-
-A Human who delegates control retains its private Seat view, but Human play/pass/hint controls are disabled while another Actor is active Controller.
-
-## Human vs machine interaction
-
-### Browser Human
+An eligible Human/connected-Agent Seat can explicitly hand control to a deterministic temporary Bot.
 
 ```text
-human-safe snapshot (no exhaustive legalMoves)
-  -> select card IDs
-  -> /play, /pass, /hint
-  -> server resolves selection against authoritative legal moves
+before:
+seat-2
+  owner = actor-codex
+  controller = actor-codex
+
+fallback:
+seat-2
+  owner = actor-codex
+  controller = temporary-bot
 ```
 
-Human controls include `canPlay`, `canPass`, and `canHint` and reflect active Controller authorization.
-
-### Hosted / connected Actor
+Unchanged:
 
 ```text
-private projection of bound Seat
-  -> server-generated legalMoves[]
-  -> choose moveId
-  -> play_move(expectedRevision, moveId)
+Seat ID
+hand
+role
+history
+ownerActorId
 ```
 
-`play_move` succeeds only with `seat:play` and an exact current revision.
+The temporary Bot is an Actor bound to the same Seat and the Seat is temporarily added to deterministic bot automation.
 
-## Comments are a side channel
-
-Room comments are stored separately from game action history.
+When the owner is ready again:
 
 ```text
-game history -> affects/reports authoritative play
-room comments -> companion/advisor conversation only
+restore owner
 ```
 
-`comment(text)` must not change:
+removes only the temporary Actor/binding and restores `activeControllerActorId` to the original owner.
 
-- game state;
-- turn order;
-- legal moves;
-- game revision.
+No elapsed Casual timer triggers this automatically.
 
-This lets an Agent suggest, react, or lightly comment without becoming part of the game rules.
+## Connected Actor yield/reconnect/reclaim
 
-## Room creation is client-neutral
+MCP Seat owners may call:
 
-Web is a Human client, not the required room creator. The control plane is the HTTP Room/Join API.
+```text
+yield_to_bot()
+```
 
-Example headless table:
+before stepping away. The same claimed room credential is cached/reconnectable during Room lifetime.
+
+On reconnect, Actor presence becomes connected again but Controller authority does not silently move away from the temporary Bot. Owner explicitly calls:
+
+```text
+take_control()
+```
+
+This avoids concurrent mutation and makes takeover observable/intentional.
+
+## Room and Join lifetime
+
+Current values for new Rooms:
+
+```text
+Join capability    ~20 minutes, one-time claim
+Room               ~24 hours
+room Actor token   usable for reconnect while Room is active
+```
+
+Expired Room state is lazily removed when read. Global historical indexing is intentionally not implemented yet.
+
+## Human / machine projections
+
+### Human browser
+
+- viewer-specific private Seat state;
+- no exhaustive machine `legalMoves[]`;
+- `canPlay/canPass/canHint` reflect current Controller authority;
+- Human owner may still see its hand while another Actor controls the Seat.
+
+### Connected/hosted Actor
+
+- private projection only for bound Seat;
+- server-generated legal move IDs;
+- exact Room revision required for mutation.
+
+An unrelated Actor never receives another Seat's hidden hand.
+
+## Client-neutral Room creation
+
+Web is optional. HTTP/CLI form the control plane; room-scoped MCP is gameplay.
 
 ```http
 POST /api/v1/rooms
@@ -185,53 +184,36 @@ Content-Type: application/json
 {"version":1,"gameId":"doudizhu","mode":"agent-bots"}
 ```
 
-The response returns a room ID and join code. The Agent claims the code, connects the fixed `/mcp` endpoint with room-scoped headers, and plays. CLI and Web are convenience clients over the same runtime.
+returns Room/Join data. Agent claims Join, then uses `/mcp`.
 
-## Move IDs and revision
+Do not duplicate Room creation/business rules in Web/CLI/MCP clients.
 
-Legal move IDs are generated from authoritative state and are valid for a specific room revision. Benefits:
+## Side-channel comments
 
-- clients cannot invent illegal combinations;
-- model calls stay small;
-- stale decisions are rejected;
-- game rules remain the legality authority.
+`comment(text)` is stored outside game action history and does not change:
 
-## Dou Dizhu boundary
-
-Pure engine modules remain under `packages/doudizhu`. The current pre-bidding alpha chooses the landlord outside the pure play engine and passes the selected Seat ID into game creation. Full bidding/scoring belongs in the Dou Dizhu rules layer, not the generic room/Actor layer.
-
-See [`doudizhu-rules.md`](doudizhu-rules.md).
+- game state;
+- revision;
+- turn;
+- legal moves.
 
 ## Automated players
 
-Rule bots use authoritative legal moves with no model call. Hosted agents receive only their controlled Seat's public/private projection and move IDs. Provider HTTP timeouts protect Worker resources; they are not casual turn clocks.
+Native and temporary rule Bots use authoritative legal moves with no model call. Hosted models receive only their Seat projection/legal moves; provider timeout is infrastructure protection, not a Casual turn timeout.
 
 ## Human-visible pacing
 
-Worker/game logic does not sleep to look human. The browser replays authoritative action-history deltas while keeping current turn separate from presentation state.
+Worker/domain logic does not sleep. Browser may replay authoritative history deltas while keeping presentation state distinct from authoritative current turn.
 
-The UI distinguishes:
-
-- current authoritative Seat turn;
-- current Seat Controller;
-- current trick;
-- recent game activity;
-- companion comments;
-- presentation/replay state.
-
-## Casual timing
-
-Casual Human/connected-Agent turns have no hard timeout. Elapsed time may be displayed, but the runtime does not automatically pass, move, or forfeit because an arbitrary casual threshold elapsed.
-
-Hard timing can be a future Arena/benchmark policy and must stay separate.
+Player rows may expose Seat label, Controller/runtime state, and explicit fallback/restore actions.
 
 ## Testing expectations
 
-- game rule changes get pure regression tests;
-- Actor/Seat authorization changes get capability tests;
-- advisor changes test private-view scope and non-play behavior;
-- delegation changes test that only active Controller can mutate the Seat;
-- comments test non-game side-channel semantics;
-- hidden-information/lobby changes get explicit non-leakage tests;
-- browser human projection remains distinct from machine legal-move projection;
-- generic room/runtime code must not introduce Dou Dizhu-specific controller logic.
+- rule changes: pure game regression tests;
+- Actor/Seat changes: capability/identity tests;
+- fallback: preserve owner/Seat, remove only temporary Actor, reject native-Bot replacement;
+- recovery: ID alone must not authenticate; credentials required;
+- advisor: private bound-Seat view without play permission;
+- browser projection: hidden-information non-leakage;
+- stale/out-of-turn/non-controller mutations remain rejected;
+- generic runtime must not contain Dou Dizhu pattern logic.
