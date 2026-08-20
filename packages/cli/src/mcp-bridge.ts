@@ -1,4 +1,5 @@
-import { createInterface } from "node:readline";
+import { fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
 import {
   callActiveRoomTool,
@@ -8,13 +9,6 @@ import {
   leaveActiveRoom,
 } from "./room-client.js";
 import { getCliVersion } from "./version.js";
-
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: string | number | null;
-  method: string;
-  params?: unknown;
-}
 
 interface LocalToolDefinition {
   name: string;
@@ -29,7 +23,7 @@ const EMPTY_OBJECT_SCHEMA = {
 } as const;
 
 export const LOCAL_MCP_INSTRUCTIONS =
-  "Waitloop keeps room credentials inside the local bridge. Use create_room for a headless Agent-vs-bots table or join_room with a WL code, then use wait_for_turn instead of polling. If the user asks to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout never auto-passes or changes Casual game state.";
+  "Waitloop keeps room credentials inside the local bridge. Use create_room for a headless Agent-vs-bots table or join_room with a WL code, then use wait_for_turn instead of polling. If the user asks to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout or cancellation never auto-passes, plays, changes Controller, or mutates Casual game state.";
 
 export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
   {
@@ -75,7 +69,7 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
   {
     name: "wait_for_turn",
     description:
-      "Wait until the active room Actor can play or another actionable state occurs. timeoutMs only bounds one tool call and never forces a move or takeover.",
+      "Wait until the active room Actor can play or another actionable state occurs. timeoutMs only bounds one tool call and never forces a move or takeover. The host may cancel this read-only wait safely.",
     inputSchema: {
       type: "object",
       properties: { timeoutMs: { type: "integer", minimum: 1000, maximum: 25000, default: 25000 } },
@@ -121,24 +115,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function rpcError(id: JsonRpcRequest["id"], code: number, message: string) {
-  return { jsonrpc: "2.0" as const, id: id ?? null, error: { code, message } };
-}
-
-function toolResult(value: unknown, isError = false) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    ...(isError ? { isError: true } : {}),
-  };
-}
-
-function objectArgs(params: unknown): Record<string, unknown> {
-  if (!isRecord(params) || typeof params.name !== "string") throw new Error("tools/call requires a tool name.");
-  if (params.arguments === undefined) return {};
-  if (!isRecord(params.arguments)) throw new Error("Tool arguments must be an object.");
-  return params.arguments;
-}
-
 function requiredString(args: Record<string, unknown>, key: string, maxLength: number): string {
   const value = args[key];
   if (typeof value !== "string" || value.trim().length === 0 || value.length > maxLength) {
@@ -153,7 +129,66 @@ function requiredRevision(args: Record<string, unknown>): number {
   return value as number;
 }
 
-async function callLocalTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+function toolResult(value: unknown, isError = false) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+function redactCredentialText(value: string): string {
+  return value.replace(/\bwl(?:seat|dev|view|room|join|a)_[A-Za-z0-9._~-]+\b/g, "[redacted]");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+export function localToolErrorPayload(error: unknown): { code: string; message: string; nextAction: string } {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = redactCredentialText(rawMessage);
+  const lower = message.toLowerCase();
+
+  if (isAbortError(error)) {
+    return {
+      code: "cancelled",
+      message: "Waitloop tool call was cancelled.",
+      nextAction: "Retry when ready; the active Room selection is preserved.",
+    };
+  }
+  if (lower.includes("no active waitloop room")) {
+    return {
+      code: "active_room_missing",
+      message,
+      nextAction: "Use create_room() or join_room(code) before calling Room tools.",
+    };
+  }
+  if (lower.includes("expired")) {
+    return {
+      code: "active_room_expired",
+      message,
+      nextAction: "Create a new Room or join again with a fresh Join code.",
+    };
+  }
+  if (lower.includes("fetch failed") || lower.includes("network") || lower.includes("econn") || lower.includes("enotfound")) {
+    return {
+      code: "network_unavailable",
+      message,
+      nextAction: "Retry after connectivity recovers; the active Room selection is preserved.",
+    };
+  }
+  return {
+    code: "waitloop_error",
+    message,
+    nextAction: "Use get_active_room() to refresh state before deciding whether to retry.",
+  };
+}
+
+function signalForRemoteRead(name: string, signal: AbortSignal | undefined): AbortSignal | undefined {
+  return name === "get_turn" || name === "wait_for_turn" ? signal : undefined;
+}
+
+async function callLocalTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   if (name === "create_room") {
     if (args.gameId !== undefined && args.gameId !== "doudizhu") throw new Error("Only gameId doudizhu is currently supported.");
     if (args.mode !== undefined && args.mode !== "agent-bots") throw new Error("Local MCP create_room currently supports mode agent-bots.");
@@ -161,17 +196,21 @@ async function callLocalTool(name: string, args: Record<string, unknown>): Promi
   }
   if (name === "join_room") return joinAndActivateRoom(requiredString(args, "code", 32));
   if (name === "get_active_room") {
-    const room = await getActiveRoom();
+    const room = await getActiveRoom(signal);
     return room ?? { version: 1, active: false, message: "No active Waitloop room." };
   }
   if (name === "leave_room") return leaveActiveRoom();
-  if (name === "get_turn") return callActiveRoomTool("get_turn");
+  if (name === "get_turn") return callActiveRoomTool("get_turn", {}, signalForRemoteRead(name, signal));
   if (name === "wait_for_turn") {
     const timeoutMs = args.timeoutMs;
     if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1_000 || (timeoutMs as number) > 25_000)) {
       throw new Error("timeoutMs must be an integer between 1000 and 25000.");
     }
-    return callActiveRoomTool("wait_for_turn", timeoutMs === undefined ? {} : { timeoutMs });
+    return callActiveRoomTool(
+      "wait_for_turn",
+      timeoutMs === undefined ? {} : { timeoutMs },
+      signalForRemoteRead(name, signal),
+    );
   }
   if (name === "play_move") {
     return callActiveRoomTool("play_move", {
@@ -185,67 +224,34 @@ async function callLocalTool(name: string, args: Record<string, unknown>): Promi
   throw new Error(`Unknown Waitloop tool: ${name}`);
 }
 
-export async function handleLocalMcpMessage(message: unknown): Promise<Record<string, unknown> | null> {
-  if (!isRecord(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string") {
-    return rpcError(null, -32600, "Invalid JSON-RPC request.");
-  }
-  const request = message as unknown as JsonRpcRequest;
-  const notification = request.id === undefined;
+export function createLocalMcpServer(): McpServer {
+  const server = new McpServer(
+    { name: "waitloop-local", version: getCliVersion() },
+    { instructions: LOCAL_MCP_INSTRUCTIONS },
+  );
 
-  if (request.method === "notifications/initialized" || request.method === "notifications/cancelled") return null;
-  if (request.method === "initialize") {
-    if (notification) return null;
-    const requestedVersion = isRecord(request.params) && typeof request.params.protocolVersion === "string"
-      ? request.params.protocolVersion
-      : "2025-03-26";
-    return {
-      jsonrpc: "2.0",
-      id: request.id ?? null,
-      result: {
-        protocolVersion: requestedVersion,
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "waitloop-local", version: getCliVersion() },
-        instructions: LOCAL_MCP_INSTRUCTIONS,
+  for (const tool of LOCAL_MCP_TOOLS) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: fromJsonSchema(tool.inputSchema as Parameters<typeof fromJsonSchema>[0]),
       },
-    };
+      async (rawArgs, ctx) => {
+        try {
+          const args = isRecord(rawArgs) ? rawArgs : {};
+          const value = await callLocalTool(tool.name, args, ctx.mcpReq.signal);
+          return toolResult(value);
+        } catch (error) {
+          return toolResult({ error: localToolErrorPayload(error) }, true);
+        }
+      },
+    );
   }
-  if (request.method === "ping") {
-    if (notification) return null;
-    return { jsonrpc: "2.0", id: request.id ?? null, result: {} };
-  }
-  if (request.method === "tools/list") {
-    if (notification) return null;
-    return { jsonrpc: "2.0", id: request.id ?? null, result: { tools: LOCAL_MCP_TOOLS } };
-  }
-  if (request.method === "tools/call") {
-    if (notification) return null;
-    try {
-      if (!isRecord(request.params) || typeof request.params.name !== "string") {
-        return rpcError(request.id, -32602, "tools/call requires name and arguments.");
-      }
-      const value = await callLocalTool(request.params.name, objectArgs(request.params));
-      return { jsonrpc: "2.0", id: request.id ?? null, result: toolResult(value) };
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      return { jsonrpc: "2.0", id: request.id ?? null, result: toolResult({ error: { code: "waitloop_error", message: messageText } }, true) };
-    }
-  }
-  if (notification) return null;
-  return rpcError(request.id, -32601, `Method not found: ${request.method}`);
+
+  return server;
 }
 
-export async function runLocalMcpBridge(): Promise<void> {
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    let message: unknown;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      process.stdout.write(`${JSON.stringify(rpcError(null, -32700, "Parse error."))}\n`);
-      continue;
-    }
-    const response = await handleLocalMcpMessage(message);
-    if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
-  }
+export function runLocalMcpBridge(): void {
+  void serveStdio(createLocalMcpServer);
 }
