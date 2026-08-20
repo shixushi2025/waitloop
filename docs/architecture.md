@@ -70,7 +70,7 @@ Cloudflare automatic dependency install
   -> only then continue to wrangler deploy
 ```
 
-The root `postinstall` skips ordinary local installation and non-production Cloudflare branches. An explicit `pnpm deploy` passes `--require`, resolves the current Git `HEAD`, and requires that exact commit's `ready-to-deploy` check before invoking `wrangler deploy`. A developer therefore cannot bypass the gate merely by running the package deployment command outside Cloudflare.
+The root `postinstall` skips ordinary local installation and non-production Cloudflare branches. An explicit `pnpm deploy` passes `--require` and is allowed only from a clean local `main` working tree. The gate resolves the current `HEAD`, verifies it matches `origin/main` when that remote reference is available, and then requires that exact commit's `ready-to-deploy` check before invoking `wrangler deploy`. Uncommitted, staged, untracked, detached-HEAD, and feature-branch deployments fail before upload.
 
 The gate selects the latest `ready-to-deploy` check produced by the `github-actions` app for the exact commit SHA. Public GitHub Checks access needs no repository secret; an optional `WAITLOOP_GITHUB_TOKEN` may be supplied to increase API rate limits. The unauthenticated production path polls once per minute and fails closed after 15 minutes.
 
@@ -256,7 +256,8 @@ CLI `--raw-mcp` preserves advanced remote configuration access, but default Join
 - Durable Object serialization + revision reject stale concurrent moves;
 - wait timeout never authorizes game mutation;
 - reconnect/fallback never bypasses ownership or revision;
-- Cloudflare and explicit package deploys wait for the exact commit's final GitHub Actions gate.
+- Cloudflare and explicit package deploys wait for the exact commit's final GitHub Actions gate;
+- manual production deployment cannot substitute uncommitted working-tree content for the validated commit.
 
 ## Future database boundary
 
