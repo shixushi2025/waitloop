@@ -20,6 +20,10 @@ function requireText(path, content, needle) {
   if (!content.includes(needle)) fail(`${path} must contain ${JSON.stringify(needle)}`);
 }
 
+function requireIncludes(path, values, required) {
+  if (!Array.isArray(values) || !values.includes(required)) fail(`${path} must include ${JSON.stringify(required)}`);
+}
+
 const cliPackage = json("packages/cli/package.json");
 const manifest = json("apps/web/public/agent.json");
 const agentGuide = read("apps/web/public/agent.md");
@@ -45,35 +49,59 @@ if (manifest.cli?.installCommand !== `npm install -g ${cliPackage.name}@${expect
 if (manifest.cli?.joinCommand !== "waitloop join <join-code>") fail("agent.json joinCommand is missing or changed unexpectedly");
 if (manifest.mcp?.endpoint !== "https://waitloop.run/mcp") fail("agent.json MCP endpoint is out of sync");
 if (manifest.mcp?.joinUrlPattern !== "https://waitloop.run/join/<join-code>") fail("agent.json joinUrlPattern is out of sync");
+if (manifest.rooms?.createEndpoint !== "https://waitloop.run/api/v1/rooms") fail("agent.json Room API endpoint is out of sync");
+
+for (const tool of ["get_turn", "play_move", "comment"]) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+for (const mode of ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"]) {
+  requireIncludes("agent.json rooms.modes", manifest.rooms?.modes, mode);
+}
+if (manifest.rooms?.headlessAgentMode !== "agent-bots") fail("agent.json headlessAgentMode is out of sync");
+if (manifest.rooms?.companionMode !== "companion-agent") fail("agent.json companionMode is out of sync");
 
 for (const needle of [
   "https://waitloop.run/agent.json",
+  "https://waitloop.run/api/v1/rooms",
   "npm install -g @waitloop/cli@alpha",
   "waitloop join",
   "https://waitloop.run/join/<join-code>",
   "https://waitloop.run/mcp",
   "get_turn()",
   "play_move(expectedRevision, moveId)",
+  "comment(text)",
+  "companion-agent",
+  "agent-bots",
+  "advisor",
 ]) requireText("agent.md", agentGuide, needle);
 
 for (const needle of [
+  "https://waitloop.run/api/v1/rooms",
   "npm install -g @waitloop/cli@alpha",
   "waitloop join",
   "https://waitloop.run/join/<join-code>",
   "https://waitloop.run/mcp",
   "get_turn()",
   "play_move(expectedRevision, moveId)",
+  "comment(text)",
+  "companion-agent",
+  "agent-bots",
+  "Advisor",
 ]) requireText("SKILL.md", skill, needle);
 
 for (const needle of [
   "https://waitloop.run/agent.md",
   "https://waitloop.run/agent.json",
   "https://waitloop.run/skills/waitloop/SKILL.md",
+  "https://waitloop.run/api/v1/rooms",
   "https://waitloop.run/join/<join-code>",
   "https://waitloop.run/mcp",
   "npm install -g @waitloop/cli@alpha",
+  "agent-bots",
+  "comment(text)",
 ]) requireText("llms.txt", llms, needle);
 
+for (const needle of ["Seat", "Actor", "Controller", "companion-agent", "agent-bots", "comment(text)"]) {
+  requireText("README.md", rootReadme, needle);
+}
 if (!rootReadme.includes("docs/README.md")) fail("root README must point to the canonical docs index");
 if (rootReadme.includes("docs/game-experience-v2.md")) fail("root README references removed transitional documentation");
 
@@ -109,4 +137,9 @@ for (const path of stableInstallDocs) {
   if (exactVersionPattern.test(read(path))) fail(`${path} hard-codes an exact CLI release; use @waitloop/cli@alpha`);
 }
 
-console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; Agent/CLI/MCP surfaces synchronized.`);
+for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/architecture.md", "docs/status.md"]) {
+  const content = read(path);
+  for (const needle of ["Seat", "Actor", "advisor"]) requireText(path, content, needle);
+}
+
+console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/Actor/MCP Agent surfaces synchronized.`);

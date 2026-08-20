@@ -1,96 +1,92 @@
 # Roadmap
 
-This document contains only **future work that is still relevant**. Completed implementation phases are removed; durable behavior belongs in the canonical subsystem docs instead.
-
-Current implemented state is tracked in [`status.md`](status.md).
+This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
 ## 1. Public hardening
 
 Before broader public exposure:
 
-- rate limiting for room creation, pairing, lifecycle ingest, MCP mutation, and hosted inference;
-- room/join/temporary credential cleanup and expiry policy;
-- hosted-agent usage budgets and quotas;
+- rate limiting for room creation, Join claim, pairing, lifecycle ingest, MCP mutation/comments, and hosted inference;
+- room/temporary Actor credential cleanup and expiry policy;
+- hosted-agent budgets/quotas;
 - stronger CSP/CORS/security headers and production review;
-- clearer private security-reporting path;
-- migration/recovery tests for persisted Durable Object state.
+- private security-reporting path;
+- migration/recovery tests for persisted Durable Object state, including legacy participant -> Actor/Seat normalization.
 
-Acceptance:
+Acceptance: anonymous traffic cannot create unbounded cost/state; expired capabilities are unusable; production boundaries match [`security.md`](security.md).
 
-- abusive anonymous traffic cannot create unbounded inference/state cost;
-- expired rooms/credentials do not remain indefinitely useful;
-- production headers/auth boundaries match [`security.md`](security.md).
+## 2. Connected Actor runtime efficiency/resilience
 
-## 2. Connected-agent resilience
+The current Actor/Seat/control model is in place. Improve the runtime without adding a hard casual clock:
 
-Improve long-running connected-agent tables without adding a hard casual turn clock:
+- `wait_for_turn` or equivalent server-side long poll so Agents do not repeatedly poll `get_turn`;
+- reconnect/disconnect state and clearer MCP client identity where available;
+- explicit owner-controlled replace-with-bot takeover for stalled/disconnected controllers;
+- stable local MCP bridge / optional automatic harness configuration so `waitloop join` does not require copying temporary MCP JSON;
+- cleanup of temporary MCP configuration after room end;
+- clearer recovery when a Join code is claimed but the Actor never connects.
 
-- reconnect/disconnect state;
-- soft elapsed warnings;
-- explicit user-controlled `replace with bot` takeover;
-- temporary MCP configuration cleanup after the room ends;
-- better client identity/labeling when MCP client metadata is available;
-- clearer recovery when a join code is claimed but the MCP client never connects.
+Acceptance: normal Agent gameplay can wait efficiently; disconnects do not force room abandonment; takeover remains explicit rather than timer-triggered.
 
-Acceptance:
+## 3. Expand Actor relationships only when demanded
 
-- a disconnected/stalled connected agent never forces the user to abandon the table;
-- takeover is explicit, not triggered by an arbitrary casual-game timer;
-- seat credentials remain scoped to one room.
+The current durable relations are `controller` and `advisor`, with one connected Actor Join per current mode. Future extensions may include:
 
-## 3. Dou Dizhu completeness
+- multiple advisors on one Seat;
+- public-only spectator/commentator Actors that cannot see private Seat state;
+- multiple connected player Seats with all-ready gating;
+- per-turn one-shot delegation rather than persistent control;
+- richer comment/event policies.
 
-Add the missing rules layer after the current play loop is stable:
+Do not add these as `participant.kind` special cases. Extend the Actor/Seat/Binding/capability model.
 
-- bidding / rob-landlord phase;
+Acceptance: new relations preserve explicit private-view consent and server-side capability authorization.
+
+## 4. Dou Dizhu completeness
+
+- bidding / rob-landlord;
 - landlord resolution from bidding rather than pre-game random assignment;
-- bidding score and settlement model;
+- bidding score/settlement;
 - bomb/rocket multipliers;
-- spring / anti-spring rules;
+- spring / anti-spring;
 - regression coverage for the selected rule profile.
 
-Acceptance:
+Acceptance: rules docs, engine, tests, Human UI, and Agent-visible state agree exactly.
 
-- [`doudizhu-rules.md`](doudizhu-rules.md), engine behavior, tests, human UI, and agent-visible state agree exactly.
+## 5. Lifecycle/browser account model
 
-## 4. Lifecycle/browser account model
-
-The current public game-room credential model is independent of coding-agent lifecycle-session access. If account-backed lifecycle UI/device management is introduced:
+If account-backed lifecycle/device management is introduced:
 
 - browser session/ticket flow for lifecycle sessions;
 - device list/revoke/rotation UX;
-- explicit account/device ownership boundaries;
+- explicit account/device ownership;
 - no regression to Worker-wide browser secrets.
 
-Do not make accounts a prerequisite for the core game-room flow unless the product requirement changes.
+Accounts are not currently required for headless/public game rooms.
 
-## 5. Additional lifecycle adapters
+## 6. Additional lifecycle adapters
 
-- implement DSH only after its lifecycle integration contract is well understood;
-- add other coding agents based on real demand;
-- preserve the canonical Waitloop lifecycle protocol instead of adding vendor semantics to core packages.
+- DSH after its lifecycle contract is well understood;
+- other coding agents based on real demand;
+- preserve canonical lifecycle semantics and fail-open/privacy behavior.
 
-Each adapter must preserve fail-open delivery and the lifecycle privacy contract.
+## 7. Arena / benchmark
 
-## 6. Arena / benchmark mode
+Arena remains a separate policy from casual waiting:
 
-Arena is a separate experiment/evaluation policy, not the default waiting experience.
+- deterministic agent-vs-agent runner;
+- reproducible seeds/config;
+- public-decision replay;
+- win/latency/fallback/tool-error metrics;
+- explicit hard turn limits only where benchmark fairness needs them.
 
-Potential capabilities:
+Do not import Arena hard timing or engagement behavior into casual Human/Agent tables.
 
-- deterministic agent-vs-agent match runner;
-- reproducible seeds/configurations;
-- public-decision replay logs;
-- win rate, latency, fallback, and tool-call error metrics;
-- explicit hard turn limits where benchmark fairness requires them.
+## Maintenance rule
 
-Do not import Arena timeout/engagement behavior into casual human waiting tables.
+When an item ships:
 
-## Roadmap maintenance rule
-
-When one of these items ships:
-
-1. update the relevant canonical docs;
+1. update its canonical docs;
 2. update [`status.md`](status.md);
-3. remove the completed item from this roadmap;
-4. do not create a permanent `feature-v2.md` to preserve the implementation history.
+3. remove it here;
+4. delete transitional design notes after extracting durable decisions.

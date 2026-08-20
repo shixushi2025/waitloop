@@ -24,7 +24,7 @@
       <section class="game-intro">
         <p class="eyebrow">games / doudizhu / alpha</p>
         <h1>Dou Dizhu,<br />without the casino.</h1>
-        <p class="lede">Rules and hidden hands stay server-side. Landlord is chosen randomly for the current alpha; connected-agent rooms wait in a lobby until MCP is actually connected.</p>
+        <p class="lede">A seat is the player. Humans, bots, and agents are actors that may control or advise a seat. Rules and hidden information remain server-side.</p>
       </section>
 
       <section class="attention" id="attention" hidden aria-live="assertive">
@@ -43,7 +43,7 @@
 
         <div class="game-start" id="game-start">
           <div class="game-start-content">
-            <p>Choose who sits at the other two seats.</p>
+            <p>Choose the table relationship. Agent-native rooms can also be created headlessly through the Room API.</p>
 
             <div class="mode-block">
               <p class="section-label">rules_only/</p>
@@ -64,7 +64,15 @@
               <div class="start-actions">
                 <button class="command-button" id="new-connected-agent-game" type="button"><span>&gt;</span> you + connected agent + bot</button>
               </div>
-              <small>Creates a lobby. The game starts only after the room-scoped MCP seat actually connects.</small>
+              <small>The agent owns a separate player seat.</small>
+            </div>
+
+            <div class="mode-block">
+              <p class="section-label">agent_companion/</p>
+              <div class="start-actions">
+                <button class="command-button" id="new-companion-agent-game" type="button"><span>&gt;</span> you + agent companion + 2 bots</button>
+              </div>
+              <small>The agent sees your seat and may comment, but cannot play until you explicitly delegate control.</small>
             </div>
 
             <p class="create-error" id="create-error" hidden aria-live="polite"></p>
@@ -75,13 +83,13 @@
           <section class="mcp-setup" id="mcp-setup" hidden aria-label="Connected agent setup">
             <div class="mcp-setup-head">
               <div>
-                <p class="section-label">connected_agent_lobby/</p>
+                <p class="section-label">connected_actor_lobby/</p>
                 <strong>Connect one agent. No hard turn timer.</strong>
               </div>
               <span class="mcp-state" id="mcp-claim-status">waiting</span>
             </div>
 
-            <p class="mcp-note">Recommended: give the join command to the agent that should occupy this seat. The room stays in the lobby until an authenticated MCP request arrives.</p>
+            <p class="mcp-note">Give the join command or join URL to the agent. The MCP endpoint is fixed; the join code only grants this room-scoped actor capability.</p>
 
             <div class="join-command-row">
               <code id="join-command">waitloop join WL-XXXXXXXXXX</code>
@@ -104,16 +112,11 @@
           </section>
 
           <dl class="status-grid game-status">
-            <dt>role</dt>
-            <dd id="role-value">-</dd>
-            <dt>turn</dt>
-            <dd id="turn-value">-</dd>
-            <dt>phase</dt>
-            <dd id="room-phase-value">-</dd>
-            <dt>status</dt>
-            <dd id="game-status-value">-</dd>
-            <dt>revision</dt>
-            <dd id="revision-value">-</dd>
+            <dt>role</dt><dd id="role-value">-</dd>
+            <dt>turn</dt><dd id="turn-value">-</dd>
+            <dt>phase</dt><dd id="room-phase-value">-</dd>
+            <dt>status</dt><dd id="game-status-value">-</dd>
+            <dt>revision</dt><dd id="revision-value">-</dd>
           </dl>
 
           <div class="rule" aria-hidden="true"></div>
@@ -121,7 +124,19 @@
           <section class="game-section">
             <p class="section-label">players/</p>
             <div class="player-list" id="players"></div>
-            <small class="turn-help"><span>&gt;</span> marks the authoritative current turn. Connected agents show elapsed thinking time only; Waitloop does not force a move.</small>
+            <small class="turn-help"><span>&gt;</span> marks the authoritative seat turn. The runtime label shows who currently controls that seat.</small>
+          </section>
+
+          <section class="game-section control-section" id="control-section" hidden>
+            <p class="section-label">control/</p>
+            <div class="control-row">
+              <span id="control-status">you control this seat</span>
+              <div class="control-actions">
+                <button class="command-button secondary-action" id="control-human" type="button">me</button>
+                <button class="command-button secondary-action" id="control-agent" type="button">agent</button>
+              </div>
+            </div>
+            <small>Delegation changes only the active controller. Your seat, hand, role, and history stay the same.</small>
           </section>
 
           <section class="game-section table-grid">
@@ -133,6 +148,12 @@
               <p class="section-label">activity/</p>
               <div class="activity-list" id="activity"></div>
             </div>
+          </section>
+
+          <section class="game-section" id="companion-section" hidden>
+            <p class="section-label">companion/</p>
+            <div class="comment-list" id="comments"></div>
+            <small>Agent comments are a side channel. They never change turn order, legality, or game revision.</small>
           </section>
 
           <section class="game-section">
@@ -160,10 +181,7 @@
         </div>
       </section>
 
-      <footer>
-        <span>waitloop.run</span>
-        <span>work comes first</span>
-      </footer>
+      <footer><span>waitloop.run</span><span>work comes first</span></footer>
     </main>
 
     <script type="module" src="/game.js"></script>

@@ -1,6 +1,6 @@
 import { historyDelta, recentHistory } from "./game-history.js";
 
-const VIEWER_ID = "you";
+const LEGACY_VIEWER_ID = "you";
 const params = new URLSearchParams(window.location.search);
 const linkedSessionId = params.get("session");
 
@@ -10,6 +10,7 @@ const gameStart = document.querySelector("#game-start");
 const gameView = document.querySelector("#game-view");
 const newBotGameButton = document.querySelector("#new-bot-game");
 const newConnectedAgentGameButton = document.querySelector("#new-connected-agent-game");
+const newCompanionAgentGameButton = document.querySelector("#new-companion-agent-game");
 const hostedAgentActions = document.querySelector("#hosted-agent-actions");
 const hostedAgentStatus = document.querySelector("#hosted-agent-status");
 const createError = document.querySelector("#create-error");
@@ -21,6 +22,12 @@ const roomPhaseValue = document.querySelector("#room-phase-value");
 const playersElement = document.querySelector("#players");
 const currentTrickElement = document.querySelector("#current-trick");
 const activityElement = document.querySelector("#activity");
+const companionSection = document.querySelector("#companion-section");
+const commentsElement = document.querySelector("#comments");
+const controlSection = document.querySelector("#control-section");
+const controlStatus = document.querySelector("#control-status");
+const controlHumanButton = document.querySelector("#control-human");
+const controlAgentButton = document.querySelector("#control-agent");
 const handElement = document.querySelector("#hand");
 const selectionSummary = document.querySelector("#selection-summary");
 const playSelectedButton = document.querySelector("#play-selected");
@@ -88,22 +95,83 @@ function phaseOf(current) {
   return "playing";
 }
 
-function participantFor(current, playerId) {
+function viewerActorId(current = snapshot) {
+  return current?.viewerActorId ?? LEGACY_VIEWER_ID;
+}
+
+function viewerSeatId(current = snapshot) {
+  return current?.viewerSeatId ?? LEGACY_VIEWER_ID;
+}
+
+function actorFor(current, actorId) {
+  if (!actorId) return null;
+  if (Array.isArray(current?.actors)) {
+    const found = current.actors.find((actor) => actor?.id === actorId);
+    if (found) return found;
+  }
   return Array.isArray(current?.participants)
-    ? current.participants.find((participant) => participant?.id === playerId) ?? null
+    ? current.participants.find((participant) => participant?.id === actorId) ?? null
     : null;
 }
 
-function seatFor(current, playerId) {
-  return Array.isArray(current?.seatStates)
-    ? current.seatStates.find((seat) => seat?.playerId === playerId) ?? null
+function seatDescriptor(current, seatId) {
+  return Array.isArray(current?.seats)
+    ? current.seats.find((seat) => seat?.id === seatId) ?? null
     : null;
 }
 
-function playerLabel(current, playerId) {
-  if (!playerId) return "room";
-  if (playerId === VIEWER_ID) return "you";
-  return participantFor(current, playerId)?.label ?? playerId;
+function bindingForActor(current, actorId) {
+  return Array.isArray(current?.bindings)
+    ? current.bindings.find((binding) => binding?.actorId === actorId) ?? null
+    : null;
+}
+
+function actorStateFor(current, actorId) {
+  if (Array.isArray(current?.actorStates)) {
+    const found = current.actorStates.find((state) => state?.actorId === actorId);
+    if (found) return found;
+  }
+  if (Array.isArray(current?.seatStates)) {
+    const legacy = current.seatStates.find((state) => state?.playerId === actorId);
+    if (legacy) return legacy;
+  }
+  return null;
+}
+
+function connectedActors(current) {
+  return Array.isArray(current?.actors)
+    ? current.actors.filter((actor) => actor?.kind === "connected-agent")
+    : Array.isArray(current?.participants)
+      ? current.participants.filter((actor) => actor?.kind === "connected-agent")
+      : [];
+}
+
+function companionActor(current) {
+  const seatId = viewerSeatId(current);
+  return connectedActors(current).find((actor) => {
+    const binding = bindingForActor(current, actor.id);
+    return binding?.seatId === seatId && binding?.relation === "advisor";
+  }) ?? null;
+}
+
+function controllerActorForSeat(current, seatId) {
+  const seat = seatDescriptor(current, seatId);
+  if (seat?.activeControllerActorId) return actorFor(current, seat.activeControllerActorId);
+  return actorFor(current, seatId);
+}
+
+function seatLabel(current, seatId) {
+  if (!seatId) return "room";
+  const seat = seatDescriptor(current, seatId);
+  if (seat?.label) return seat.label;
+  if (seatId === viewerSeatId(current)) return "you";
+  return actorFor(current, seatId)?.label ?? seatId;
+}
+
+function actorLabel(current, actorId) {
+  if (!actorId) return "actor";
+  if (actorId === viewerActorId(current)) return "you";
+  return actorFor(current, actorId)?.label ?? actorId;
 }
 
 function updateUrl() {
@@ -125,8 +193,9 @@ function setCreateError(message = "") {
 
 function setCreateButtonsDisabled(disabled) {
   createInFlight = disabled;
-  if (newBotGameButton instanceof HTMLButtonElement) newBotGameButton.disabled = disabled;
-  if (newConnectedAgentGameButton instanceof HTMLButtonElement) newConnectedAgentGameButton.disabled = disabled;
+  for (const button of [newBotGameButton, newConnectedAgentGameButton, newCompanionAgentGameButton]) {
+    if (button instanceof HTMLButtonElement) button.disabled = disabled;
+  }
   if (isElement(hostedAgentActions)) {
     for (const button of hostedAgentActions.querySelectorAll("button")) {
       if (button instanceof HTMLButtonElement) button.disabled = disabled;
@@ -138,58 +207,68 @@ function formatElapsed(startedAt) {
   if (!Number.isFinite(startedAt) || startedAt <= 0) return "";
   const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function currentController(current) {
+  return controllerActorForSeat(current, current.currentPlayerId);
 }
 
 function promptFor(current) {
   const phase = phaseOf(current);
   if (phase === "waiting_for_players") {
-    const agent = (current.participants ?? []).find((participant) => participant?.kind === "connected-agent");
-    const seat = agent ? seatFor(current, agent.id) : null;
-    if (seat?.status === "connecting") return "agent credential claimed · waiting for MCP connection";
+    const connected = connectedActors(current)[0];
+    const state = connected ? actorStateFor(current, connected.id) : null;
+    if (state?.status === "connecting") return "agent credential claimed · waiting for MCP connection";
     return "waiting for connected agent · no cards are active yet";
   }
   if (current.status === "finished") {
-    return current.state.winnerId === VIEWER_ID
+    return current.state.winnerId === viewerSeatId(current)
       ? "you won · return to work when ready"
-      : `${playerLabel(current, current.state.winnerId)} won`;
+      : `${seatLabel(current, current.state.winnerId)} won`;
   }
   if (current.status === "paused") return "game paused · work has priority";
   if (presentationActive) return "replaying opponent actions";
-  if (current.currentPlayerId === VIEWER_ID) return "your turn · select cards, then play";
 
-  const participant = participantFor(current, current.currentPlayerId);
-  if (participant?.kind === "connected-agent") {
+  const controller = currentController(current);
+  if (current.currentPlayerId === viewerSeatId(current)) {
+    if (current.controls?.canPlay === true) return "your turn · select cards, then play";
+    if (controller?.kind === "connected-agent") {
+      const elapsed = formatElapsed(current.turnStartedAt);
+      return `${controller.label} controls your seat${elapsed ? ` · ${elapsed}` : ""}`;
+    }
+    return "your seat is delegated";
+  }
+  if (controller?.kind === "connected-agent") {
     const elapsed = formatElapsed(current.turnStartedAt);
     const slow = Number.isFinite(current.turnStartedAt) && Date.now() - current.turnStartedAt >= 60_000;
-    return `${participant.label} turn${elapsed ? ` · ${elapsed}` : ""}${slow ? " · taking a little longer" : ""}`;
+    return `${controller.label} turn${elapsed ? ` · ${elapsed}` : ""}${slow ? " · taking a little longer" : ""}`;
   }
-  if (participant?.kind === "hosted-agent") return `${participant.label} is thinking`;
-  return `${playerLabel(current, current.currentPlayerId)} is moving`;
+  if (controller?.kind === "hosted-agent") return `${controller.label} is thinking`;
+  return `${seatLabel(current, current.currentPlayerId)} is moving`;
 }
 
-function playerRuntimeText(current, playerId) {
-  const participant = participantFor(current, playerId);
-  const seat = seatFor(current, playerId);
+function playerRuntimeText(current, seatId) {
+  const controller = controllerActorForSeat(current, seatId);
+  const state = controller ? actorStateFor(current, controller.id) : null;
   if (phaseOf(current) === "waiting_for_players") {
-    if (participant?.kind === "connected-agent") {
-      if (seat?.status === "connecting") return "CONNECTING";
-      if (seat?.status === "connected") return "READY";
+    if (controller?.kind === "connected-agent") {
+      if (state?.status === "connecting") return "CONNECTING";
+      if (state?.status === "connected") return "READY";
       return "WAITING";
     }
     return "READY";
   }
 
-  if (current.currentPlayerId === playerId && participant?.kind === "connected-agent") {
+  const controlledBy = controller ? actorLabel(current, controller.id) : "unknown";
+  if (current.currentPlayerId === seatId && controller?.kind === "connected-agent") {
     const elapsed = formatElapsed(current.turnStartedAt);
     const slow = Number.isFinite(current.turnStartedAt) && Date.now() - current.turnStartedAt >= 60_000;
-    return `THINKING${elapsed ? ` · ${elapsed}` : ""}${slow ? " · SLOW" : ""}`;
+    return `TURN · ${controlledBy}${elapsed ? ` · ${elapsed}` : ""}${slow ? " · SLOW" : ""}`;
   }
-  if (current.currentPlayerId === playerId) return "TURN";
-  if (seat?.status === "connected") return "CONNECTED";
-  return "READY";
+  if (current.currentPlayerId === seatId) return `TURN · ${controlledBy}`;
+  if (controller?.kind === "connected-agent" && state?.status === "connected") return `CONTROL · ${controlledBy}`;
+  return controlledBy === seatLabel(current, seatId) ? "READY" : `CONTROL · ${controlledBy}`;
 }
 
 function renderPlayers(current) {
@@ -198,19 +277,23 @@ function renderPlayers(current) {
   const waiting = phaseOf(current) === "waiting_for_players";
 
   for (const player of current.state.players ?? []) {
-    const participant = participantFor(current, player.id);
+    const seat = seatDescriptor(current, player.id);
+    const controller = controllerActorForSeat(current, player.id);
     const row = document.createElement("div");
     const isTurn = !waiting && current.currentPlayerId === player.id;
     row.className = `player${isTurn ? " current" : ""}`;
 
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = playerLabel(current, player.id);
-    if (participant?.model) name.title = participant.model;
+    name.textContent = seatLabel(current, player.id);
 
     const role = document.createElement("span");
     role.className = "role";
-    role.textContent = waiting ? `pending · ${participant?.kind ?? "player"}` : `${player.role} · ${participant?.kind ?? "player"}`;
+    const kind = controller?.kind ?? "player";
+    role.textContent = waiting ? `pending · ${kind}` : `${player.role} · ${kind}`;
+    if (seat?.ownerActorId && seat.ownerActorId !== seat.activeControllerActorId) {
+      role.title = `seat owner: ${actorLabel(current, seat.ownerActorId)}`;
+    }
 
     const count = document.createElement("span");
     count.className = "count";
@@ -226,7 +309,7 @@ function renderPlayers(current) {
 }
 
 function actionText(current, entry) {
-  const name = playerLabel(current, entry?.playerId);
+  const name = seatLabel(current, entry?.playerId);
   if (entry?.type === "pass") return `${name}  pass`;
   const cards = Array.isArray(entry?.cards) ? entry.cards.map((card) => rankLabel(card.rank)).join(" ") : "";
   return `${name}  ${entry?.pattern?.kind ?? "play"}  ${cards}`.trim();
@@ -236,15 +319,11 @@ function renderCurrentTrick(current) {
   if (!isElement(currentTrickElement)) return;
   currentTrickElement.classList.remove("replaying");
   if (phaseOf(current) === "waiting_for_players") {
-    currentTrickElement.textContent = "waiting · table opens when the agent connects";
+    currentTrickElement.textContent = "waiting · table opens when the connected actor arrives";
     return;
   }
   const last = current.state.lastPlay;
-  if (!last) {
-    currentTrickElement.textContent = "open trick · leader may play any legal pattern";
-    return;
-  }
-  currentTrickElement.textContent = actionText(current, last);
+  currentTrickElement.textContent = last ? actionText(current, last) : "open trick · leader may play any legal pattern";
 }
 
 function renderActivity(current) {
@@ -274,13 +353,63 @@ function renderActivity(current) {
   });
 }
 
+function renderComments(current) {
+  if (!isElement(companionSection) || !isElement(commentsElement)) return;
+  const hasCompanion = Boolean(companionActor(current));
+  const comments = Array.isArray(current.comments) ? current.comments.slice(-6) : [];
+  companionSection.hidden = !hasCompanion && comments.length === 0;
+  commentsElement.replaceChildren();
+  if (comments.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "comment-empty";
+    empty.textContent = hasCompanion ? "agent connected · no comments yet" : "no comments";
+    commentsElement.append(empty);
+    return;
+  }
+  for (const comment of comments) {
+    const row = document.createElement("div");
+    row.className = "comment-row";
+    const who = document.createElement("span");
+    who.className = "comment-actor";
+    who.textContent = actorLabel(current, comment.actorId);
+    const text = document.createElement("span");
+    text.textContent = comment.text ?? "";
+    row.append(who, text);
+    commentsElement.append(row);
+  }
+}
+
+function renderControl(current) {
+  if (!isElement(controlSection) || !isElement(controlStatus)) return;
+  const canControl = Array.isArray(current.capabilities) && current.capabilities.includes("seat:control");
+  const companion = companionActor(current);
+  if (!canControl || !companion) {
+    controlSection.hidden = true;
+    return;
+  }
+  controlSection.hidden = false;
+  const seat = seatDescriptor(current, viewerSeatId(current));
+  const activeId = seat?.activeControllerActorId ?? viewerActorId(current);
+  const humanActive = activeId === viewerActorId(current);
+  const companionState = actorStateFor(current, companion.id);
+  controlStatus.textContent = humanActive
+    ? `${actorLabel(current, viewerActorId(current))} control this seat · ${companion.label} advises`
+    : `${companion.label} controls this seat · you can take back control anytime`;
+  if (controlHumanButton instanceof HTMLButtonElement) controlHumanButton.disabled = humanActive;
+  if (controlAgentButton instanceof HTMLButtonElement) {
+    controlAgentButton.disabled = !humanActive || companionState?.status !== "connected";
+    controlAgentButton.title = companionState?.status === "connected" ? "delegate this seat" : "agent must connect first";
+  }
+}
+
 function isHumanTurn(current = snapshot) {
   return Boolean(
     current &&
     !presentationActive &&
     phaseOf(current) === "playing" &&
     current.status === "playing" &&
-    current.currentPlayerId === VIEWER_ID,
+    current.currentPlayerId === viewerSeatId(current) &&
+    current.controls?.canPlay === true,
   );
 }
 
@@ -296,12 +425,8 @@ function syncSelection(current) {
     hintCursor = 0;
     selectedHintLabel = "";
   }
-
   const currentIds = new Set((current.state.myHand ?? []).map((card) => card.id));
-  for (const id of selectedCardIds) {
-    if (!currentIds.has(id)) selectedCardIds.delete(id);
-  }
-
+  for (const id of selectedCardIds) if (!currentIds.has(id)) selectedCardIds.delete(id);
   if (!isHumanTurn(current) && selectedCardIds.size > 0) {
     selectedCardIds.clear();
     hintCursor = 0;
@@ -315,7 +440,7 @@ function renderHand(current) {
   if (phaseOf(current) === "waiting_for_players") {
     const note = document.createElement("span");
     note.className = "hand-waiting";
-    note.textContent = "cards unlock when the connected-agent seat is ready";
+    note.textContent = "cards unlock when the connected actor is ready";
     handElement.append(note);
     return;
   }
@@ -326,7 +451,9 @@ function renderHand(current) {
     token.type = "button";
     token.className = `card-token${selectedCardIds.has(card.id) ? " selected" : ""}`;
     token.textContent = rankLabel(card.rank);
-    token.title = selectable ? `click to ${selectedCardIds.has(card.id) ? "deselect" : "select"}` : "waiting for your turn";
+    token.title = selectable
+      ? `click to ${selectedCardIds.has(card.id) ? "deselect" : "select"}`
+      : current.controls?.canPlay === false ? "seat control is delegated" : "waiting for your turn";
     token.disabled = !selectable;
     token.setAttribute("aria-pressed", selectedCardIds.has(card.id) ? "true" : "false");
     token.addEventListener("click", () => {
@@ -348,13 +475,9 @@ function setActionDisabled(button, disabled) {
 function renderActions(current) {
   if (!isElement(selectionSummary)) return;
   selectionSummary.classList.remove("valid", "invalid");
-
   if (phaseOf(current) === "waiting_for_players") {
-    setActionDisabled(playSelectedButton, true);
-    setActionDisabled(passMoveButton, true);
-    setActionDisabled(hintMoveButton, true);
-    setActionDisabled(clearSelectionButton, true);
-    selectionSummary.textContent = "waiting for connected agent · no turn timer";
+    for (const button of [playSelectedButton, passMoveButton, hintMoveButton, clearSelectionButton]) setActionDisabled(button, true);
+    selectionSummary.textContent = "waiting for connected actor · no turn timer";
     return;
   }
 
@@ -362,7 +485,6 @@ function renderActions(current) {
   const cards = selectedCards(current);
   const canPass = current.controls?.canPass === true;
   const canHint = current.controls?.canHint === true;
-
   setActionDisabled(playSelectedButton, !turn || cards.length === 0);
   setActionDisabled(passMoveButton, !turn || !canPass);
   setActionDisabled(hintMoveButton, !turn || !canHint);
@@ -370,6 +492,10 @@ function renderActions(current) {
 
   if (presentationActive) {
     selectionSummary.textContent = "showing opponent actions";
+    return;
+  }
+  if (current.controls?.canPlay === false && current.currentPlayerId === viewerSeatId(current)) {
+    selectionSummary.textContent = "agent controls your seat · take control to play yourself";
     return;
   }
   if (!turn) {
@@ -380,11 +506,8 @@ function renderActions(current) {
     selectionSummary.textContent = "select cards from hand";
     return;
   }
-
   const labels = cards.map((card) => rankLabel(card.rank)).join(" ");
-  selectionSummary.textContent = selectedHintLabel
-    ? `${labels} · hint: ${selectedHintLabel}`
-    : `${labels} · ${cards.length} selected`;
+  selectionSummary.textContent = selectedHintLabel ? `${labels} · hint: ${selectedHintLabel}` : `${labels} · ${cards.length} selected`;
 }
 
 function clearSelection() {
@@ -410,20 +533,21 @@ function renderNow(current) {
   updateUrl();
   syncSelection(current);
   const phase = phaseOf(current);
-
   if (isElement(roomLabel)) roomLabel.textContent = `room / ${roomId.slice(0, 18)}`;
   if (isElement(gameStart)) gameStart.hidden = true;
   if (isElement(gameView)) gameView.hidden = false;
   if (isElement(roleValue)) roleValue.textContent = phase === "waiting_for_players" ? "pending" : current.state.role ?? "-";
-  if (isElement(turnValue)) turnValue.textContent = phase === "waiting_for_players" ? "waiting" : playerLabel(current, current.currentPlayerId);
+  if (isElement(turnValue)) turnValue.textContent = phase === "waiting_for_players" ? "waiting" : seatLabel(current, current.currentPlayerId);
   if (isElement(revisionValue)) revisionValue.textContent = String(current.revision);
   if (isElement(gameStatusValue)) gameStatusValue.textContent = current.status;
   if (isElement(roomPhaseValue)) roomPhaseValue.textContent = phase;
   if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(current);
 
   renderPlayers(current);
+  renderControl(current);
   renderCurrentTrick(current);
   renderActivity(current);
+  renderComments(current);
   renderHand(current);
   renderActions(current);
   scheduleRoomRefresh(current);
@@ -457,7 +581,7 @@ function render(current) {
   presentationActive = false;
   renderNow(current);
 
-  const opponentActions = delta.filter((entry) => entry?.playerId !== VIEWER_ID);
+  const opponentActions = delta.filter((entry) => entry?.playerId !== viewerSeatId(current));
   if (opponentActions.length > 0 && phaseOf(current) === "playing") {
     const generation = presentationGeneration;
     void playPresentation(opponentActions, current, generation);
@@ -489,12 +613,8 @@ function scheduleRoomRefresh(current) {
   window.clearTimeout(roomRefreshTimer);
   roomRefreshTimer = null;
   if (!roomId || !current || current.status === "finished") return;
-
-  const phase = phaseOf(current);
-  const participant = participantFor(current, current.currentPlayerId);
-  const needsPolling = phase === "waiting_for_players" || participant?.kind === "connected-agent";
+  const needsPolling = phaseOf(current) === "waiting_for_players" || connectedActors(current).length > 0;
   if (!needsPolling) return;
-
   roomRefreshTimer = window.setTimeout(async () => {
     const ok = await refreshRoom({ quiet: true });
     if (!ok && snapshot) scheduleRoomRefresh(snapshot);
@@ -504,12 +624,12 @@ function scheduleRoomRefresh(current) {
 function scheduleTurnClock(current) {
   window.clearInterval(turnClockTimer);
   turnClockTimer = null;
-  const participant = participantFor(current, current.currentPlayerId);
-  if (phaseOf(current) !== "playing" || participant?.kind !== "connected-agent") return;
-
+  const controller = currentController(current);
+  if (phaseOf(current) !== "playing" || controller?.kind !== "connected-agent") return;
   turnClockTimer = window.setInterval(() => {
     if (!snapshot) return;
     renderPlayers(snapshot);
+    renderControl(snapshot);
     if (isElement(gamePrompt)) gamePrompt.textContent = promptFor(snapshot);
   }, 1000);
 }
@@ -540,7 +660,7 @@ async function playSelection() {
       selectionSummary.textContent = error instanceof Error ? error.message : "selected cards are not legal";
     }
     if (isElement(gamePrompt)) gamePrompt.textContent = "adjust your selection";
-    if (snapshot?.revision !== expectedRevision) void refreshRoom();
+    void refreshRoom({ quiet: true });
   } finally {
     if (snapshot) renderActions(snapshot);
   }
@@ -577,21 +697,34 @@ async function requestHint() {
     });
     const body = await readJsonResponse(response);
     if (!response.ok || !body?.hint || !Array.isArray(body.hint.cardIds)) throw new Error(body?.error?.message ?? "hint unavailable");
-
     selectedCardIds = new Set(body.hint.cardIds);
     selectionRevision = expectedRevision;
     hintCursor = Number.isSafeInteger(body.hint.index) ? body.hint.index + 1 : hintCursor + 1;
     selectedHintLabel = typeof body.hint.label === "string" ? body.hint.label : "suggested play";
     renderHand(snapshot);
     renderActions(snapshot);
-    if (isElement(gamePrompt)) {
-      const position = Number.isSafeInteger(body.hint.index) && Number.isSafeInteger(body.hint.total)
-        ? `hint ${body.hint.index + 1}/${body.hint.total}`
-        : "hint";
-      gamePrompt.textContent = `${position} · ${selectedHintLabel}`;
-    }
   } catch (error) {
     if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "hint unavailable";
+    void refreshRoom({ quiet: true });
+  }
+}
+
+async function setController(targetActorId) {
+  if (!roomId || !snapshot || typeof targetActorId !== "string") return;
+  try {
+    const response = await fetch(`/api/v1/rooms/${encodeURIComponent(roomId)}/control`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ version: 1, targetActorId }),
+    });
+    const body = await readJsonResponse(response);
+    if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "control change rejected");
+    clearSelection();
+    render(body.snapshot);
+    setConnection("live");
+  } catch (error) {
+    if (isElement(gamePrompt)) gamePrompt.textContent = error instanceof Error ? error.message : "control change rejected";
     void refreshRoom({ quiet: true });
   }
 }
@@ -609,23 +742,22 @@ function showConnectedSetup(code, joinUrl) {
     joinLink.href = joinUrl ?? `/join/${encodeURIComponent(code)}`;
     joinLink.textContent = joinUrl ?? `${window.location.origin}/join/${code}`;
   }
-  if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "CLI recommended · raw MCP remains available";
+  if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "CLI, join URL, or raw MCP · same room capability";
   if (isElement(mcpConfigWrap)) mcpConfigWrap.hidden = true;
   mcpSetup.hidden = false;
 }
 
 function updateConnectedSetup(current) {
   if (!isElement(mcpSetup)) return;
-  const connected = (current.participants ?? []).some((participant) => participant?.kind === "connected-agent");
-  if (!connected) {
+  const connected = connectedActors(current);
+  if (connected.length === 0) {
     mcpSetup.hidden = true;
     return;
   }
   if (currentJoinCode) showConnectedSetup(currentJoinCode, `/join/${encodeURIComponent(currentJoinCode)}`);
-  const agent = (current.participants ?? []).find((participant) => participant?.kind === "connected-agent");
-  const seat = agent ? seatFor(current, agent.id) : null;
-  if (isElement(mcpClaimStatus) && seat?.status === "connected") mcpClaimStatus.textContent = "agent connected · game started";
-  else if (isElement(mcpClaimStatus) && seat?.status === "connecting") mcpClaimStatus.textContent = "credential claimed · waiting for MCP client";
+  const state = actorStateFor(current, connected[0].id);
+  if (isElement(mcpClaimStatus) && state?.status === "connected") mcpClaimStatus.textContent = "agent connected";
+  else if (isElement(mcpClaimStatus) && state?.status === "connecting") mcpClaimStatus.textContent = "credential claimed · waiting for MCP client";
 }
 
 async function claimRawMcp() {
@@ -638,12 +770,11 @@ async function claimRawMcp() {
       body: JSON.stringify({ version: 1 }),
     });
     const body = await readJsonResponse(response);
-    if (!response.ok || !body?.mcp) throw new Error(body?.error?.message ?? "could not claim MCP seat");
-    const config = { mcpServers: { waitloop: body.mcp } };
-    mcpConfigText = JSON.stringify(config, null, 2);
+    if (!response.ok || !body?.mcp) throw new Error(body?.error?.message ?? "could not claim MCP actor");
+    mcpConfigText = JSON.stringify({ mcpServers: { waitloop: body.mcp } }, null, 2);
     mcpConfig.textContent = mcpConfigText;
     mcpConfigWrap.hidden = false;
-    if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "room-scoped credential issued · connect this MCP config";
+    if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = `${body.relation ?? "controller"} credential issued · connect this MCP config`;
     void refreshRoom({ quiet: true });
   } catch (error) {
     if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = error instanceof Error ? error.message : "MCP claim failed";
@@ -675,7 +806,6 @@ async function createRoom(mode, hostedAgentId) {
 
   const payload = { version: 1, gameId: "doudizhu", mode };
   if (mode === "hosted-agent") payload.hostedAgentId = hostedAgentId;
-
   try {
     const response = await fetch("/api/v1/rooms", {
       method: "POST",
@@ -685,9 +815,8 @@ async function createRoom(mode, hostedAgentId) {
     });
     const body = await readJsonResponse(response);
     if (!response.ok || !isGameSnapshot(body?.snapshot)) throw new Error(body?.error?.message ?? "could not create room");
-
     roomId = body.roomId;
-    if (mode === "connected-agent" && typeof body.joinCode === "string") {
+    if ((mode === "connected-agent" || mode === "companion-agent") && typeof body.joinCode === "string") {
       rememberJoinCode(body.joinCode);
       showConnectedSetup(body.joinCode, typeof body.joinUrl === "string" ? body.joinUrl : undefined);
     }
@@ -732,7 +861,6 @@ function handleAgentSnapshot(agent) {
     } else attention.hidden = true;
     return;
   }
-
   attention.hidden = false;
   attentionTitle.textContent = agent.state === "waiting" ? "agent needs attention" : `agent ${agent.state}`;
   attentionDetail.textContent = "game paused · work comes first";
@@ -767,23 +895,21 @@ async function loadHostedAgents() {
   } catch {
     hostedAgents = [];
   }
-
   hostedAgentActions.replaceChildren();
   if (hostedAgents.length === 0) {
     hostedAgentStatus.textContent = "No hosted model is configured on this deployment yet.";
     return;
   }
-
-  for (const agent of hostedAgents) {
-    if (!agent || typeof agent.id !== "string" || typeof agent.label !== "string") continue;
+  for (const hosted of hostedAgents) {
+    if (!hosted || typeof hosted.id !== "string" || typeof hosted.label !== "string") continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "command-button";
-    button.title = typeof agent.model === "string" ? agent.model : agent.label;
+    button.title = typeof hosted.model === "string" ? hosted.model : hosted.label;
     const prompt = document.createElement("span");
     prompt.textContent = ">";
-    button.append(prompt, document.createTextNode(` you + ${agent.label} + bot`));
-    button.addEventListener("click", () => void createRoom("hosted-agent", agent.id));
+    button.append(prompt, document.createTextNode(` you + ${hosted.label} + bot`));
+    button.addEventListener("click", () => void createRoom("hosted-agent", hosted.id));
     hostedAgentActions.append(button);
   }
   hostedAgentStatus.textContent = "Hosted by Waitloop. Only that seat's visible game state is sent to the model provider.";
@@ -791,11 +917,20 @@ async function loadHostedAgents() {
 
 newBotGameButton?.addEventListener("click", () => void createRoom("bots"));
 newConnectedAgentGameButton?.addEventListener("click", () => void createRoom("connected-agent"));
+newCompanionAgentGameButton?.addEventListener("click", () => void createRoom("companion-agent"));
 playSelectedButton?.addEventListener("click", () => void playSelection());
 passMoveButton?.addEventListener("click", () => void passTurn());
 hintMoveButton?.addEventListener("click", () => void requestHint());
 clearSelectionButton?.addEventListener("click", clearSelection);
 showMcpButton?.addEventListener("click", () => void claimRawMcp());
+controlHumanButton?.addEventListener("click", () => {
+  if (snapshot) void setController(viewerActorId(snapshot));
+});
+controlAgentButton?.addEventListener("click", () => {
+  if (!snapshot) return;
+  const companion = companionActor(snapshot);
+  if (companion) void setController(companion.id);
+});
 copyJoinButton?.addEventListener("click", async () => {
   if (!currentJoinCode) return;
   try {
@@ -821,24 +956,17 @@ resumeButton?.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!snapshot || !isHumanTurn(snapshot)) return;
-  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (!snapshot || !isHumanTurn(snapshot) || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "Enter" && selectedCardIds.size > 0) {
     event.preventDefault();
     void playSelection();
-    return;
-  }
-  if (event.key.toLowerCase() === "h" && snapshot.controls?.canHint === true) {
+  } else if (event.key.toLowerCase() === "h" && snapshot.controls?.canHint === true) {
     event.preventDefault();
     void requestHint();
-    return;
-  }
-  if (event.key.toLowerCase() === "p" && snapshot.controls?.canPass === true) {
+  } else if (event.key.toLowerCase() === "p" && snapshot.controls?.canPass === true) {
     event.preventDefault();
     void passTurn();
-    return;
-  }
-  if (event.key === "Escape") {
+  } else if (event.key === "Escape") {
     event.preventDefault();
     clearSelection();
   }

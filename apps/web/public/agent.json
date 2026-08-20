@@ -6,7 +6,7 @@
   "manifest": "https://waitloop.run/agent.json",
   "llms": "https://waitloop.run/llms.txt",
   "source": "https://github.com/shixushi2025/waitloop",
-  "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game seats.",
+  "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.3",
@@ -31,14 +31,24 @@
     "url": "https://waitloop.run/skills/waitloop/SKILL.md",
     "credentialFree": true
   },
+  "rooms": {
+    "createEndpoint": "https://waitloop.run/api/v1/rooms",
+    "gameId": "doudizhu",
+    "modes": ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"],
+    "headlessAgentMode": "agent-bots",
+    "companionMode": "companion-agent",
+    "actorRelations": ["controller", "advisor"],
+    "controlModel": "a Seat is the game player position; Actors bind to seats and only the active controller may play"
+  },
   "mcp": {
     "status": "available",
     "endpoint": "https://waitloop.run/mcp",
-    "scope": "one game room and one player seat",
-    "tools": ["get_turn", "play_move"],
-    "requires": ["Authorization: Bearer <seat-token>", "X-Waitloop-Room: <room-id>"],
+    "scope": "one game room and one connected actor binding",
+    "tools": ["get_turn", "play_move", "comment"],
+    "requires": ["Authorization: Bearer <actor-token>", "X-Waitloop-Room: <room-id>"],
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
-    "globalStaticConfiguration": false
+    "globalStaticConfiguration": false,
+    "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control"
   },
   "integrations": {
     "claude-code": {
@@ -78,12 +88,14 @@
     "health": "https://waitloop.run/api/v1/health",
     "pairingGuide": "https://waitloop.run/agent.md#install-the-cli",
     "hostedAgents": "https://waitloop.run/api/v1/hosted-agents",
+    "rooms": "https://waitloop.run/api/v1/rooms",
     "mcp": "https://waitloop.run/mcp"
   },
   "privacy": {
     "lifecycleData": ["version", "eventId", "sessionId", "agent", "state", "occurredAt"],
     "forbiddenLifecycleData": ["prompt", "source code", "repository path", "cwd", "transcript", "tool input", "tool output", "assistant output", "native session id"],
     "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
-    "gameSeatCredentials": "room/seat-scoped; never place in URLs or source control"
+    "gameActorCredentials": "room/actor-scoped; never place in URLs or source control",
+    "advisorPrivateView": "an advisor sees only the private state of the seat it is explicitly bound to"
   }
 }

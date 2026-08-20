@@ -4,7 +4,12 @@ import { GameRoom, type GameJoinInfoV1, type GameRoomSnapshotV1 } from "./game-r
 import { getHostedAgent, type HostedAgentEnv } from "./hosted-agent";
 import { apiError, isRecord, json, readJson } from "./http";
 import { getHumanHint, resolveHumanCardSelection, toHumanGameSnapshot } from "./human-game";
-import type { GameParticipantV1 } from "./participants";
+import type {
+  GameActorBindingV1,
+  GameActorV1,
+  GameSeatV1,
+  HostedAgentDescriptorV1,
+} from "./participants";
 import { isHostedAgentId } from "./participants";
 import { createJoinCode, joinCodeHash, normalizeJoinCode, roomIdForJoinCode, selectRandomPlayer } from "./room-code";
 
@@ -14,8 +19,21 @@ export interface RoomApiEnv extends HostedAgentEnv {
   WAITLOOP_ACCESS_TOKEN?: string;
 }
 
-type RoomMode = "bots" | "hosted-agent" | "connected-agent";
-type RoomAction = "snapshot" | "moves" | "play" | "pass" | "hint" | "ws" | "pause" | "resume";
+type RoomMode = "bots" | "hosted-agent" | "connected-agent" | "companion-agent" | "agent-bots";
+type RoomAction = "snapshot" | "moves" | "play" | "pass" | "hint" | "control" | "ws" | "pause" | "resume";
+
+interface RoomLayout {
+  playerIds: [string, string, string];
+  botPlayerIds: string[];
+  actors: GameActorV1[];
+  seats: GameSeatV1[];
+  bindings: GameActorBindingV1[];
+  hostedAgents: Record<string, HostedAgentDescriptorV1>;
+  viewerActorId: string;
+  connectedActorId?: string;
+  connectedSeatId?: string;
+  browserViewer: boolean;
+}
 
 const ROOM_COOKIE_MAX_AGE_SECONDS = 6 * 60 * 60;
 const JOIN_CODE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -31,12 +49,8 @@ function isLocalHostname(hostname: string): boolean {
 
 function authorizePrivateAccess(request: Request, env: RoomApiEnv, url: URL): Response | null {
   if (isLocalHostname(url.hostname)) return null;
-  if (!env.WAITLOOP_ACCESS_TOKEN) {
-    return apiError(503, "access_not_configured", "Private Waitloop APIs are disabled.");
-  }
-  if (bearerToken(request) !== env.WAITLOOP_ACCESS_TOKEN) {
-    return apiError(401, "unauthorized", "A valid access token is required.");
-  }
+  if (!env.WAITLOOP_ACCESS_TOKEN) return apiError(503, "access_not_configured", "Private Waitloop APIs are disabled.");
+  if (bearerToken(request) !== env.WAITLOOP_ACCESS_TOKEN) return apiError(401, "unauthorized", "A valid access token is required.");
   return null;
 }
 
@@ -50,7 +64,14 @@ function rpcSnapshot(result: object): GameRoomSnapshotV1 {
 }
 
 function gameRpcError(code: string, message: string): Response {
-  const forbidden = code === "viewer_not_in_room" || code === "player_not_in_room" || code === "invalid_viewer_token" || code === "invalid_seat_token";
+  const forbidden = [
+    "viewer_not_in_room",
+    "player_not_in_room",
+    "invalid_viewer_token",
+    "invalid_seat_token",
+    "not_seat_owner",
+    "comment_forbidden",
+  ].includes(code);
   const notFound = code === "room_not_found" || code === "join_not_found";
   const expired = code === "join_expired";
   const status = notFound ? 404 : expired ? 410 : forbidden ? 403 : 409;
@@ -98,14 +119,131 @@ function roomCookie(roomId: string, viewerToken: string, url: URL): string {
 }
 
 function roomMode(value: Record<string, unknown>): RoomMode | null {
-  if (value.mode === "bots" || value.mode === "hosted-agent" || value.mode === "connected-agent") return value.mode;
+  if (
+    value.mode === "bots" ||
+    value.mode === "hosted-agent" ||
+    value.mode === "connected-agent" ||
+    value.mode === "companion-agent" ||
+    value.mode === "agent-bots"
+  ) return value.mode;
   if (typeof value.agentPlayerId === "string") return "connected-agent";
   if (Array.isArray(value.botPlayerIds)) return "bots";
   return null;
 }
 
+function actor(id: string, kind: GameActorV1["kind"], label: string): GameActorV1 {
+  return { version: 1, id, kind, label };
+}
+
+function seat(id: string, label: string, ownerActorId = id, activeControllerActorId = ownerActorId): GameSeatV1 {
+  return { version: 1, id, label, ownerActorId, activeControllerActorId };
+}
+
+function binding(actorId: string, seatId: string, relation: GameActorBindingV1["relation"]): GameActorBindingV1 {
+  return { version: 1, actorId, seatId, relation };
+}
+
+function buildRoomLayout(mode: RoomMode, body: Record<string, unknown>, env: RoomApiEnv): RoomLayout | Response {
+  const hostedAgents: Record<string, HostedAgentDescriptorV1> = {};
+
+  if (mode === "bots") {
+    return {
+      playerIds: ["you", "bot-a", "bot-b"],
+      botPlayerIds: ["bot-a", "bot-b"],
+      actors: [actor("you", "human", "you"), actor("bot-a", "bot", "bot a"), actor("bot-b", "bot", "bot b")],
+      seats: [seat("you", "you"), seat("bot-a", "bot a"), seat("bot-b", "bot b")],
+      bindings: [binding("you", "you", "controller"), binding("bot-a", "bot-a", "controller"), binding("bot-b", "bot-b", "controller")],
+      hostedAgents,
+      viewerActorId: "you",
+      browserViewer: true,
+    };
+  }
+
+  if (mode === "hosted-agent") {
+    if (!isHostedAgentId(body.hostedAgentId)) {
+      return apiError(400, "invalid_hosted_agent", "hostedAgentId must identify an available hosted agent.");
+    }
+    const hosted = getHostedAgent(env, body.hostedAgentId);
+    if (!hosted) return apiError(503, "hosted_agent_unavailable", "That hosted agent is not configured on this deployment.");
+    const hostedActorId = `hosted-${hosted.id}`;
+    const hostedActor: GameActorV1 = {
+      version: 1,
+      id: hostedActorId,
+      kind: "hosted-agent",
+      label: hosted.label,
+      hostedAgentId: hosted.id,
+      provider: hosted.provider,
+      model: hosted.model,
+    };
+    hostedAgents[hostedActorId] = hosted;
+    return {
+      playerIds: ["you", hostedActorId, "bot"],
+      botPlayerIds: ["bot"],
+      actors: [actor("you", "human", "you"), hostedActor, actor("bot", "bot", "bot")],
+      seats: [seat("you", "you"), seat(hostedActorId, hosted.label), seat("bot", "bot")],
+      bindings: [binding("you", "you", "controller"), binding(hostedActorId, hostedActorId, "controller"), binding("bot", "bot", "controller")],
+      hostedAgents,
+      viewerActorId: "you",
+      browserViewer: true,
+    };
+  }
+
+  if (mode === "connected-agent") {
+    return {
+      playerIds: ["you", "connected-agent", "bot"],
+      botPlayerIds: ["bot"],
+      actors: [actor("you", "human", "you"), actor("connected-agent", "connected-agent", "connected agent"), actor("bot", "bot", "bot")],
+      seats: [seat("you", "you"), seat("connected-agent", "connected agent"), seat("bot", "bot")],
+      bindings: [binding("you", "you", "controller"), binding("connected-agent", "connected-agent", "controller"), binding("bot", "bot", "controller")],
+      hostedAgents,
+      viewerActorId: "you",
+      connectedActorId: "connected-agent",
+      connectedSeatId: "connected-agent",
+      browserViewer: true,
+    };
+  }
+
+  if (mode === "companion-agent") {
+    return {
+      playerIds: ["you", "bot-a", "bot-b"],
+      botPlayerIds: ["bot-a", "bot-b"],
+      actors: [
+        actor("you", "human", "you"),
+        actor("companion-agent", "connected-agent", "agent companion"),
+        actor("bot-a", "bot", "bot a"),
+        actor("bot-b", "bot", "bot b"),
+      ],
+      seats: [seat("you", "you"), seat("bot-a", "bot a"), seat("bot-b", "bot b")],
+      bindings: [
+        binding("you", "you", "controller"),
+        binding("companion-agent", "you", "advisor"),
+        binding("bot-a", "bot-a", "controller"),
+        binding("bot-b", "bot-b", "controller"),
+      ],
+      hostedAgents,
+      viewerActorId: "you",
+      connectedActorId: "companion-agent",
+      connectedSeatId: "you",
+      browserViewer: true,
+    };
+  }
+
+  return {
+    playerIds: ["agent", "bot-a", "bot-b"],
+    botPlayerIds: ["bot-a", "bot-b"],
+    actors: [actor("connected-agent", "connected-agent", "agent"), actor("bot-a", "bot", "bot a"), actor("bot-b", "bot", "bot b")],
+    seats: [seat("agent", "agent", "connected-agent", "connected-agent"), seat("bot-a", "bot a"), seat("bot-b", "bot b")],
+    bindings: [binding("connected-agent", "agent", "controller"), binding("bot-a", "bot-a", "controller"), binding("bot-b", "bot-b", "controller")],
+    hostedAgents,
+    viewerActorId: "connected-agent",
+    connectedActorId: "connected-agent",
+    connectedSeatId: "agent",
+    browserViewer: false,
+  };
+}
+
 function parseRoomRoute(pathname: string): { roomId: string; action: RoomAction } | null {
-  const match = /^\/api\/v1\/rooms\/([^/]+)(?:\/(moves|play|pass|hint|ws|pause|resume))?$/.exec(pathname);
+  const match = /^\/api\/v1\/rooms\/([^/]+)(?:\/(moves|play|pass|hint|control|ws|pause|resume))?$/.exec(pathname);
   if (!match?.[1]) return null;
   try {
     const roomId = decodeURIComponent(match[1]);
@@ -144,6 +282,9 @@ function joinPublicPayload(info: GameJoinInfoV1, code: string, origin: string) {
     roomId: info.roomId,
     gameId: info.gameId,
     phase: info.phase,
+    actorId: info.actorId,
+    seatId: info.seatId,
+    relation: info.relation,
     seatStatus: info.seatStatus,
     expiresAt: info.expiresAt,
     claimed: info.claimedAt !== undefined,
@@ -156,12 +297,11 @@ function joinPublicPayload(info: GameJoinInfoV1, code: string, origin: string) {
 
 function joinMarkdown(info: GameJoinInfoV1, code: string, origin: string): string {
   const payload = joinPublicPayload(info, code, origin);
-  return `# Join Waitloop room\n\nRoom: ${info.roomId}\nGame: ${info.gameId}\nStatus: ${info.phase}\nAgent seat: ${info.seatStatus}\n\n## Preferred\n\n\`\`\`bash\n${payload.joinCommand}\n\`\`\`\n\nThe CLI exchanges this room-scoped join code for a temporary MCP seat credential.\n\n## Without the Waitloop CLI\n\nOpen this same URL in a browser and choose **raw MCP configuration**, or POST a version 1 body to:\n\n\`\`\`text\n${origin}/api/v1/join/${code}/claim\n\`\`\`\n\nThe claim response contains a room-scoped MCP endpoint, headers, and seat credential. A join code can issue one credential only.\n\n## Waitloop guide\n\n${origin}/agent.md\n`;
+  return `# Join Waitloop room\n\nRoom: ${info.roomId}\nGame: ${info.gameId}\nStatus: ${info.phase}\nRelation: ${info.relation}\nSeat: ${info.seatId}\nActor: ${info.actorId}\n\n## Preferred\n\n\`\`\`bash\n${payload.joinCommand}\n\`\`\`\n\nThe CLI exchanges this room-scoped join code for a temporary actor credential.\n\n## Without the Waitloop CLI\n\nPOST a version 1 body to:\n\n\`\`\`text\n${origin}/api/v1/join/${code}/claim\n\`\`\`\n\nThe claim response contains the fixed Waitloop MCP endpoint plus room-scoped headers. No browser is required.\n\n## Waitloop guide\n\n${origin}/agent.md\n`;
 }
 
 async function handleCreateRoom(request: Request, env: RoomApiEnv, url: URL): Promise<Response> {
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
-
   const body = await readJson(request);
   if (!body.ok) return body.response;
   if (!isRecord(body.value) || body.value.version !== 1 || body.value.gameId !== "doudizhu") {
@@ -169,81 +309,38 @@ async function handleCreateRoom(request: Request, env: RoomApiEnv, url: URL): Pr
   }
 
   const mode = roomMode(body.value);
-  if (!mode) return apiError(400, "invalid_room_mode", "Choose bots, hosted-agent, or connected-agent.");
+  if (!mode) return apiError(400, "invalid_room_mode", "Choose bots, hosted-agent, connected-agent, companion-agent, or agent-bots.");
+  const layout = buildRoomLayout(mode, body.value, env);
+  if (layout instanceof Response) return layout;
 
-  const viewerId = "you";
-  let playerIds: [string, string, string];
-  let botPlayerIds: string[];
-  let participants: GameParticipantV1[];
-  const hostedAgents: Parameters<GameRoom["initialize"]>[0]["hostedAgents"] = {};
-  let connectedPlayerId: string | undefined;
-
-  if (mode === "bots") {
-    playerIds = [viewerId, "bot-a", "bot-b"];
-    botPlayerIds = ["bot-a", "bot-b"];
-    participants = [
-      { version: 1, id: viewerId, kind: "human", label: "you" },
-      { version: 1, id: "bot-a", kind: "bot", label: "bot a" },
-      { version: 1, id: "bot-b", kind: "bot", label: "bot b" },
-    ];
-  } else if (mode === "hosted-agent") {
-    if (!isHostedAgentId(body.value.hostedAgentId)) {
-      return apiError(400, "invalid_hosted_agent", "hostedAgentId must identify an available hosted agent.");
-    }
-    const hostedAgent = getHostedAgent(env, body.value.hostedAgentId);
-    if (!hostedAgent) {
-      return apiError(503, "hosted_agent_unavailable", "That hosted agent is not configured on this deployment.");
-    }
-    const hostedPlayerId = `hosted-${hostedAgent.id}`;
-    playerIds = [viewerId, hostedPlayerId, "bot"];
-    botPlayerIds = ["bot"];
-    participants = [
-      { version: 1, id: viewerId, kind: "human", label: "you" },
-      {
-        version: 1,
-        id: hostedPlayerId,
-        kind: "hosted-agent",
-        label: hostedAgent.label,
-        hostedAgentId: hostedAgent.id,
-        provider: hostedAgent.provider,
-        model: hostedAgent.model,
-      },
-      { version: 1, id: "bot", kind: "bot", label: "bot" },
-    ];
-    hostedAgents[hostedPlayerId] = hostedAgent;
-  } else {
-    connectedPlayerId = "connected-agent";
-    playerIds = [viewerId, connectedPlayerId, "bot"];
-    botPlayerIds = ["bot"];
-    participants = [
-      { version: 1, id: viewerId, kind: "human", label: "you" },
-      { version: 1, id: connectedPlayerId, kind: "connected-agent", label: "connected agent" },
-      { version: 1, id: "bot", kind: "bot", label: "bot" },
-    ];
-  }
-
-  const landlordId = selectRandomPlayer(playerIds);
-  const joinCode = mode === "connected-agent" ? createJoinCode() : undefined;
+  const landlordId = selectRandomPlayer(layout.playerIds);
+  const joinCode = layout.connectedActorId ? createJoinCode() : undefined;
   const roomId = joinCode ? await roomIdForJoinCode(joinCode) : `room-${crypto.randomUUID()}`;
-  const viewerToken = newViewerToken();
+  const viewerToken = layout.browserViewer ? newViewerToken() : undefined;
   const result = await env.GAME_ROOMS.getByName(roomId).initialize({
     roomId,
     gameId: "doudizhu",
-    gameInput: { playerIds, landlordId },
-    viewerId,
-    botPlayerIds,
-    viewerTokens: { [viewerId]: viewerToken },
-    participants,
-    hostedAgents,
-    waitForSeatPlayerId: connectedPlayerId,
-    join: joinCode && connectedPlayerId
+    gameInput: { playerIds: layout.playerIds, landlordId },
+    viewerId: layout.viewerActorId,
+    viewerActorId: layout.viewerActorId,
+    botPlayerIds: layout.botPlayerIds,
+    ...(viewerToken ? { viewerTokens: { [layout.viewerActorId]: viewerToken } } : {}),
+    actors: layout.actors,
+    seats: layout.seats,
+    bindings: layout.bindings,
+    hostedAgents: layout.hostedAgents,
+    ...(layout.connectedActorId ? { waitForActorId: layout.connectedActorId } : {}),
+    ...(joinCode && layout.connectedActorId && layout.connectedSeatId
       ? {
-          version: 1,
-          codeHash: await joinCodeHash(joinCode),
-          playerId: connectedPlayerId,
-          expiresAt: Date.now() + JOIN_CODE_MAX_AGE_MS,
+          join: {
+            version: 1,
+            codeHash: await joinCodeHash(joinCode),
+            actorId: layout.connectedActorId,
+            seatId: layout.connectedSeatId,
+            expiresAt: Date.now() + JOIN_CODE_MAX_AGE_MS,
+          },
         }
-      : undefined,
+      : {}),
   });
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
 
@@ -251,29 +348,33 @@ async function handleCreateRoom(request: Request, env: RoomApiEnv, url: URL): Pr
     version: 1,
     roomId,
     mode,
-    snapshot: toHumanGameSnapshot(rpcSnapshot(result)),
+    roomPhase: rpcSnapshot(result).roomPhase,
   };
+  if (layout.browserViewer) response.snapshot = toHumanGameSnapshot(rpcSnapshot(result));
+  else response.headless = true;
   if (joinCode) {
     response.joinCode = joinCode;
     response.joinUrl = `${url.origin}/join/${encodeURIComponent(joinCode)}`;
+    response.agentGuide = `${url.origin}/agent.md`;
   }
 
-  return json(response, {
-    status: 201,
-    headers: { "set-cookie": roomCookie(roomId, viewerToken, url) },
-  });
+  const headers: HeadersInit = {};
+  if (viewerToken) (headers as Record<string, string>)["set-cookie"] = roomCookie(roomId, viewerToken, url);
+  return json(response, { status: 201, headers });
 }
 
 async function requireViewerSnapshot(
   stub: DurableObjectStub<GameRoom>,
   viewerToken: string | null,
 ): Promise<{ ok: true; snapshot: GameRoomSnapshotV1 } | { ok: false; response: Response }> {
-  if (!viewerToken) {
-    return { ok: false, response: apiError(401, "room_auth_required", "A room viewer credential is required.") };
-  }
+  if (!viewerToken) return { ok: false, response: apiError(401, "room_auth_required", "A room viewer credential is required.") };
   const result = await stub.getSnapshotByViewerToken(viewerToken);
   if (!result.ok) return { ok: false, response: gameRpcError(result.error.code, result.error.message) };
   return { ok: true, snapshot: rpcSnapshot(result) };
+}
+
+function canHumanPlay(snapshot: GameRoomSnapshotV1): boolean {
+  return snapshot.capabilities.includes("seat:play");
 }
 
 async function handleHumanPlay(
@@ -288,13 +389,12 @@ async function handleHumanPlay(
   if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0 || !Array.isArray(cardIds) || !cardIds.every((id) => typeof id === "string")) {
     return apiError(400, "invalid_play", "expectedRevision and cardIds are required.");
   }
-
   const current = await requireViewerSnapshot(stub, viewerToken);
   if (!current.ok) return current.response;
+  if (!canHumanPlay(current.snapshot)) return apiError(409, "not_active_controller", "This seat is currently controlled by another actor.");
   if (current.snapshot.revision !== expectedRevision) return apiError(409, "stale_revision", "Room state changed. Refresh before playing.");
   const move = resolveHumanCardSelection(current.snapshot, cardIds as string[]);
   if (!move) return apiError(409, "illegal_selection", "Selected cards are not a legal play in the current state.");
-
   const result = await stub.applyMoveByViewerToken(viewerToken!, expectedRevision as number, move.id);
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
   return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
@@ -308,15 +408,12 @@ async function handleHumanPass(
 ): Promise<Response> {
   if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
   const expectedRevision = body.expectedRevision;
-  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
-    return apiError(400, "invalid_pass", "expectedRevision is required.");
-  }
-
+  if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) return apiError(400, "invalid_pass", "expectedRevision is required.");
   const current = await requireViewerSnapshot(stub, viewerToken);
   if (!current.ok) return current.response;
+  if (!canHumanPlay(current.snapshot)) return apiError(409, "not_active_controller", "This seat is currently controlled by another actor.");
   if (current.snapshot.revision !== expectedRevision) return apiError(409, "stale_revision", "Room state changed. Refresh before passing.");
   if (!current.snapshot.legalMoves.some((move) => move.id === "pass")) return apiError(409, "cannot_pass", "Passing is not legal in the current state.");
-
   const result = await stub.applyMoveByViewerToken(viewerToken!, expectedRevision as number, "pass");
   if (!result.ok) return gameRpcError(result.error.code, result.error.message);
   return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
@@ -334,13 +431,30 @@ async function handleHumanHint(
   if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0 || !Number.isSafeInteger(cursor) || (cursor as number) < 0) {
     return apiError(400, "invalid_hint", "expectedRevision and a non-negative cursor are required.");
   }
-
   const current = await requireViewerSnapshot(stub, viewerToken);
   if (!current.ok) return current.response;
+  if (!canHumanPlay(current.snapshot)) return apiError(409, "not_active_controller", "This seat is currently controlled by another actor.");
   if (current.snapshot.revision !== expectedRevision) return apiError(409, "stale_revision", "Room state changed. Refresh before requesting a hint.");
   const hint = getHumanHint(current.snapshot, cursor as number);
   if (!hint) return apiError(409, "hint_unavailable", "No playable hint is available in the current state.");
   return json({ version: 1, hint });
+}
+
+async function handleHumanControl(
+  request: Request,
+  stub: DurableObjectStub<GameRoom>,
+  viewerToken: string | null,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
+  if (!viewerToken) return apiError(401, "room_auth_required", "A room viewer credential is required.");
+  const targetActorId = body.targetActorId;
+  if (typeof targetActorId !== "string" || targetActorId.length === 0 || targetActorId.length > 128) {
+    return apiError(400, "invalid_controller", "targetActorId is required.");
+  }
+  const result = await stub.setControllerByViewerToken(viewerToken, targetActorId);
+  if (!result.ok) return gameRpcError(result.error.code, result.error.message);
+  return json({ version: 1, snapshot: toHumanGameSnapshot(rpcSnapshot(result)) });
 }
 
 async function handleRoomRoute(
@@ -384,13 +498,13 @@ async function handleRoomRoute(
   if (route.action === "play") return handleHumanPlay(request, stub, viewerToken, body);
   if (route.action === "pass") return handleHumanPass(request, stub, viewerToken, body);
   if (route.action === "hint") return handleHumanHint(request, stub, viewerToken, body);
+  if (route.action === "control") return handleHumanControl(request, stub, viewerToken, body);
 
   if (route.action === "moves") {
     if (request.method !== "POST") return apiError(405, "method_not_allowed", "Only POST is allowed.");
     if (viewerToken) return apiError(403, "human_move_protocol_required", "Browser players must use /play, /pass, or /hint instead of raw move IDs.");
     const authError = authorizePrivateAccess(request, env, url);
     if (authError) return authError;
-
     const { expectedRevision, moveId, playerId } = body;
     if (typeof moveId !== "string" || typeof playerId !== "string" || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0) {
       return apiError(400, "invalid_move", "playerId, expectedRevision, and moveId are required for private access.");
@@ -468,26 +582,18 @@ async function handleJoinPage(request: Request, env: RoomApiEnv, url: URL, code:
     const assetUrl = new URL("/join.html", url);
     return env.ASSETS.fetch(new Request(assetUrl.toString(), request));
   }
-
   return new Response(joinMarkdown(rpcValue(infoResult) as GameJoinInfoV1, code, url.origin), {
-    headers: {
-      "content-type": "text/markdown; charset=utf-8",
-      "cache-control": "no-store",
-    },
+    headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
 export async function handleRoomApi(request: Request, env: RoomApiEnv, url: URL): Promise<Response | null> {
   if (url.pathname === "/api/v1/rooms") return handleCreateRoom(request, env, url);
-
   const joinApi = parseJoinApiRoute(url.pathname);
   if (joinApi) return handleJoinApi(request, env, url, joinApi);
-
   const joinPage = parseJoinPage(url.pathname);
   if (joinPage) return handleJoinPage(request, env, url, joinPage);
-
   const roomRoute = parseRoomRoute(url.pathname);
   if (roomRoute) return handleRoomRoute(request, env, url, roomRoute);
-
   return null;
 }

@@ -1,169 +1,162 @@
 # Security and privacy
 
-Waitloop runs beside tools that can access source code, terminals, repositories, credentials, and model context. The safest default is to avoid collecting that data at all and to keep every credential narrowly scoped.
+Waitloop runs beside tools that can access source code, terminals, repositories, credentials, and model context. The safest default is to avoid collecting that data and keep every credential/capability narrowly scoped.
 
-## Data minimization
+## Lifecycle data minimization
 
-The core lifecycle protocol needs only:
+Lifecycle reporting needs only agent kind, opaque Waitloop session ID, lifecycle state, event ID, timestamp, and optional source ordering.
 
-- agent kind;
-- opaque Waitloop session ID;
-- lifecycle state;
-- event ID;
-- timestamp;
-- optional monotonic sequence.
+It does not require prompts, source code, filenames, repository URLs, cwd, commands/output, transcripts, tool payloads, assistant output, reasoning, or native agent session/turn IDs.
 
-It does not require prompts, source code, filenames, repository URLs, working directories, shell commands/output, transcripts, tool payloads, assistant output, model reasoning, or native agent session/turn identifiers.
-
-First-party integrations must not emit those fields unless a future feature explicitly changes the documented privacy contract.
+Game participation is a separate authorization domain.
 
 ## Identifier vs credential
 
-Routing/context identifiers are not authorization secrets.
+Routing/context identifiers are not authorization secrets:
 
-Examples:
+- room ID routes to a `GameRoom` but grants no room capability;
+- Waitloop session ID identifies lifecycle state but grants no account authority;
+- Join code is one-time capability material, not ongoing MCP authorization;
+- Seat ID identifies a game position but grants no permission to inspect/control it.
 
-- room ID routes to a `GameRoom` but does not authorize the browser/agent;
-- Waitloop session ID identifies a lifecycle session but is not an account credential;
-- join code is temporary capability material, not the ongoing MCP credential.
+## Credential classes
 
-Do not derive public identifiers from local paths, usernames, repository names, or prompt text.
+### Lifecycle device credential — `wldev_...`
 
-## Current credential classes
+Scoped to lifecycle reporting (`agent:write`). It never authorizes game/MCP/browser/admin actions.
 
-### Lifecycle device credential
+### Browser room viewer credential — `wlview_...`
 
-`wldev_...`
+Stored as a room-scoped HttpOnly cookie. It authenticates the Human Actor/viewer for that room. Room ID alone is insufficient.
 
-- issued through browser pairing;
-- scoped to lifecycle reporting (`agent:write`);
-- stored locally by the CLI;
+### Join code — `WL-...`
+
+Short-lived capability that may issue one connected **Actor** credential. The Join response identifies the Actor's bound Seat and relation (`controller` or `advisor`).
+
+### Game Actor credential — historical prefix `wlseat_...`
+
+The prefix remains for compatibility, but the durable meaning is now one room-scoped Actor binding, not necessarily an independently owned player Seat.
+
 - server stores only a digest;
-- does not authorize arbitrary game/MCP/browser/admin actions.
+- supplied in MCP `Authorization` header;
+- may represent a controller or advisor;
+- never reusable as lifecycle/account/device authority;
+- discard after the room.
 
-### Browser room viewer credential
+## Seat/Actor capability model
 
-`wlview_...`
+Game authorization is based on Actor binding/capabilities rather than client type.
 
-- issued when a public browser game room is created;
-- stored in a room-scoped HttpOnly cookie;
-- server stores only a digest;
-- authorizes that browser's viewer projection/actions for that room;
-- room ID alone is insufficient.
+Relevant capabilities:
 
-### Connected-agent join code
+```text
+room:view-public
+seat:view-private
+seat:inspect-legal
+seat:play
+seat:control
+room:comment
+```
 
-`WL-...`
+Security consequences:
 
-- short-lived room-specific capability;
-- can issue one connected-agent seat credential;
-- should not be embedded in source control/logs;
-- after claim, the seat credential—not the join code—is used for MCP.
+- only the active Controller receives `seat:play`;
+- only the Seat owner receives `seat:control`;
+- an advisor may receive `seat:view-private` and `seat:inspect-legal` for the **single Seat it was explicitly bound to**;
+- an advisor must not gain another unrelated Seat's private view;
+- switching Controller changes authorization only; it does not transfer ownership or alter game state;
+- browser button state is never treated as authorization.
 
-### MCP seat credential
+## Advisor private-view consent
 
-`wlseat_...`
+`companion-agent` explicitly creates an advisor binding to the Human Seat. That binding is the user's authorization for the Agent to see that Seat's hand/legal options.
 
-- authorizes exactly one agent seat in one room;
-- server stores only a digest;
-- supplied in the MCP HTTP `Authorization` header;
-- never a lifecycle/device/account credential;
-- should be discarded when the room is no longer useful.
+The runtime must not generalize this permission into spectator-wide hidden information. Tests should cover that advisors cannot select another Seat/private projection.
 
-## Browser pairing
+## Human control delegation
 
-Normal device pairing uses a short-lived pairing request, explicit browser approval, and a verifier kept by the CLI until exchange.
+When the Human owner delegates control:
 
-A Worker-wide bootstrap/access token is a development/recovery mechanism, not a normal end-user credential.
+- Human keeps its own private Seat view;
+- Human play/pass/hint endpoints reject mutation because `seat:play` is absent;
+- connected Agent `play_move` becomes authorized only after it is active Controller;
+- Human can take control back through owner-authorized control-plane mutation;
+- concurrent/stale actions remain protected by room revision.
 
-## Durable Object authorization
+This prevents Human and Agent from racing the same Seat as simultaneous controllers.
 
-Durable Object IDs are routing primitives, not authorization. Every mutating/read path must establish the viewer/device/seat authorization appropriate for that resource.
-
-## Game information isolation
-
-Hidden-information games require explicit viewer-specific projection.
+## Hidden-information projection
 
 Mandatory invariants:
 
-- one player cannot request another player's private view;
-- legal moves are generated only for the acting player;
-- browser human snapshots do not expose the machine-only exhaustive move set;
-- lobby projections do not expose dealt hands or landlord assignment before the connected seat is ready;
-- production logs do not contain private hands by default;
-- MCP sees the same information class as the seat it represents.
-
-Privacy must be enforced in projection construction, not by deleting fields from serialized internal state.
+- internal state is never serialized then redacted as a privacy mechanism;
+- unrelated Seats' private hands are never returned;
+- lobby Human projection hides dealt cards/landlord before connected readiness;
+- browser Human projection omits exhaustive machine legal moves;
+- machine Actor projection is derived from its bound Seat only;
+- production logs should not contain private hands by default.
 
 ## MCP boundary
 
-MCP tool arguments are untrusted even when generated by a model.
-
-The intended model-visible tool surface is:
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-```
-
-Room and seat identity are bound through transport headers:
+MCP identity is transport-bound:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Do not expose raw game-state mutation, arbitrary script execution, player substitution, or credentials as normal tool arguments.
+Model-visible tools:
 
-The first authenticated MCP request for a claimed connected seat is also the readiness signal that allows a waiting connected-agent room to begin.
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
+```
+
+Do not expose room/Actor/Seat substitution or raw credentials as normal tool arguments.
+
+`play_move` re-checks active Controller capability and room revision. `comment` is bounded and writes only a side channel; it must not change game revision/turn/legality.
+
+## Client-neutral Room API
+
+Web is not a required trust boundary for Agent use. Headless Agents may call `POST /api/v1/rooms`, claim a Join capability, and use MCP directly.
+
+Therefore security/rate limits must live at HTTP/DO boundaries, not only in Web UI affordances.
+
+Public room creation and Join claim are current alpha surfaces; rate limiting/abuse controls remain required before broad public exposure.
 
 ## Event replay and staleness
 
-Lifecycle events use `eventId` and optional source `sequence`. Game commands use `expectedRevision`.
-
 Reject/ignore as appropriate:
 
-- duplicate mutation/event IDs;
-- stale sequences;
+- duplicate lifecycle mutation IDs;
+- stale source sequences;
 - stale game revisions;
-- moves from the wrong player;
-- moves not in the current legal move set;
-- invalid/expired/already-claimed join codes;
-- invalid room viewer or MCP seat credentials.
+- moves from non-active Controllers;
+- out-of-turn/illegal moves;
+- control delegation by non-owners;
+- delegation to an Actor not bound to the same Seat;
+- delegation to a disconnected connected Agent;
+- invalid/expired/already-claimed Join codes;
+- invalid viewer/Actor credentials;
+- invalid/oversized comments.
 
 ## Adapter behavior
 
-Hooks/adapters must not become a reliability dependency for the coding agent. They should:
+Lifecycle hooks/adapters must use bounded timeouts, fail open with respect to coding work, preserve unrelated configuration, and never weaken host-agent trust/security settings.
 
-- use strict execution/network timeouts;
-- fail without blocking the primary agent workflow;
-- avoid arbitrary server-provided shell execution;
-- write configuration only through explicit install/update actions;
-- validate remote responses before use;
-- preserve unrelated user hooks/configuration.
+## Web/API security baseline
 
-## Web security baseline
+Production controls should include HTTPS, restrictive CORS/origin behavior, CSRF protections for cookie mutations, CSP/security headers, bounded bodies, stable errors, and rate limits for pairing, room create, Join claim, MCP, lifecycle ingest, control delegation, comments, and hosted inference.
 
-Current/future production controls should include:
-
-- HTTPS only;
-- restrictive CORS/origin behavior where applicable;
-- CSRF protections for cookie-authenticated mutations;
-- strong Content Security Policy/security headers;
-- no inline/static secrets;
-- bounded request body sizes;
-- stable JSON errors without stack traces;
-- rate limits on pairing, room creation, lifecycle ingest, join claim, MCP mutation, and hosted inference;
-- cost/usage controls for model-backed seats.
-
-Rate limiting, broader abuse controls, and additional CSP/security hardening remain active roadmap items.
+Model-backed seats additionally need cost/usage budgets.
 
 ## Supply chain and CI
 
-Keep dependencies intentionally small. CI validates frozen installs, TypeScript/tests, repository documentation/Agent-surface invariants, CLI package contents, browser JavaScript, and Worker bundling.
+CI validates frozen installs, strict TypeScript/tests, repository-contract synchronization, CLI package contents, browser JavaScript, and Worker dry-run bundling. Security-sensitive Actor/Seat changes require capability and hidden-information regression tests.
 
-Secret/advisory scanning should be added as the public surface grows.
+Secret/advisory scanning should expand as the public surface grows.
 
 ## Security reporting
 
-Do not post exploit details in a public issue once a private reporting path exists. A dedicated private reporting/security policy remains part of production hardening.
+A dedicated private security reporting path remains part of production hardening; public issues should not become the place for exploit details once that path exists.

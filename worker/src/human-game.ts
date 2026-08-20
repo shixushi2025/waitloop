@@ -4,6 +4,7 @@ import type { GameRoomSnapshotV1 } from "./game-room";
 
 export interface HumanGameControlsV1 {
   version: 1;
+  canPlay: boolean;
   canPass: boolean;
   canHint: boolean;
 }
@@ -35,9 +36,6 @@ function waitingStateProjection(state: unknown): unknown {
     return { id: player.id, role: "pending", remaining: 0 };
   });
 
-  // Connected-agent lobbies deliberately expose no dealt cards or landlord
-  // assignment before the MCP seat becomes ready. Do not spread the original
-  // state here: future game-specific fields must not accidentally leak through.
   return {
     version: 1,
     role: "pending",
@@ -85,13 +83,16 @@ function playableMoves(snapshot: GameRoomSnapshotV1): Array<{ move: LegalMove<un
 export function toHumanGameSnapshot(snapshot: GameRoomSnapshotV1): HumanGameSnapshotV1 {
   const { legalMoves, ...rest } = snapshot;
   const waiting = snapshot.roomPhase === "waiting_for_players";
+  const capabilities = Array.isArray(snapshot.capabilities) ? snapshot.capabilities : ["seat:play"];
+  const canPlay = !waiting && capabilities.includes("seat:play");
   return {
     ...rest,
     state: waiting ? waitingStateProjection(snapshot.state) : snapshot.state,
     controls: {
       version: 1,
-      canPass: !waiting && legalMoves.some((move) => move.id === "pass"),
-      canHint: !waiting && legalMoves.some((move) => move.id !== "pass"),
+      canPlay,
+      canPass: canPlay && legalMoves.some((move) => move.id === "pass"),
+      canHint: canPlay && legalMoves.some((move) => move.id !== "pass"),
     },
   };
 }
