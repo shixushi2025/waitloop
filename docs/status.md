@@ -17,6 +17,10 @@ idle | running | waiting | completed | failed
 
 Claude Code, Cursor, and Codex lifecycle adapters are available; DSH remains planned. Lifecycle reporting is fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
 
+For Codex, the CLI installer writes the Waitloop hook definition, while Codex retains authority over hook review/trust. `waitloop doctor` checks detected Codex CLI version, whether its hooks feature is available, and whether all four Waitloop lifecycle hook events are installed. It cannot bypass or silently grant Codex hook trust.
+
+A Codex Plugin is not the current primary integration path. Plugin packaging can improve Skill/MCP/hook distribution, but plugin-bundled command hooks still require Codex's hook trust-review flow.
+
 ## Public Agent/CLI surfaces
 
 ```text
@@ -29,11 +33,16 @@ https://waitloop.run/join/<join-code>
 https://waitloop.run/mcp
 ```
 
+`agent.json` also declares GitHub mirrors of `agent.md`. This is intentional because some Agent/browser sandboxes may block direct navigation to a Markdown URL even when ordinary HTTP fetch works. Agent discovery must not depend on one browser fetch path.
+
 CLI alpha channel:
 
 ```bash
 npm install -g @waitloop/cli@alpha
+waitloop doctor
 ```
+
+`doctor` compares the local Waitloop CLI version with the currently published version in the server machine manifest and prints the canonical update command when they differ.
 
 CLI/HTTP/Join/Skill/MCP overlap as entry methods; business rules and authorization are shared server-side.
 
@@ -90,6 +99,8 @@ room created
 -> playing
 ```
 
+`waitloop join` performs only the Join claim/cache step. It does not hot-inject a newly claimed MCP server into an already-running Agent harness. Join success therefore must not be reported as "Agent connected" until an authenticated MCP request actually reaches `/mcp`.
+
 Current modes still gate one joined connected Actor. The domain model can represent more, but generalized multi-connected-Actor readiness is not shipped yet.
 
 ## MCP gameplay and recovery
@@ -107,6 +118,8 @@ take_control()
 `yield_to_bot()` lets a connected Seat owner explicitly hand the same Seat to a temporary deterministic Bot. Ownership, Seat ID, cards, role, and history remain unchanged.
 
 The cached room credential can reconnect. Reconnect only restores Actor presence; it does **not** silently reclaim controller authority. The Seat owner explicitly calls `take_control()` when ready.
+
+MCP is request/response participation and cannot wake an Agent after that Agent has returned a final answer. When the user explicitly requests continuous play, the Agent must keep its current run active until the requested stopping condition. Current alpha has no `wait_for_turn`, so waiting for another Human/connected Actor still requires low-frequency polling rather than a server-side wait primitive.
 
 Casual timing remains soft: no automatic timeout-based pass or takeover.
 
@@ -135,6 +148,16 @@ The Human Web UI can:
 - stale/out-of-turn/non-controller rejection.
 
 Rate limiting is abuse protection and intentionally not an accounting system.
+
+## CLI quality checks
+
+Current CLI/package validation includes:
+
+- packaged `--version` matches `package.json`;
+- stable docs do not hard-code an exact CLI release;
+- expired Join cache entries are ignored/refreshed;
+- nested help such as `waitloop install codex --help` is side-effect free and cannot create hook configuration;
+- public Agent/CLI/MCP contracts remain synchronized through `pnpm check:repo-contract`.
 
 ## Known gaps
 
