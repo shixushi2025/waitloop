@@ -173,6 +173,40 @@
   color: var(--accent);
 }
 
+.control-section {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 22px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+
+.control-section[hidden],
+#companion-section[hidden] {
+  display: none;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: var(--muted);
+  font: 13px/1.55 var(--mono);
+}
+
+.control-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.control-section small,
+#companion-section small {
+  display: block;
+  margin-top: 10px;
+  color: var(--faint);
+  font: 11px/1.55 var(--mono);
+}
+
 .table-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
@@ -190,7 +224,8 @@
   color: var(--text);
 }
 
-.activity-list {
+.activity-list,
+.comment-list {
   display: grid;
   gap: 5px;
   min-height: 24px;
@@ -205,8 +240,26 @@
 }
 
 .activity-number,
-.activity-empty {
+.activity-empty,
+.comment-empty {
   color: var(--faint);
+}
+
+.comment-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+}
+
+.comment-row:last-child {
+  border-bottom: 0;
+}
+
+.comment-actor {
+  color: var(--accent);
+  white-space: nowrap;
 }
 
 .card-row {
@@ -351,6 +404,11 @@
   .player .role {
     display: none;
   }
+
+  .control-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 700px) {
@@ -362,8 +420,10 @@
     padding: 22px 18px;
   }
 
-  .start-actions {
+  .start-actions,
+  .control-actions {
     flex-direction: column;
+    width: 100%;
   }
 
   .command-button {
@@ -387,6 +447,11 @@
 
   .player .runtime {
     grid-column: 2;
+  }
+
+  .comment-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 
   .game-actions {
