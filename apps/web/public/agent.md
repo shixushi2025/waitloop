@@ -3,246 +3,221 @@
 Canonical URL: https://waitloop.run/agent.md
 Machine manifest: https://waitloop.run/agent.json
 Agent skill: https://waitloop.run/skills/waitloop/SKILL.md
+Room API: https://waitloop.run/api/v1/rooms
 MCP endpoint: https://waitloop.run/mcp
 Source: https://github.com/shixushi2025/waitloop
 
-Waitloop is a developer-native waiting layer for coding agents. It reports only minimal lifecycle state, lets a human play a small game while an agent is working, and gives work priority again when the coding agent waits, completes, or fails.
+Waitloop is a developer-native waiting layer for coding agents. Work has priority over games. Lifecycle integration reports only minimal work state; game integration is a separate room-scoped capability.
 
-If you are an AI agent reading this file because a user asked you to install or configure Waitloop, follow this document instead of guessing platform-specific paths or inventing unpublished packages.
+If you are an AI agent reading this file, choose whichever supported path fits your harness. The CLI, raw HTTP Room API, join URL, Skill, and MCP overlap intentionally as entry methods; they all converge on the same server-authoritative room/runtime.
+
+## Core model
+
+Do not conflate these concepts:
+
+```text
+Seat  = one actual player position in the game
+Actor = human, bot, hosted agent, or connected agent
+Binding = how an Actor relates to a Seat
+Controller = the Actor currently allowed to play that Seat
+Advisor = an Actor allowed to inspect its bound Seat and comment, but not play until delegated
+```
+
+A Human and an Agent may therefore be:
+
+- separate players on separate Seats;
+- owner + advisor on the same Seat;
+- temporarily switched as the active Controller of the same Seat.
+
+Changing the Controller does not change the Seat's hand, role, history, or identity.
 
 ## Integration layers
 
-Waitloop has four separate integration layers. Do not conflate them.
+1. **CLI** — installation, pairing, diagnostics, lifecycle adapters, and join-code exchange.
+2. **Lifecycle hooks/adapters** — report `running`, `waiting`, `completed`, and `failed` without prompt/source/tool payloads.
+3. **Skill** — operating and safety guidance for an Agent.
+4. **HTTP Room/Join API** — create rooms and claim temporary Actor capabilities. Web is not required.
+5. **Game MCP** — inspect/play/comment inside one authorized room Actor binding.
+6. **Web** — Human UI and visualization; it is not a mandatory Agent control plane.
 
-1. **CLI** — local configuration, pairing, diagnostics, lifecycle adapter installation, and room join-code exchange.
-2. **Lifecycle hooks/adapters** — report `running`, `waiting`, `completed`, and `failed` without sending prompt/source/tool payloads.
-3. **Skill** — agent-facing instructions for understanding and safely using Waitloop.
-4. **Game MCP** — lets one authorized agent control exactly one seat in one game room.
+MCP is not lifecycle detection.
 
-MCP is not lifecycle detection. Hooks report lifecycle state; MCP controls a game seat.
+## Current harness support
 
-## Current support
+| Harness | Lifecycle | Recommended install | Skill | Game MCP |
+| --- | --- | --- | --- | --- |
+| Claude Code | available | `waitloop install claude-code` | available | supported |
+| Cursor | available | `waitloop install cursor` | where supported | supported by compatible MCP configuration |
+| Codex | available | `waitloop install codex` | available | supported |
+| DSH | planned | do not invent an adapter | readable | protocol-compatible once adapter exists |
 
-| Harness | Lifecycle | Recommended install | Plugin | Skill | Game MCP |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | available | `waitloop install claude-code` | source-only alpha plugin | generic Waitloop skill | supported |
-| Cursor | available | `waitloop install cursor` | no separate plugin required | generic Waitloop skill where supported | supported by compatible MCP configuration |
-| Codex | available | `waitloop install codex` | no separate plugin required | generic Waitloop skill | supported |
-| DSH | planned | do not invent an adapter | planned | generic Waitloop skill can be read manually | protocol-compatible once adapter exists |
-
-After installing the Codex lifecycle hook, the user must review/trust the Waitloop hook in Codex's `/hooks` UI.
+Codex users must review/trust the Waitloop lifecycle hook in Codex `/hooks` after installation.
 
 ## Install the CLI
 
-Always read the `cli` object in https://waitloop.run/agent.json first.
-
-If `cli.published` is `true`, prefer the registry install command from the manifest:
+Read the `cli` object in https://waitloop.run/agent.json first. When `cli.published` is true, use:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop --version
-```
-
-If `cli.published` is `false`, do **not** assume the npm package exists. Use the source fallback instead:
-
-```bash
-git clone https://github.com/shixushi2025/waitloop.git
-cd waitloop
-pnpm install --frozen-lockfile
-pnpm build:cli
-npm install -g ./packages/cli
-waitloop --version
-```
-
-Then initialize against the public service:
-
-```bash
 waitloop init --url https://waitloop.run
-```
-
-Pair the device:
-
-```bash
 waitloop pair
+waitloop doctor
 ```
 
-Pairing creates a short-lived request and normally opens a browser approval page. Never copy a Worker-wide secret into a normal end-user installation.
-
-Verify:
+Install only lifecycle adapters for harnesses actually present:
 
 ```bash
-waitloop doctor
-waitloop config
+waitloop install claude-code
+waitloop install cursor
+waitloop install codex
 ```
 
-`waitloop config` redacts secrets.
+The CLI is a convenience layer, not a protocol requirement.
 
-## Join a connected-agent game room
+## Join an existing room
 
-A room may give the user or agent a temporary code such as:
+Given a code such as:
 
 ```text
 WL-7K4P9Q2MZX
 ```
 
-If the installed CLI supports `join`, prefer:
+prefer:
 
 ```bash
 waitloop join WL-7K4P9Q2MZX
 ```
 
-For machine-readable output:
+Machine-readable output:
 
 ```bash
 waitloop join WL-7K4P9Q2MZX --json
 ```
 
-The CLI exchanges the join code for one room-scoped MCP credential and prints the temporary MCP configuration. Configure that MCP server only for the agent occupying this room seat. The game begins when the claimed MCP credential is actually used; merely creating the room does not start a connected-agent game.
-
-Every join code also has a room-specific URL:
+Or read:
 
 ```text
 https://waitloop.run/join/<join-code>
 ```
 
-`/join/<code>` is not a replacement for this file. `/agent.md` remains stable universal Waitloop guidance; `/join/<code>` contains instructions for one temporary room.
+Or, without CLI/browser, call the Join API directly:
 
-If the CLI is unavailable, use the raw MCP configuration offered by the room/join page. Do not invent a global seat token or persist a room credential after the room is no longer needed.
+```text
+POST https://waitloop.run/api/v1/join/<join-code>/claim
+Content-Type: application/json
 
-## Install lifecycle integration
-
-Prefer the CLI installer. It merges only Waitloop-owned hooks and preserves unrelated user configuration.
-
-Claude Code:
-
-```bash
-waitloop install claude-code
+{"version":1}
 ```
 
-Cursor:
+The response contains the fixed MCP endpoint plus temporary room-scoped headers. A join code identifies a connected Actor binding; the response also tells you whether the relation is `controller` or `advisor`.
 
-```bash
-waitloop install cursor
+## Create a room without opening the Web UI
+
+Agents may create rooms directly. Example: one connected Agent against two rule bots:
+
+```http
+POST /api/v1/rooms
+Content-Type: application/json
+
+{
+  "version": 1,
+  "gameId": "doudizhu",
+  "mode": "agent-bots"
+}
 ```
 
-Codex:
+The response contains `roomId`, `joinCode`, and `joinUrl`. Claim the join code, connect MCP, then play. No browser is required at any point.
 
-```bash
-waitloop install codex
+Current room modes are machine-readable in `agent.json`:
+
+```text
+bots
+hosted-agent
+connected-agent
+companion-agent
+agent-bots
 ```
 
-All detected/supported integrations:
+Important relationships:
 
-```bash
-waitloop install all
-```
-
-Remove only Waitloop-owned hooks with:
-
-```bash
-waitloop uninstall claude-code
-waitloop uninstall cursor
-waitloop uninstall codex
-waitloop uninstall all
-```
-
-Do not hand-edit global hook files unless the CLI installer cannot be used and the user explicitly wants a manual install.
-
-## Claude Code plugin
-
-A distributable alpha plugin source exists at:
-
-https://github.com/shixushi2025/waitloop/tree/main/integrations/claude-code
-
-For repository/source development it can be loaded with:
-
-```bash
-claude --plugin-dir ./integrations/claude-code
-```
-
-For normal Waitloop use, prefer the CLI lifecycle installer so pairing/configuration remains centralized.
-
-## Install/read the Waitloop skill
-
-Canonical skill URL:
-
-https://waitloop.run/skills/waitloop/SKILL.md
-
-If the current harness supports agent skills, install that file into the harness's supported user/project skill location. If the harness does not support installable skills, read the file as operating instructions instead. Do not guess an unsupported skill directory.
-
-The skill is intentionally credential-free. Never place device tokens, room seat tokens, prompts, repository contents, or user source code into the skill file.
+- `connected-agent`: Human and connected Agent occupy separate Seats.
+- `companion-agent`: Human owns a Seat; connected Agent is an `advisor` bound to that same Seat. It sees that Seat's private hand/legal options and may comment. `play_move` is rejected until the Human delegates control.
+- `agent-bots`: connected Agent controls its own Seat against two bots and can run fully headless.
 
 ## Game MCP
 
-Remote endpoint:
+Endpoint:
 
 ```text
 https://waitloop.run/mcp
 ```
 
-The MCP server exposes only:
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-```
-
-A game MCP seat is **room-scoped and temporary**. It requires both:
+Every request uses the room-scoped Actor credential returned by Join:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Do not globally configure `/mcp` without a room ID and seat token. Do not persist a room seat token after the room is no longer needed. Do not put seat tokens in URLs, source files, commits, prompts, or skill files.
+The current tools are:
 
-For connected-agent rooms, the first authenticated MCP request is the seat readiness signal. Casual rooms do not impose a hard agent turn timeout; elapsed time is informational only.
+```text
+get_turn()
+play_move(expectedRevision, moveId)
+comment(text)
+```
+
+### `get_turn()`
+
+Returns the private view of the Seat this Actor is explicitly bound to, plus public room state, capabilities, current Controller, and server-generated legal moves when relevant. It never exposes another unrelated Seat's hidden hand.
+
+### `play_move(expectedRevision, moveId)`
+
+Succeeds only when this Actor is the bound Seat's **active Controller**. An advisor can inspect legal moves but receives `not_active_controller` until the Seat owner delegates control.
+
+Always use a server-generated move ID and the exact revision returned by `get_turn()`.
+
+### `comment(text)`
+
+Posts a short room comment. Comments are a side channel: they do not change game state, legality, turn order, or room revision. This is suitable for an advisor/companion that gives suggestions or reacts to play.
+
+## Controller delegation
+
+The Seat owner may switch the active Controller between itself and another Actor bound to the same Seat. Current Human Web UI exposes this as:
+
+```text
+control/
+  me
+  agent
+```
+
+The connected Agent must already be online before delegation. The owner can take control back later. Server authorization, not browser state, decides who may call `play_move`.
+
+## Casual timing
+
+Casual rooms have no hard Human/connected-Agent turn timeout. Elapsed time is informational. Do not invent an automatic pass because an Agent has taken a long time.
 
 ## Lifecycle privacy contract
 
-Waitloop lifecycle events intentionally contain only:
+Waitloop lifecycle events intentionally contain only minimal state such as event ID, opaque Waitloop session ID, agent kind, lifecycle state, and timestamp.
 
-```json
-{
-  "version": 1,
-  "eventId": "opaque uuid",
-  "sessionId": "opaque Waitloop turn id",
-  "agent": "claude-code|cursor|codex|dsh|unknown",
-  "state": "running|waiting|completed|failed",
-  "occurredAt": 0
-}
-```
+Do not send prompt text, source code, repository paths, cwd, transcript paths, tool input/output, assistant output, or native agent session/turn identifiers to Waitloop.
 
-Do not send prompt text, source code, repository paths, current working directory, transcript paths, tool input, tool output, assistant output, or native agent session/turn identifiers to Waitloop.
+Game credentials are separate from lifecycle device credentials. Never put a room Actor token in a URL, prompt, source file, skill file, commit, or log; discard it when the room is no longer useful.
 
-## Useful CLI commands
+## Agent operating order
 
-```bash
-waitloop status
-waitloop open
-waitloop open --print
-waitloop doctor
-waitloop config
-waitloop pair
-waitloop join WL-XXXXXXXXXX
-waitloop unpair
-```
+For an Agent asked to use Waitloop:
 
-`waitloop open` prefers an active running/waiting coding-agent turn.
+1. Read `agent.json` and this guide.
+2. Use an already-installed CLI/Skill/MCP integration when available; otherwise use raw HTTP + MCP.
+3. If joining a room, claim the provided join code.
+4. If creating a headless room, call `POST /api/v1/rooms` with a supported mode, then claim its join code.
+5. Connect the returned room-scoped MCP configuration.
+6. Call `get_turn()` and inspect `capabilities`/relationship before acting.
+7. If you have `seat:play`, choose a server-generated move and call `play_move` with the exact revision.
+8. If you are an advisor, give useful comments/advice and do not attempt `play_move` until control is delegated.
+9. Repeat until the room finishes or the user returns to work.
 
-## For an automated installer agent
-
-Use this order:
-
-1. Read https://waitloop.run/agent.json and this document.
-2. Detect the user's actual installed harnesses. Do not install unrelated adapters.
-3. Read `cli.published` from the manifest.
-4. If published, use `cli.installCommand`; otherwise use the documented source-install fallback.
-5. Run `waitloop init --url https://waitloop.run`.
-6. Run `waitloop pair` and let the user explicitly approve the browser pairing request.
-7. Install only the matching lifecycle adapter(s) with `waitloop install ...`.
-8. If useful and supported, install the Waitloop skill from the canonical skill URL.
-9. If the user gives you a Waitloop join code or `/join/<code>` URL, follow its room-specific instructions. Prefer `waitloop join <code>` when that command is available; otherwise use the raw room-scoped MCP configuration.
-10. Run `waitloop doctor` and report the result to the user.
-
-Never weaken another agent's security settings, disable hook trust prompts, expose credentials, or overwrite unrelated hook/MCP configuration just to make Waitloop work.
+Never weaken another product's security settings, bypass hook trust prompts, expose credentials, or overwrite unrelated hook/MCP configuration merely to make Waitloop work.
