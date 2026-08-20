@@ -28,39 +28,47 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck and test
-        run: pnpm check
-
-      - name: Validate repository contract
-        run: pnpm check:repo-contract
-
-      - name: Validate CLI npm package
-        run: pnpm check:cli-package
-
-      - name: Validate browser JavaScript
-        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
-
-      - name: Validate agent discovery files
+      - name: Run and record full branch validation
         run: |
-          test -s apps/web/public/agent.md
-          test -s apps/web/public/llms.txt
-          test -s apps/web/public/skills/waitloop/SKILL.md
-          node -e "JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))"
-
-      - name: Validate Worker bundle
-        run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
-
-      - name: Mark branch validation passed
-        run: |
-          if test -f .branch-ci-passed; then
+          if test -f .branch-ci-result; then
+            cat .branch-ci-result
             exit 0
           fi
-          printf '%s\n' "validated" > .branch-ci-passed
+
+          : > .branch-ci-log
+          overall=0
+          run_check() {
+            label="$1"
+            shift
+            printf '\n===== %s =====\n' "$label" >> .branch-ci-log
+            "$@" >> .branch-ci-log 2>&1
+            rc=$?
+            printf '\nexit=%s\n' "$rc" >> .branch-ci-log
+            if test "$rc" -ne 0; then
+              overall=1
+            fi
+          }
+
+          run_check "install frozen" pnpm install --frozen-lockfile
+          if test "$overall" -eq 0; then
+            run_check "typecheck and test" pnpm check
+            run_check "repository contract" pnpm check:repo-contract
+            run_check "CLI package" pnpm check:cli-package
+            run_check "browser JS" bash -lc "find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check"
+            run_check "agent discovery" bash -lc "test -s apps/web/public/agent.md && test -s apps/web/public/llms.txt && test -s apps/web/public/skills/waitloop/SKILL.md && node -e \"JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))\""
+            run_check "Worker dry run" pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+          fi
+
+          if test "$overall" -eq 0; then
+            printf '%s\n' "passed" > .branch-ci-result
+          else
+            printf '%s\n' "failed" > .branch-ci-result
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- .branch-ci-passed
-          git commit -m "chore: mark temporary branch validation"
+          git add -- .branch-ci-result .branch-ci-log
+          git commit -m "chore: record temporary branch validation"
           git push origin HEAD:fix/mcp-wait-cancellation
+
+          exit "$overall"
