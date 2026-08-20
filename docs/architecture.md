@@ -70,9 +70,9 @@ Cloudflare automatic dependency install
   -> only then continue to wrangler deploy
 ```
 
-`pnpm deploy` invokes the same gate before `wrangler deploy`. Local development and non-production Cloudflare branches skip the production wait because they do not satisfy `WORKERS_CI=1` plus `WORKERS_CI_BRANCH=main`.
+The root `postinstall` skips ordinary local installation and non-production Cloudflare branches. An explicit `pnpm deploy` passes `--require`, resolves the current Git `HEAD`, and requires that exact commit's `ready-to-deploy` check before invoking `wrangler deploy`. A developer therefore cannot bypass the gate merely by running the package deployment command outside Cloudflare.
 
-The gate selects the latest `ready-to-deploy` check produced by the `github-actions` app for the exact commit SHA. Public GitHub Checks access needs no repository secret; an optional `WAITLOOP_GITHUB_TOKEN` may be supplied to increase API rate limits.
+The gate selects the latest `ready-to-deploy` check produced by the `github-actions` app for the exact commit SHA. Public GitHub Checks access needs no repository secret; an optional `WAITLOOP_GITHUB_TOKEN` may be supplied to increase API rate limits. The unauthenticated production path polls once per minute and fails closed after 15 minutes.
 
 This keeps Cloudflare's native Git integration and credentials while ensuring a production deployment cannot outrun or ignore the repository CI result.
 
@@ -256,7 +256,7 @@ CLI `--raw-mcp` preserves advanced remote configuration access, but default Join
 - Durable Object serialization + revision reject stale concurrent moves;
 - wait timeout never authorizes game mutation;
 - reconnect/fallback never bypasses ownership or revision;
-- Cloudflare production deploy waits for the exact commit's final GitHub Actions gate.
+- Cloudflare and explicit package deploys wait for the exact commit's final GitHub Actions gate.
 
 ## Future database boundary
 
