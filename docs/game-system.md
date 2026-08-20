@@ -1,67 +1,106 @@
 # Game system
 
-## Goals
+This document defines the current durable game/runtime contract. Game-specific legality remains in each game package; room/lobby/seat behavior remains in the runtime layer.
 
-The game layer must support very small local games and hidden-information multiplayer games without coupling the runtime to any one title.
+## Authority model
 
-The authoritative game state lives server-side. Clients receive derived public views and submit opaque legal move IDs.
+The authoritative game state lives server-side. Clients receive derived viewer-specific projections and submit constrained actions.
 
-## Core contracts
-
-A game implementation should provide these operations conceptually:
+The generic game implementation conceptually provides:
 
 ```ts
 interface GameDefinition<TState, TPublicState> {
   readonly id: string;
-
-  create(input: CreateGameInput): TState;
+  create(input: unknown): TState;
   getPublicState(state: TState, viewerId: string): TPublicState;
   getLegalMoves(state: TState, playerId: string): LegalMove[];
   applyMove(state: TState, playerId: string, moveId: string): TState;
-  getStatus(state: TState): "waiting" | "playing" | "finished";
+  getCurrentPlayerId(state: TState): string | null;
+  getStatus(state: TState): "playing" | "finished";
 }
 ```
 
-Implementations may use richer generic types internally, but the runtime should need only this shape.
+`packages/game-core` wraps this with room revision, pause/resume, viewer checks, and stale/out-of-turn validation.
 
-## Move IDs
+## Game state vs room/runtime phase
 
-Legal moves are generated from the current authoritative state. Each move ID must be deterministic within that state and unambiguous.
+Game rules do not own connected-agent lobby semantics.
 
-For Dou Dizhu a legal move can map to a canonical card selection plus pattern metadata, but MCP/web callers only need the generated ID.
+Underlying room/game status is:
 
-Benefits:
+```text
+playing | paused | finished
+```
 
-- callers cannot invent illegal combinations
-- model tool calls are smaller and more reliable
-- stale turn choices can be rejected using room revision
-- the rules engine remains the only legality authority
+Waitloop runtime exposes an additional room phase:
+
+```text
+waiting_for_players -> playing -> paused -> playing -> finished
+```
+
+`waiting_for_players` is currently used by connected-agent rooms. During that phase:
+
+- browser controls are inactive;
+- MCP game moves are inactive until the seat authenticates;
+- human projections do not expose dealt hands or landlord assignment;
+- the connected-agent seat progresses through runtime seat states rather than game-rule states.
+
+Seat runtime states currently include:
+
+```text
+ready | waiting | connecting | connected
+```
+
+Human, bot, and hosted-agent seats are ready at room creation. A connected-agent seat begins waiting, becomes connecting when a one-time join code issues its room credential, and becomes connected on the first authenticated MCP request. That connection is the readiness signal that starts the table.
 
 ## Hidden information
 
-Internal state and public state are different types.
+Internal state and public state are different types. Never serialize internal state and delete fields afterward.
 
-Never implement privacy like this:
+Construct the public view from allowed fields only.
 
-```ts
-const copy = JSON.parse(JSON.stringify(internalState));
-delete copy.otherPlayersHands;
-return copy;
+For connected-agent lobbies, even the eventual human player's own dealt hand is withheld from the browser until the room begins. This preserves the external meaning of “not dealt / not started yet” even if the runtime has prepared deterministic internal state.
+
+## Human vs machine interaction
+
+Humans and machine players intentionally use different projections.
+
+### Browser human
+
+```text
+human-safe snapshot (no exhaustive legalMoves)
+  -> select card IDs
+  -> /play, /pass, /hint
+  -> server resolves selection against authoritative legal moves
 ```
 
-Instead construct the public view from allowed fields:
+The browser may receive small controls such as `canPass` and `canHint`, but not the full machine move enumeration.
 
-```ts
-return {
-  myHand: state.hands[viewerId],
-  remaining: countHands(state.hands),
-  lastMove: state.lastMove,
-};
+### Hosted / MCP agent
+
+```text
+viewer-specific machine snapshot
+  -> server-generated legalMoves[]
+  -> choose moveId
+  -> submit exact expectedRevision + moveId
 ```
 
-## Dou Dizhu engine boundaries
+The model/agent does not reconstruct authoritative card payloads.
 
-The engine is split into pure modules:
+## Move IDs and revision
+
+Legal move IDs are generated from the current authoritative state. Each ID must be unambiguous for that room revision.
+
+Benefits:
+
+- callers cannot invent illegal combinations;
+- model tool calls remain small;
+- stale decisions are rejected using `expectedRevision`;
+- game rules remain the only legality authority.
+
+## Dou Dizhu package boundary
+
+Pure engine modules live under `packages/doudizhu`:
 
 ```text
 card.ts             card identity and ordering
@@ -69,61 +108,72 @@ deck.ts             canonical deck + shuffle/deal
 pattern.ts          classify one card selection
 compare.ts          compare compatible patterns
 move-generator.ts   enumerate legal moves
-state.ts            game state types and public views
-game.ts             bidding/play state machine
+state.ts            state/public-view types
+game.ts             play/turn/pass/win transitions
 ```
 
-Rules should be testable without Worker, Durable Objects, WebSocket, or MCP.
+They must remain testable without Worker, Durable Objects, browser APIs, or MCP.
 
-## First-rule scope
+The current alpha chooses the landlord outside the pure play engine when preparing a table, then passes that landlord into game creation. Until bidding is implemented, the server chooses uniformly from the three seats. Full bidding/scoring belongs in the Dou Dizhu rules layer, not in generic `GameRoom` code.
 
-The first complete Dou Dizhu rules target includes:
+See [`doudizhu-rules.md`](doudizhu-rules.md) for exact current legality.
 
-- 54-card deck, including two jokers
-- three players
-- landlord assignment through a simplified deterministic bidding API
-- singles, pairs, triples
-- triple + single, triple + pair
-- straights
-- consecutive pairs
-- airplanes (with documented wing constraints)
-- four-with-two variants
-- bombs
-- rocket
-- pass rules
-- trick reset after other players pass
-- win when a player's hand becomes empty
+## Automated players
 
-Bidding/scoring multipliers are lower priority than correct card legality and turn progression.
+The first rule bot is intentionally simple and deterministic. It uses authoritative legal moves and chooses a legal fallback without a model call.
 
-## Determinism
+Hosted agents receive only their seat's public state and legal move IDs. If a hosted model errors, returns an invalid move, or hits its infrastructure timeout, the runtime falls back to a deterministic legal move.
 
-Tests should inject a shuffle/random source or provide a fixed deck. Production may use cryptographically adequate randomness available in the runtime.
+Transport/model timeouts are resource-protection mechanisms; they are not the casual-game turn clock.
 
-No test should depend on nondeterministic shuffling.
+## Human-visible pacing
 
-## Bot policy
+Worker/game logic should not `sleep` merely to make bots look human.
 
-The first non-LLM bot can be intentionally simple:
+Automated actions may be calculated immediately. The browser reconstructs a short presentation queue from authoritative public history so the user can perceive intermediate actions.
 
-1. obtain legal moves
-2. prefer the lowest-cost legal non-bomb move
-3. pass when strategically allowed according to a small heuristic
+The UI distinguishes:
 
-The bot is for completing a table, not for proving strong gameplay.
+- **authoritative turn** — who can act now;
+- **current trick** — the play that must currently be beaten;
+- **recent activity** — recent play/pass history;
+- **presentation/replay state** — which recorded action is being visually shown.
 
-## Agent participation
+The `TURN` marker always means authoritative current turn. Replay/presentation must use a different visual state.
 
-Agents get the same public state constraints as a human player. An MCP caller never receives another player's hand.
+## Casual timing policy
 
-A turn response should provide enough context for strategy:
+Casual tables have no hard human or connected-agent turn timeout.
 
-- role (landlord/farmer)
-- own hand
-- current/last move
-- remaining card counts
-- public move history as needed
-- teammate identity where relevant
-- legal move IDs with human-readable labels
+For connected agents the UI may show:
 
-The server still validates the selected move ID and expected room revision.
+```text
+Codex · THINKING · 18s
+Codex · THINKING · 1m 12s · taking longer than usual
+```
+
+Elapsed time is informational. The runtime does not automatically pass, choose a move, or end the game because the casual timer reached an arbitrary threshold.
+
+A future Arena/benchmark policy may impose hard turn limits for reproducibility/fairness, but that policy must remain separate from the normal waiting experience.
+
+## Participant types
+
+The runtime recognizes:
+
+```text
+Human
+Bot
+Hosted Agent
+Connected Agent
+```
+
+Participant metadata is runtime/presentation information. It must not cause game packages to branch on Codex, Claude Code, provider names, or MCP transport details.
+
+## Testing expectations
+
+- rules changes get pure regression tests;
+- deterministic tests inject a fixed deck/random source;
+- stale/out-of-turn move rejection stays covered;
+- hidden-information and lobby changes get explicit non-leakage tests;
+- human-safe projection must remain distinct from machine legal-move projection;
+- generic room tests must not depend on Dou Dizhu-specific behavior.
