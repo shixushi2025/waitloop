@@ -1,11 +1,11 @@
 ---
 name: waitloop
-description: Install and use Waitloop lifecycle integration plus the stable local MCP bridge to create, join, wait, play, advise, yield, reconnect, and recover a room-scoped game Actor.
+description: Install and use Waitloop lifecycle integration plus the stable local MCP bridge to create, join, wait, play, advise, yield, reconnect, cancel waits, and recover a room-scoped game Actor.
 ---
 
 # Waitloop
 
-Use this skill when the user asks to install, configure, diagnose, create, join, advise, comment, play continuously, yield, reconnect, or resume through Waitloop.
+Use this skill when the user asks to install, configure, diagnose, create, join, advise, comment, play continuously, yield, reconnect, cancel, or resume through Waitloop.
 
 Canonical guide: https://waitloop.run/agent.md
 Machine manifest: https://waitloop.run/agent.json
@@ -63,6 +63,8 @@ take_control()
 
 The bridge internally reuses Room/Join HTTP plus remote room MCP. A normal Agent should not manually construct HTTP requests, read cached credential JSON, initialize remote MCP, or parse SSE.
 
+The stdio bridge accepts MCP 2026-07-28 discovery and supported legacy initialize clients. Long waits are tracked independently rather than blocking the whole stdio input loop.
+
 ## Create or join
 
 Create the existing fully headless Agent-vs-bots mode:
@@ -106,7 +108,17 @@ loop:
 
 `timeoutMs` bounds one transport wait only. It never auto-passes, changes Controller, or replaces a slow Casual Agent.
 
+If the harness or user cancels an in-flight wait, allow MCP cancellation to stop it. The bridge aborts the proxied request and suppresses the cancelled stale result. Cancellation itself never passes, plays, yields, or changes Controller.
+
 If the user asks only to connect or verify, one `join_room`/`get_turn` result may be enough.
+
+## Recoverable errors
+
+When a local MCP error contains `nextAction`, follow it only if it is consistent with the user's request. `retrySafe: true` is limited to operations known to be safe to repeat, such as read/wait transport failures.
+
+For cancelled or failed mutating operations, do not blindly replay. Call `get_turn()` first because the remote outcome may be uncertain.
+
+If the active Room is expired, missing, or unauthorized, the local active pointer may be cleared. Use `create_room()` or a fresh `join_room(code)` when appropriate.
 
 ## Gameplay rules
 
@@ -147,6 +159,7 @@ Remote MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield
 
 - Actor/Seat/Room IDs do not authorize access.
 - Local MCP never returns raw Room credentials to the model.
+- Cancelled waits do not create hidden game mutations or stale tool results.
 - Respect `room:manage`, `seat:control`, and `seat:play` capabilities.
 - Casual elapsed time alone never authorizes fallback.
 - Lifecycle reporting excludes prompt, source, repository, cwd, transcript, tool, assistant, and native-session content.
