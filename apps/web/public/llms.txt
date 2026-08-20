@@ -43,13 +43,17 @@ take_control()
 
 The local bridge reuses Room/Join HTTP and remote room MCP internally. It keeps bearer credentials in private local Waitloop state and never returns them through model-visible tools.
 
+The same stdio command supports MCP 2026-07-28 discovery and supported legacy initialize clients. Long-running waits do not block cancellation handling. `notifications/cancelled` aborts the matching local request and proxied remote HTTP fetch, and cancelled requests do not emit stale results.
+
 `create_room()` currently creates the existing fully headless `agent-bots` Dou Dizhu mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
 Join success is not MCP connection for raw clients. The local `join_room()` tool performs the authenticated connection check before reporting connected. Default CLI/JSON output is credential-safe; `--raw-mcp` is an explicit advanced fallback.
 
 Remote MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
 
-`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
+`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. Client cancellation interrupts the remote wait promptly and is also non-mutating.
+
+Classified local failures can provide `nextAction` and `retrySafe`. Read/wait transport failures can be safely retried when marked; cancelled or failed mutating operations should be followed by `get_turn()` before any retry because the remote outcome may be uncertain.
 
 MCP does not wake an Agent after it returns a final response. If the user asks to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition.
 
