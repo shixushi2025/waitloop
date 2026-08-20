@@ -9,9 +9,11 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   check:
+    name: check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -61,3 +63,41 @@ jobs:
 
       - name: Validate Worker bundle
         run: pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+
+  verify-cloudflare-gate:
+    name: verify-cloudflare-gate
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify gate against completed check run
+        env:
+          WORKERS_CI: "1"
+          WORKERS_CI_BRANCH: main
+          WORKERS_CI_COMMIT_SHA: ${{ github.sha }}
+          WAITLOOP_REQUIRED_CHECK_NAME: check
+          WAITLOOP_GITHUB_TOKEN: ${{ github.token }}
+          WAITLOOP_CI_GATE_TIMEOUT_MS: "120000"
+          WAITLOOP_CI_GATE_POLL_MS: "5000"
+        run: node scripts/cloudflare-ci-gate.mjs
+
+  ready-to-deploy:
+    name: ready-to-deploy
+    if: always()
+    needs:
+      - check
+      - verify-cloudflare-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    env:
+      CHECK_RESULT: ${{ needs.check.result }}
+      GATE_RESULT: ${{ needs.verify-cloudflare-gate.result }}
+    steps:
+      - name: Require complete green validation
+        run: |
+          test "$CHECK_RESULT" = "success"
+          test "$GATE_RESULT" = "success"
+          echo "This commit is ready for Cloudflare production deployment."
