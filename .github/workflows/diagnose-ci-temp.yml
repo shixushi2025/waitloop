@@ -1,0 +1,60 @@
+name: temporary final validation
+
+on:
+  push:
+    branches: [fix/mcp-wait-cancellation]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run final checks and persist result
+        run: |
+          set +e
+          : > .ci-diagnostic.txt
+          overall=0
+          run_check() {
+            label="$1"
+            shift
+            printf '\n===== %s =====\n' "$label" >> .ci-diagnostic.txt
+            "$@" >> .ci-diagnostic.txt 2>&1
+            rc=$?
+            printf '\nexit=%s\n' "$rc" >> .ci-diagnostic.txt
+            if test "$rc" -ne 0; then overall=1; fi
+          }
+
+          run_check "install frozen" pnpm install --frozen-lockfile
+          if test "$overall" -eq 0; then
+            run_check "typecheck and test" pnpm check
+            run_check "repository contract" pnpm check:repo-contract
+            run_check "CLI package" pnpm check:cli-package
+            run_check "browser JS" bash -lc "find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check"
+            run_check "agent discovery" bash -lc "test -s apps/web/public/agent.md && test -s apps/web/public/llms.txt && test -s apps/web/public/skills/waitloop/SKILL.md && node -e \"JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))\""
+            run_check "Worker dry run" pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+          fi
+
+          test "$overall" -eq 0 && echo passed > .ci-diagnostic.result || echo failed > .ci-diagnostic.result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .ci-diagnostic.txt .ci-diagnostic.result
+          git commit -m "chore: capture temporary final validation" || true
+          git push origin HEAD:fix/mcp-wait-cancellation
+          exit "$overall"
