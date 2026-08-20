@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createLocalMcpDispatcher,
   handleLocalMcpMessage,
   LOCAL_MCP_INSTRUCTIONS,
   LOCAL_MCP_TOOLS,
@@ -32,28 +33,73 @@ describe("stable local MCP bridge", () => {
     expect(JSON.stringify(response)).not.toContain("wlseat_");
   });
 
-  it("explains continuous play and local credential custody during initialize", async () => {
-    const response = await handleLocalMcpMessage({
+  it("supports modern discovery and legacy initialize from the same stdio surface", async () => {
+    const modern = await handleLocalMcpMessage({
+      jsonrpc: "2.0",
+      id: "discover",
+      method: "server/discover",
+      params: {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    });
+    expect(modern).toMatchObject({
+      jsonrpc: "2.0",
+      id: "discover",
+      result: {
+        supportedVersions: ["2026-07-28"],
+        _meta: { "io.modelcontextprotocol/serverInfo": { name: "waitloop-local" } },
+      },
+    });
+
+    const legacy = await handleLocalMcpMessage({
       jsonrpc: "2.0",
       id: "init",
       method: "initialize",
-      params: { protocolVersion: "2025-03-26" },
+      params: { protocolVersion: "2025-06-18" },
     });
-
-    expect(response).toMatchObject({
+    expect(legacy).toMatchObject({
       jsonrpc: "2.0",
       id: "init",
       result: {
-        protocolVersion: "2025-03-26",
+        protocolVersion: "2025-06-18",
         serverInfo: { name: "waitloop-local" },
       },
     });
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("credentials inside the local bridge");
-    expect(LOCAL_MCP_INSTRUCTIONS).toContain("keep the current Agent run active");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_turn");
   });
 
-  it("returns tool errors as MCP tool results", async () => {
+  it("cancels an in-flight request without emitting its stale result", async () => {
+    const writes: Record<string, unknown>[] = [];
+    let sawAbort = false;
+    const dispatcher = createLocalMcpDispatcher(
+      async (response) => { writes.push(response); },
+      async (message, signal) => {
+        const request = message as { id?: unknown };
+        if (request.id !== 7) return null;
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => {
+            sawAbort = true;
+            resolve();
+          }, { once: true });
+        });
+        return { jsonrpc: "2.0", id: 7, result: { stale: true } };
+      },
+    );
+
+    dispatcher.start({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "wait_for_turn", arguments: {} } });
+    dispatcher.start({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7, reason: "test" } });
+    await dispatcher.waitForIdle();
+
+    expect(sawAbort).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
+  it("returns structured tool errors", async () => {
     const response = await handleLocalMcpMessage({
       jsonrpc: "2.0",
       id: 2,
