@@ -1,14 +1,12 @@
 # Protocol
 
-Waitloop uses a small canonical protocol so the core runtime does not depend on any coding-agent vendor's event vocabulary.
+Waitloop uses small canonical protocols so the core runtime does not depend on coding-agent vendor vocabularies and external callers cannot bypass authoritative game rules.
 
 ## Versioning
 
-Every externally exchanged object includes `version: 1` unless it is nested inside another versioned envelope. Breaking changes require a new protocol version. Additive optional fields are allowed within a version when old consumers can safely ignore them.
+Externally exchanged JSON objects use `version: 1` unless nested inside another versioned envelope. Breaking changes require a new protocol version. Additive optional fields are allowed when old consumers can safely ignore them.
 
 ## Agent kinds
-
-Initial values:
 
 ```ts
 type AgentKind =
@@ -19,7 +17,7 @@ type AgentKind =
   | "unknown";
 ```
 
-`unknown` is allowed at ingest boundaries but should not be emitted by a first-party adapter.
+`unknown` is allowed at trust boundaries but should not be emitted by a first-party adapter that knows its own identity.
 
 ## Agent states
 
@@ -34,11 +32,11 @@ type AgentState =
 
 Semantics:
 
-- `idle`: session exists but no active work is known
-- `running`: agent is actively working and does not currently require the user
-- `waiting`: agent likely requires user input, approval, or attention
-- `completed`: the tracked unit of work completed normally
-- `failed`: the tracked unit of work ended abnormally
+- `idle`: session exists but no active work is known;
+- `running`: work is active and the user is not currently required;
+- `waiting`: user input/approval/attention is likely required;
+- `completed`: tracked work completed normally;
+- `failed`: tracked work ended abnormally.
 
 ## Canonical lifecycle event
 
@@ -54,20 +52,9 @@ interface WaitloopAgentEventV1 {
 }
 ```
 
-Fields:
+The event intentionally contains no prompt, source code, command output, repository path, working directory, transcript, tool arguments/output, assistant output, model reasoning, or native agent session/turn ID.
 
-- `eventId`: unique id for idempotency
-- `sessionId`: adapter-generated stable identifier for one logical session/run
-- `agent`: normalized agent kind
-- `state`: normalized state after this event
-- `occurredAt`: Unix epoch milliseconds from the source/adapter
-- `sequence`: optional monotonically increasing source sequence when available
-
-The v1 event intentionally contains no prompt, source code, command output, repository path, tool arguments, or model reasoning.
-
-## State transition policy
-
-The runtime accepts duplicate events idempotently and must reject/ignore clearly stale transitions.
+`eventId` provides idempotency. `sequence`, when present, provides source ordering. Without sequence, timestamps are handled conservatively.
 
 Nominal flow:
 
@@ -78,11 +65,11 @@ idle -> running -> waiting -> running -> completed
 running ---------------------------> failed
 ```
 
-A platform may omit `idle`. A new `running` event after a terminal state must use a new logical session ID unless the adapter has a documented resumable-session model.
-
-When `sequence` is present, lower sequence values are stale. Without sequence, `occurredAt` is used conservatively; exact duplicate `eventId`s are always ignored.
+A new logical unit of work after a terminal state should use a new Waitloop session ID unless an adapter has an explicitly documented resumable-session model.
 
 ## Agent snapshot
+
+Conceptually:
 
 ```ts
 interface AgentSessionSnapshotV1 {
@@ -97,29 +84,49 @@ interface AgentSessionSnapshotV1 {
 }
 ```
 
-`revision` increments for each accepted state-changing event and is used by clients to discard stale updates.
+Clients use `revision` to discard stale updates.
 
-## Game protocol
+## Game room state
 
-The generic game layer intentionally exposes opaque state/move payloads through typed game implementations.
+The generic `game-core` room owns authoritative game state and revision. Game status is:
 
-### Public room snapshot
+```text
+playing | paused | finished
+```
+
+The Worker runtime additionally exposes a room phase used for connected-agent onboarding:
+
+```text
+waiting_for_players | playing | paused | finished
+```
+
+`waiting_for_players` is not a game-rule status. It is runtime metadata around a game instance. See [`game-system.md`](game-system.md).
+
+## Viewer-specific room snapshot
+
+A machine room snapshot conceptually contains:
 
 ```ts
-interface GameRoomSnapshotV1<TPublicState> {
+interface GameRoomSnapshotV1<TPublicState, TMoveMeta> {
   version: 1;
   roomId: string;
   gameId: string;
-  status: "waiting" | "playing" | "paused" | "finished";
+  status: "playing" | "paused" | "finished";
   revision: number;
   viewerId: string;
+  currentPlayerId: string | null;
   state: TPublicState;
+  legalMoves: LegalMove<TMoveMeta>[];
 }
 ```
 
-A snapshot is viewer-specific. Hidden-information games must construct the snapshot for the authenticated viewer.
+The Worker augments this with runtime participant/seat/phase metadata.
 
-### Legal move
+A snapshot is viewer-specific. Hidden-information games construct the public view for the authenticated viewer; they do not serialize internal state and remove private fields later.
+
+Browser human snapshots intentionally strip exhaustive `legalMoves[]` and expose small input controls instead.
+
+## Legal move
 
 ```ts
 interface LegalMove<TMeta = unknown> {
@@ -129,9 +136,9 @@ interface LegalMove<TMeta = unknown> {
 }
 ```
 
-Move IDs are generated by the authoritative engine for a specific room revision.
+Move IDs are generated by the authoritative engine for the current state/revision.
 
-### Move command
+## Move command
 
 ```ts
 interface GameMoveCommandV1 {
@@ -143,41 +150,96 @@ interface GameMoveCommandV1 {
 }
 ```
 
-A move is rejected if `expectedRevision` does not match current room state. This prevents stale UI/MCP turns from mutating a newer state.
+A move is rejected if the expected revision is stale, the caller is not the acting player, or the move ID is not currently legal.
+
+## Human game operations
+
+Browser humans use the human-safe projection and dedicated operations:
+
+```text
+POST /api/v1/rooms/:roomId/play
+POST /api/v1/rooms/:roomId/pass
+POST /api/v1/rooms/:roomId/hint
+POST /api/v1/rooms/:roomId/pause
+POST /api/v1/rooms/:roomId/resume
+```
+
+`/play` submits selected card IDs. The server maps that selection to an authoritative legal move for the current revision. `/hint` returns one suggested selection rather than the exhaustive legal-move set.
 
 ## MCP-facing game operations
 
-The first MCP boundary should remain deliberately small:
+The MCP tool surface is deliberately transport-bound and model-small:
 
 ```text
-get_turn(roomId)
-play_move(roomId, expectedRevision, moveId)
+get_turn()
+play_move(expectedRevision, moveId)
 ```
 
-Creation/join can be added through separate authenticated flows. The model should choose from legal move IDs rather than construct arbitrary card arrays.
+Room ID and seat token are supplied in HTTP transport headers, not model-visible tool arguments:
 
-`get_turn` returns only the requesting player's view and legal moves.
+```text
+Authorization: Bearer <wlseat_...>
+X-Waitloop-Room: <room-id>
+```
 
-## HTTP endpoints (v1 target)
+`get_turn()` returns only the authenticated seat's viewer-specific machine snapshot and legal moves.
+
+## Connected-agent join operations
+
+Connected-agent rooms use a separate join flow before MCP participation.
+
+Conceptually:
+
+```text
+GET/POST room-specific join endpoint using <join-code>
+  -> one temporary seat credential
+  -> configure /mcp with room + wlseat credential
+  -> first authenticated MCP request marks seat ready
+  -> room leaves waiting_for_players
+```
+
+Public room-specific onboarding is:
+
+```text
+GET /join/<join-code>
+```
+
+CLI convenience:
+
+```text
+waitloop join <join-code>
+```
+
+The join code is one-time capability material; the resulting seat token is the ongoing room authorization credential.
+
+## Important HTTP endpoints
+
+Current public/runtime surface includes:
 
 ```text
 POST /api/v1/agent-events
-GET  /api/v1/sessions/:sessionId
-GET  /api/v1/sessions/:sessionId/ws
 
+POST /api/v1/pairings/...
+POST /api/v1/devices/...
+
+GET  /api/v1/hosted-agents
 POST /api/v1/rooms
 GET  /api/v1/rooms/:roomId
-POST /api/v1/rooms/:roomId/moves
-GET  /api/v1/rooms/:roomId/ws
+POST /api/v1/rooms/:roomId/play
+POST /api/v1/rooms/:roomId/pass
+POST /api/v1/rooms/:roomId/hint
+POST /api/v1/rooms/:roomId/pause
+POST /api/v1/rooms/:roomId/resume
 
+GET  /join/<join-code>
 POST /mcp
 ```
 
-The exact authentication mechanism is intentionally deferred until local single-user flow is working. Public deployment must not expose unauthenticated mutation endpoints.
+Private/development compatibility endpoints may exist in addition to this list. The Worker implementation is the source of runtime truth; update this document whenever the public contract changes.
 
 ## Error shape
 
-All JSON API errors should use one stable shape:
+JSON API errors use the stable shape:
 
 ```ts
 interface ApiErrorV1 {
@@ -189,4 +251,4 @@ interface ApiErrorV1 {
 }
 ```
 
-Do not leak stack traces or internal Durable Object errors to clients.
+Do not expose stack traces or raw internal Durable Object errors to clients.
