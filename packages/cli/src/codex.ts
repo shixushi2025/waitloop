@@ -4,9 +4,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
+  finishTurn,
   readHookInput,
   readLatestAgentState,
-  removeTurnState,
   startTurn,
   transitionTurn,
   type LocalTurnState,
@@ -136,11 +136,8 @@ export async function runCodexHook(): Promise<void> {
     await startTurn("codex", sessionId);
   } else if (hook === "PermissionRequest") {
     await transitionTurn("codex", sessionId, "waiting");
-  } else if (hook === "Stop") {
-    await transitionTurn("codex", sessionId, "completed");
-    await removeTurnState("codex", sessionId);
-  } else if (hook === "SessionEnd") {
-    await removeTurnState("codex", sessionId);
+  } else if (hook === "Stop" || hook === "SessionEnd") {
+    await finishTurn("codex", sessionId, "completed");
   }
 
   // Valid, no-op hook output: Waitloop observes lifecycle but never steers Codex.
