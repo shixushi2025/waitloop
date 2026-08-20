@@ -1,26 +1,43 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
-const cli = resolve(root, "packages/cli/dist/index.js");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const configuredEntry = process.env.WAITLOOP_CLI_ENTRY;
+const cli = configuredEntry
+  ? (isAbsolute(configuredEntry) ? configuredEntry : resolve(root, configuredEntry))
+  : resolve(root, "packages/cli/dist/index.js");
 await access(cli);
 
+const joinRoot = await mkdtemp(join(tmpdir(), "waitloop-mcp-wire-"));
 const child = spawn(process.execPath, [cli, "mcp"], {
   cwd: root,
   env: {
     ...process.env,
-    WAITLOOP_JOIN_DIR: resolve(root, ".tmp-mcp-wire-joins"),
+    WAITLOOP_JOIN_DIR: joinRoot,
   },
   stdio: ["pipe", "pipe", "pipe"],
 });
 
+const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
 let stderr = "";
 child.stderr.setEncoding("utf8");
 child.stderr.on("data", (chunk) => { stderr += chunk; });
 
 const pending = new Map();
 let buffer = "";
+let protocolFailure = null;
+
+function fail(message, cause) {
+  if (protocolFailure) return;
+  protocolFailure = new Error(message, cause ? { cause } : undefined);
+  for (const waiter of pending.values()) waiter.reject(protocolFailure);
+  pending.clear();
+  try { child.kill(); } catch {}
+}
+
 child.stdout.setEncoding("utf8");
 child.stdout.on("data", (chunk) => {
   buffer += chunk;
@@ -35,7 +52,7 @@ child.stdout.on("data", (chunk) => {
       message = JSON.parse(line);
     } catch (error) {
       fail(`invalid JSON from stdio server: ${line}`, error);
-      continue;
+      return;
     }
     const waiter = pending.get(String(message.id));
     if (waiter) {
@@ -44,6 +61,7 @@ child.stdout.on("data", (chunk) => {
     }
   }
 });
+child.once("error", (error) => fail("could not start MCP stdio server", error));
 
 let nextId = 1;
 function request(method, params = {}) {
@@ -58,6 +76,10 @@ function request(method, params = {}) {
         clearTimeout(timeout);
         resolveRequest(message);
       },
+      reject(error) {
+        clearTimeout(timeout);
+        reject(error);
+      },
     });
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
   });
@@ -69,14 +91,6 @@ function notification(method, params = {}) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function fail(message, cause) {
-  const error = new Error(message, cause ? { cause } : undefined);
-  for (const waiter of pending.values()) waiter.resolve({ error: { message } });
-  pending.clear();
-  try { child.kill(); } catch {}
-  throw error;
 }
 
 try {
@@ -105,13 +119,13 @@ try {
   const payload = JSON.parse(active.result?.content?.[0]?.text ?? "null");
   assert(payload?.active === false, "clean bridge should report no active Room");
 
-  console.log(`MCP stdio validation passed (${names.length} tools).`);
+  console.log(`MCP stdio validation passed (${names.length} tools) using ${cli}.`);
 } finally {
   child.stdin.end();
-  const exit = new Promise((resolveExit) => child.once("exit", resolveExit));
   const timer = setTimeout(() => {
     try { child.kill(); } catch {}
   }, 1_000);
-  await exit;
+  await exited;
   clearTimeout(timer);
+  await rm(joinRoot, { recursive: true, force: true });
 }
