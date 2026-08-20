@@ -194,3 +194,13 @@ export async function transitionTurn(
   await sendAgentEvent(agent, next.waitloopSessionId, state);
   return next;
 }
+
+export async function finishTurn(
+  agent: LifecycleAgent,
+  nativeSessionId: string,
+  state: Extract<AgentState, "completed" | "failed"> = "completed",
+): Promise<LocalTurnState | null> {
+  const terminal = await transitionTurn(agent, nativeSessionId, state);
+  await removeTurnState(agent, nativeSessionId);
+  return terminal;
+}
