@@ -17,7 +17,7 @@ If direct Markdown navigation is blocked, use a `guideMirrors` URL from `agent.j
 ## Core model
 
 ```text
-Seat       stable room-scoped game position
+Seat       stable room-scoped game position (seat-1 / seat-2 / seat-3)
 Actor      human | bot | hosted-agent | connected-agent
 Controller Actor currently allowed to play a Seat
 Advisor    bound Actor that may inspect/comment but not play until delegated
@@ -105,6 +105,8 @@ loop:
 ```
 
 `timeoutMs` bounds one transport wait only. It never auto-passes, changes Controller, or replaces a slow Casual Agent.
+
+The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`; cancellation is propagated through the read/wait request and never mutates game state. Mutation-capable calls are not abandoned mid-flight through propagated network cancellation, so refresh state before retrying after an uncertain transport failure.
 
 If the user asks only to connect or verify, one `join_room`/`get_turn` result may be enough.
 
