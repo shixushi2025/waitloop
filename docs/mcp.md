@@ -55,21 +55,13 @@ Room credentials are read from private `~/.waitloop/joins` state and never retur
 
 ### Stdio compatibility and cancellation
 
-The same `waitloop mcp` process accepts modern MCP 2026-07-28 `server/discover` and the supported legacy `initialize` protocol versions used by current coding harnesses.
+`waitloop mcp` uses the official `@modelcontextprotocol/server` stdio transport. The SDK owns MCP framing, modern/legacy protocol negotiation, concurrent request dispatch, and matching-request cancellation semantics; Waitloop only registers its tool surface and business-facing handlers.
 
-Long-running tool calls do not serialize the whole stdio bridge. The bridge tracks in-flight JSON-RPC request IDs independently, so a `wait_for_turn` request can remain open while cancellation or other requests are read.
+For each tool invocation, Waitloop receives the SDK request `AbortSignal` and propagates it into Room creation, Join claim, and proxied remote MCP fetches. A cancelled `wait_for_turn` therefore stops the proxied HTTP request instead of keeping the local tool alive until its transport timeout.
 
-For a matching:
+The remote `wait_for_turn` loop observes the HTTP request signal before/after snapshot reads and during poll delays, so cancellation also stops server waiting promptly.
 
-```text
-notifications/cancelled { requestId }
-```
-
-the bridge aborts that local tool request and propagates its `AbortSignal` into the proxied Room HTTP request. A cancelled request does not emit a stale tool result after cancellation. Closing stdin also aborts remaining in-flight requests.
-
-The remote `wait_for_turn` loop uses the HTTP request signal for both snapshot polling and poll delays, so cancellation stops the server wait promptly instead of continuing until the 25-second transport timeout.
-
-Cancellation is transport behavior only. It never auto-passes, auto-plays, changes Controller, or triggers Bot takeover.
+Cancellation is transport behavior only. It never auto-passes, auto-plays, changes Controller, or triggers Bot takeover. Cancelled tool results are not treated as valid gameplay results by the local bridge.
 
 ## Active Room context
 
@@ -188,7 +180,7 @@ change Controller
 create a ranked/competitive clock
 ```
 
-The client can call `wait_for_turn` again while the current Agent run remains active. If the client cancels the call, the local proxy and remote polling loop stop promptly and no cancelled result should be consumed by the harness.
+The client can call `wait_for_turn` again while the current Agent run remains active. If the client cancels the call, the local proxy and remote polling loop stop promptly and no cancelled result should be consumed as a game result.
 
 ### `play_move(expectedRevision, moveId)`
 
@@ -261,8 +253,8 @@ The remote Room MCP itself remains room-scoped and therefore does not expose `cr
 ## Security invariants
 
 - local tools never return bearer credentials;
-- cancelled stdio requests do not emit stale tool results;
-- cancellation propagates to remote HTTP waiting without mutating game state;
+- local MCP uses the official stdio transport rather than maintaining a separate wire-protocol implementation;
+- cancellation propagates through the local handler signal to Room HTTP waiting without mutating game state;
 - remote Actor authentication occurs before tool execution;
 - Room/Actor/Seat identity is transport-resolved, not model-supplied gameplay arguments;
 - stale/non-controller/illegal moves are rejected server-side;
