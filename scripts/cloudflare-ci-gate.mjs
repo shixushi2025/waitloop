@@ -99,24 +99,51 @@ export async function waitForRequiredCheck(sha, options = {}) {
   throw new Error(`Timed out waiting for GitHub Actions ${checkName} on ${sha}.`);
 }
 
-function currentGitSha() {
-  try {
-    const value = execFileSync("git", ["rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    if (isCommitSha(value)) return value;
-  } catch {
-    // The caller receives one stable error below.
-  }
-  throw new Error("Manual deployment requires a Git checkout with a valid HEAD commit.");
+function gitOutput(args) {
+  return execFileSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
-function deploymentSha(forceGate) {
-  const cloudflareSha = process.env.WORKERS_CI_COMMIT_SHA?.trim();
-  if (isCommitSha(cloudflareSha)) return cloudflareSha;
-  if (forceGate) return currentGitSha();
-  throw new Error("Cloudflare production build is missing a valid WORKERS_CI_COMMIT_SHA.");
+function optionalGitOutput(args) {
+  try {
+    return gitOutput(args);
+  } catch {
+    return null;
+  }
+}
+
+function manualDeploymentSha() {
+  const branch = optionalGitOutput(["branch", "--show-current"]);
+  if (branch !== "main") {
+    throw new Error("Manual deployment is allowed only from the local main branch.");
+  }
+
+  const changes = optionalGitOutput(["status", "--porcelain", "--untracked-files=normal"]);
+  if (changes === null) throw new Error("Manual deployment could not inspect the Git working tree.");
+  if (changes.length > 0) {
+    throw new Error("Manual deployment requires a clean working tree with no staged, modified, or untracked files.");
+  }
+
+  const sha = optionalGitOutput(["rev-parse", "HEAD"]);
+  if (!isCommitSha(sha)) {
+    throw new Error("Manual deployment requires a Git checkout with a valid HEAD commit.");
+  }
+
+  const originMain = optionalGitOutput(["rev-parse", "refs/remotes/origin/main"]);
+  if (isCommitSha(originMain) && originMain !== sha) {
+    throw new Error("Manual deployment requires local main to match the current origin/main ref.");
+  }
+  return sha;
+}
+
+function cloudflareDeploymentSha() {
+  const value = process.env.WORKERS_CI_COMMIT_SHA?.trim();
+  if (!isCommitSha(value)) {
+    throw new Error("Cloudflare production build is missing a valid WORKERS_CI_COMMIT_SHA.");
+  }
+  return value;
 }
 
 function selfTest() {
@@ -145,10 +172,15 @@ async function main() {
   }
 
   const forceGate = process.argv.includes("--require");
-  const cloudflareProduction = process.env.WORKERS_CI === "1" && process.env.WORKERS_CI_BRANCH === "main";
+  const cloudflareBuild = process.env.WORKERS_CI === "1";
+  const cloudflareProduction = cloudflareBuild && process.env.WORKERS_CI_BRANCH === "main";
+
+  // Cloudflare preview/non-production builds remain usable even when their
+  // dashboard build command invokes the package deploy script.
+  if (cloudflareBuild && !cloudflareProduction) return;
   if (!forceGate && !cloudflareProduction) return;
 
-  const sha = deploymentSha(forceGate);
+  const sha = cloudflareProduction ? cloudflareDeploymentSha() : manualDeploymentSha();
   const checkName = requiredCheckName();
   const source = cloudflareProduction ? "Cloudflare production build" : "manual deployment";
   console.log(`Waiting for GitHub Actions ${checkName} before ${source} of ${sha}.`);
