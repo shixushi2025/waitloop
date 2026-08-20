@@ -31,8 +31,7 @@ Near-term work:
 - continue making uncommon failures return a safe next corrective action when one is knowable;
 - keep discovery mirrors, `doctor`, Skill, llms, package docs, and machine manifest synchronized;
 - verify Windows/macOS/Linux local file permissions/path/CLI subprocess behavior;
-- add integration/smoke tests against a deployed test Worker without exposing credentials;
-- evaluate replacing the small local protocol shim with the official MCP `serveStdio()` entry when the CLI dependency/lockfile change can be regenerated and validated through the full package pipeline.
+- add integration/smoke tests against a deployed test Worker without exposing credentials.
 
 Acceptance: a new Agent can install once, create/join, remain active through the requested game loop, cancel a wait cleanly, restart/reconnect, and recover control without manual HTTP, credential-file parsing, or remote MCP JSON-RPC construction.
 
