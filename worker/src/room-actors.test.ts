@@ -10,6 +10,7 @@ import {
 
 function model(activeControllerActorId = "human"): ActorRoomModelV1 {
   return {
+    roomOwnerActorId: "human",
     actors: [
       { version: 1, id: "human", kind: "human", label: "you" },
       { version: 1, id: "codex", kind: "connected-agent", label: "codex" },
@@ -63,6 +64,21 @@ describe("room actor capabilities", () => {
     expect(actorHasCapability(value, "human", "seat:play")).toBe(false);
     expect(actorHasCapability(value, "human", "seat:control")).toBe(true);
     expect(actorHasCapability(value, "codex", "seat:control")).toBe(false);
+  });
+
+  it("gives only the room owner room management authority", () => {
+    const value = model();
+    validateActorRoomModel(value);
+
+    expect(actorHasCapability(value, "human", "room:manage")).toBe(true);
+    expect(actorHasCapability(value, "codex", "room:manage")).toBe(false);
+    expect(actorHasCapability(value, "bot", "room:manage")).toBe(false);
+  });
+
+  it("rejects an unknown room owner", () => {
+    const value = model();
+    value.roomOwnerActorId = "missing";
+    expect(() => validateActorRoomModel(value)).toThrow(/room owner/i);
   });
 
   it("rejects a controller that is not bound to the seat", () => {
