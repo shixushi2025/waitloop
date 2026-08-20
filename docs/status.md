@@ -57,6 +57,8 @@ waitloop mcp install claude-code
 
 The ordinary lifecycle installers for Codex/Claude Code also install this stable MCP entry.
 
+The local bridge now uses the official MCP v2 stdio server entry, serving both legacy 2025-era MCP clients and 2026-07-28 clients from the same command rather than maintaining a hand-written JSON-RPC protocol loop.
+
 Local tools:
 
 ```text
@@ -77,9 +79,10 @@ The bridge:
 - calls existing Room/Join HTTP for control operations;
 - proxies existing remote Room MCP for gameplay;
 - keeps Room Actor credentials in private local cache;
-- never returns raw credentials through model-visible tools;
+- never returns raw credentials through model-visible tools and redacts credential-shaped error text;
 - stores one active Room pointer that survives bridge restart until Room expiry;
-- supports Codex/Claude Code configuration through their CLI MCP surfaces.
+- supports Codex/Claude Code configuration through their CLI MCP surfaces;
+- propagates MCP cancellation through safe read/wait calls without abandoning mutation-capable calls mid-flight.
 
 Cursor lifecycle integration remains available, while stable stdio MCP setup is currently manual where supported.
 
@@ -169,7 +172,7 @@ take_control()
 
 `wait_for_turn` uses authenticated snapshot reads, about 750 ms polling, and a maximum 25-second transport wait. It returns on turn, finish, lobby, pause, Controller change, or timeout.
 
-Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback.
+Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback. MCP client cancellation also stops the in-flight wait promptly without a game mutation.
 
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
@@ -195,7 +198,8 @@ Web can:
 - hashed server credential storage;
 - server capability/revision checks;
 - hidden-information projection tests;
-- local MCP credential custody and credential-safe default output;
+- local MCP credential custody, credential-safe default output, and error redaction;
+- cancellation propagation only for read/wait operations;
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
 - side-effect-free nested CLI help.
 
@@ -204,7 +208,8 @@ Rate limiting remains abuse protection, not accounting.
 ## Tests currently covering this flow
 
 - 80+ unit/regression tests across rules, identity, controller fallback, CLI, and MCP;
-- local bridge tool/instruction contract;
+- local bridge tool/instruction contract and corrective error/redaction behavior;
+- read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
 - headless create -> Join claim -> authenticated MCP connect;
 - active Room pointer and expired cache handling;
 - Codex/Claude MCP installer command/idempotency;
