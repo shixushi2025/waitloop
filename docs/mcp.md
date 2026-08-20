@@ -13,6 +13,8 @@ Actor ID = runtime identity
 credential = authorization secret
 ```
 
+New three-player Dou Dizhu Rooms use stable Seat IDs `seat-1`, `seat-2`, and `seat-3`. Those IDs describe game positions only; they never authorize access.
+
 IDs never substitute for credentials.
 
 Every MCP request carries:
