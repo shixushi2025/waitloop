@@ -19,6 +19,8 @@ Actor ID
 Waitloop lifecycle session ID
 ```
 
+That includes concrete current Seat identifiers such as `seat-1`, `seat-2`, and `seat-3`: knowing one never proves ownership or grants private-view/play rights.
+
 Current credential/capability classes:
 
 - `wldev_...` — lifecycle device credential;
