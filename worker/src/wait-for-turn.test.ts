@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyWaitForTurn,
   normalizeWaitForTurnTimeout,
+  waitForTurnDelay,
   type WaitForTurnSnapshotV1,
 } from "./wait-for-turn";
 
@@ -47,5 +48,12 @@ describe("wait_for_turn timeout", () => {
   it("rejects tiny or non-integer transport waits", () => {
     expect(() => normalizeWaitForTurnTimeout(999)).toThrow(/1000/);
     expect(() => normalizeWaitForTurnTimeout(1_500.5)).toThrow(/integer/);
+  });
+
+  it("aborts the poll delay immediately when the MCP request is cancelled", async () => {
+    const controller = new AbortController();
+    const waiting = waitForTurnDelay(25_000, controller.signal);
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
   });
 });
