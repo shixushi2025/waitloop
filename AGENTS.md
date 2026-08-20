@@ -18,26 +18,7 @@ Do not reconstruct current behavior from old PRs/commits/superseded design notes
 
 Waitloop is a waiting layer for coding agents, not an engagement product. Coding-work attention always outranks the game.
 
-## Current engineering priority
-
-**Stabilize existing supported flows before expanding the feature surface.**
-
-Do not add a new room mode, Actor relation, MCP tool, account concept, game, or adapter merely because the domain model could support it. Real usage of the current flow is the primary source of product work:
-
-```text
-Agent discovery
--> CLI install/update/doctor
--> lifecycle install + external trust step
--> create/join Room
--> MCP connection
--> play/advice/delegation
--> yield/reconnect/recover
--> finish/expire
-```
-
-When a real harness exposes friction, first determine whether it is stale deployment, documentation drift, CLI diagnostics, client limitations, or an actual missing capability. Prefer making the current path self-explanatory and regression-tested over adding a parallel path.
-
-A platform packaging mechanism such as a Plugin is useful only if it materially simplifies supported setup. It must not be presented as a workaround for platform security/trust requirements it cannot remove.
+Current priority is stabilization of existing create/join/wait/play/recovery flow before feature expansion.
 
 ## Architecture invariant
 
@@ -45,19 +26,19 @@ A platform packaging mechanism such as a Plugin is useful only if it materially 
 packages/protocol       lifecycle contracts
 packages/game-core      pure game-agnostic contracts
 packages/doudizhu       pure Dou Dizhu rules
-packages/cli            local convenience/integration
+packages/cli            local config, lifecycle install, active Room, stable stdio MCP
 integrations/*          vendor lifecycle adapters
-worker/*                HTTP control plane, DO runtime, MCP, hosted inference
+worker/*                HTTP control plane, DO runtime, remote MCP, hosted inference
 apps/web                 Human presentation + public Agent surfaces
 ```
 
-Web/CLI/MCP/Agent HTTP must converge on the same server runtime rather than duplicate rules/authorization.
+Web/CLI/local MCP/raw HTTP/remote MCP must converge on the same server runtime rather than duplicate rules or authorization.
 
 ## Privacy invariant
 
-Core lifecycle reporting must not require prompt/source/repository/cwd/transcript/tool/terminal/assistant/native-session content.
+Lifecycle reporting must not require prompt/source/repository/cwd/transcript/tool/terminal/assistant/native-session content.
 
-If a feature needs more user data, document consent/data-flow/threat model first.
+If a feature needs more data, document consent, data flow, and threat model first.
 
 ## Game identity invariant
 
@@ -65,7 +46,7 @@ If a feature needs more user data, document consent/data-flow/threat model first
 
 ```text
 Room       one active runtime/game instance
-Seat       stable room-scoped player position / hand / role / history
+Seat       stable room-scoped position / hand / role / history
 Actor      human | bot | hosted-agent | connected-agent
 Binding    Actor -> Seat
 Controller Actor currently allowed to mutate Seat
@@ -74,7 +55,7 @@ Advisor    bound Actor that may inspect/comment but not play until delegated
 
 New Dou Dizhu Rooms use stable `seat-1`, `seat-2`, `seat-3`. Controller changes must never rewrite Seat ID/hand/role/history/owner.
 
-Relevant capabilities:
+Capabilities:
 
 ```text
 room:view-public
@@ -86,15 +67,13 @@ seat:control
 room:comment
 ```
 
-Only active Controller gets `seat:play`; Seat owner keeps `seat:control`; Room owner gets `room:manage`. Advisor private view is limited to its explicitly bound Seat.
+Only active Controller gets `seat:play`; Seat owner keeps `seat:control`; Room owner gets `room:manage`. Advisor private view is limited to its bound Seat.
 
-Game packages see Seat IDs only. Never branch game rules on Codex/Claude/MCP/browser/advisor/provider concepts.
+Game packages see Seat IDs only. Never branch rules on Codex/Claude/MCP/browser/provider concepts.
 
 ## Identity / credential invariant
 
 Never use Room ID, Seat ID, Actor ID, or lifecycle session ID as authorization.
-
-Credential scopes are separate:
 
 ```text
 wldev_   lifecycle device
@@ -104,56 +83,59 @@ wlseat_  one Room connected Actor binding
 wla_     persistent anonymous browser Actor credential
 ```
 
-Raw secrets must not be logged, put in URLs/prompts/source/commits, or returned to unrelated clients. Server persistence stores digests where applicable.
+Raw secrets must not be logged, placed in URLs/prompts/source/commits/docs/Skill, or returned to unrelated clients. Server persistence stores digests where applicable.
 
-Anonymous browser Actor identity is deliberately lightweight and browser/device-local. Do not introduce an account/database dependency merely to resume one active Room.
+Anonymous browser identity is browser/device-local. Do not introduce account/database dependency merely to resume one active Room.
 
-## Room recovery invariant
+## Stable local MCP invariant
 
-Current new-Room lifetime is bounded (~24h); Join capability is much shorter (~20m, one-time).
-
-If a Human's `wl_room_...` viewer cookie is missing, recovery may use the persistent anonymous Actor ID + credential to mint a fresh room viewer credential. **Actor ID alone must fail.**
-
-Connected Actor credential may reconnect during the Room lifetime. Reconnect updates presence only and must not silently change `activeControllerActorId`.
-
-## Temporary Controller invariant
-
-Explicit temporary Bot takeover preserves the original Seat and owner.
+The stable Agent-facing MCP command is:
 
 ```text
-before: seat owner/controller = Actor A
-after:  seat owner = Actor A; controller = temporary Bot
+waitloop mcp
 ```
 
-Required properties:
+Model-visible local tools:
 
-- stable Seat ID/hand/role/history;
-- temporary Bot Actor/binding is removable;
-- native Bot Seats cannot be re-wrapped by fallback;
-- elapsed Casual time alone never triggers takeover;
-- original connected owner must reconnect before browser restore;
-- owner explicitly calls `take_control()` to reclaim from MCP;
-- no simultaneous owner/temp-bot Controller mutation.
+```text
+create_room()
+join_room(code)
+get_active_room()
+leave_room()
+get_turn()
+wait_for_turn(timeoutMs?)
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
 
-Put takeover transition logic in pure runtime modules (currently `room-control.ts`), not scattered route/UI branches.
+Responsibilities:
 
-## Game projection invariant
+```text
+create/join tools -> reuse Room/Join HTTP
+other tools       -> proxy remote Room MCP
+credentials       -> private local cache only
+business rules    -> server only
+```
 
-- construct public/private projections explicitly;
-- Browser Human does not receive exhaustive machine `legalMoves[]`;
-- Human owner may still see own hand while delegated, but mutation controls reflect `seat:play`;
-- lobby hides dealt hand/landlord before readiness;
-- connected/hosted Actors use server-generated move IDs;
-- stale/out-of-turn/illegal/non-controller moves are rejected server-side.
+Local tools must never return raw bearer credentials. `active.json` may contain Room-selection context but not another secret copy.
 
-## MCP invariant
+`leave_room` is local selection cleanup, not remote revoke. Any future revoke tool must be explicit and independently authorized.
 
-MCP is gameplay, not lifecycle detection and not the current Room creation control plane.
+Stable MCP installers must use the harness's supported CLI/config surface, be idempotent, and not overwrite an existing `waitloop` definition.
 
-Model-visible tools:
+Nested help (`waitloop mcp install codex --help`) must be side-effect free.
+
+## Remote MCP invariant
+
+Remote `/mcp` is one already-authorized Room Actor gameplay endpoint, not lifecycle detection and not the Room bootstrap control plane.
+
+Remote tools:
 
 ```text
 get_turn()
+wait_for_turn(timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -162,53 +144,107 @@ take_control()
 
 Room ID, Actor token, Seat binding, ownership, and Controller authority are transport/runtime context, not model arguments.
 
-`comment` never changes game revision/state/turn. `yield_to_bot`/`take_control` are explicit owner-control transitions, not timeout behavior.
+`comment` never changes game revision/state/turn. `yield_to_bot`/`take_control` are explicit owner-control transitions.
 
-A successful Join claim is not the same thing as an MCP connection. The Actor becomes connected only when an authenticated MCP request reaches the room. Do not let CLI/Web/Agent copy blur that boundary.
+## Wait-for-turn invariant
 
-MCP does not wake a harness after that harness has returned a final response. Continuous play is an Agent-run behavior: if the user requested play until a condition is met, the Agent must keep its run active until that condition or an explicit interruption.
+`wait_for_turn` is an efficiency primitive, not a game clock.
+
+Required behavior:
+
+- bounded input: 1–25 seconds;
+- bounded server wait: maximum 25 seconds;
+- returns on turn, finished, waiting lobby, paused, Controller change, or timeout;
+- timeout never passes, plays, changes Controller, or triggers Bot takeover;
+- uses the same authenticated Seat projection as `get_turn`;
+- remains subject to per-Actor read/rate limits;
+- does not claim it can wake a harness after final Agent response.
+
+Continuous play is an Agent-run loop: keep the current run active through repeated `wait_for_turn -> play_move` until the requested stopping condition.
+
+## Room recovery invariant
+
+Current new-Room lifetime is bounded (~24h); Join is much shorter (~20m, one-time).
+
+If Human `wl_room_...` viewer cookie is missing, recovery may use persistent anonymous Actor ID + credential. **Actor ID alone must fail.**
+
+Connected Actor credential may reconnect during Room lifetime. Reconnect updates presence only and must not silently change `activeControllerActorId`.
+
+Local Join cache must reject expired Room credentials and clear stale active selection.
+
+## Temporary Controller invariant
+
+Explicit temporary Bot takeover preserves original Seat and owner.
+
+```text
+before: owner/controller = Actor A
+after:  owner = Actor A; controller = temporary Bot
+```
+
+Required:
+
+- stable Seat ID/hand/role/history;
+- temporary Bot Actor/binding removable;
+- native Bot Seats cannot be wrapped by fallback;
+- elapsed Casual time alone never triggers takeover;
+- original connected owner reconnects before restore;
+- owner explicitly calls `take_control()`;
+- no simultaneous owner/temp-Bot mutation.
+
+Keep transition logic in pure runtime modules such as `room-control.ts`, not scattered routes/UI branches.
+
+## Game projection invariant
+
+- construct public/private projections explicitly;
+- Human browser does not receive exhaustive machine `legalMoves[]`;
+- Human owner may see own hand while delegated, but controls reflect `seat:play`;
+- lobby hides dealt hand/landlord before readiness;
+- connected/hosted Actors use server-generated move IDs;
+- local bridge forwards server projection without widening it;
+- stale/out-of-turn/illegal/non-controller moves are rejected server-side.
 
 ## Client-neutral control plane
 
-Web is not required for operations that do not inherently need Human UI.
+Web is not required for operations without inherent Human UI.
 
 ```text
 POST /api/v1/rooms
 Join API
-room Human control/fallback API
+Room Human control/fallback API
 ```
 
-must remain usable independently of browser presentation where authorization permits. `agent-bots` remains fully headless.
+remain stable server protocols. Local MCP and CLI should wrap/reuse them for normal Agent operation. Raw HTTP remains advanced fallback.
 
-Do not add `create_room()` to the room-scoped MCP merely to duplicate HTTP. If a future control MCP is useful, it should wrap/reuse the HTTP control-plane contract.
+Do not add `create_room` to remote room-scoped MCP. It belongs to local bridge because remote MCP requires a Room credential before connection.
 
 ## Abuse/safety invariant
 
-Public endpoints need server-side protection, not UI-only constraints.
+Public endpoints need server-side protection, not UI constraints.
 
-Current baseline includes:
+Current baseline:
 
 - 16 KiB JSON body limit;
-- Cloudflare Room-create and tighter Hosted Room-create Rate Limiting bindings;
+- Cloudflare Room-create and tighter Hosted Room-create limits;
 - per-Room/per-Actor Join/MCP/comment/control/recovery counters;
 - Join/Room expiry;
-- capability checks + game revision.
+- capability checks + game revision;
+- bounded `wait_for_turn` transport loop.
 
-Treat rate limiting as permissive abuse mitigation, not exact accounting. Hosted inference still requires explicit budgets/quotas before broad public exposure.
+Rate limiting is abuse mitigation, not accounting or game timing. Hosted inference still needs explicit budgets before broad exposure.
 
 ## Documentation model
 
 `main` contains durable current documentation, not chronology.
 
-Do not leave permanent `*-v2.md`, migration scratchpads, design drafts, or completed phase notes. On merge:
+Do not leave permanent `*-v2.md`, migration scratchpads, drafts, or completed phase notes. On merge:
 
 1. extract durable decisions into canonical docs;
 2. update `status.md` / `roadmap.md`;
-3. delete transitional material.
+3. delete transition material.
 
 When code/tests and docs disagree, docs are stale and must be fixed in the same change.
 
-Avoid duplicated machine-authoritative values. Exact CLI version belongs in package JSON + `agent.json`; stable docs use `@waitloop/cli@alpha`.
+Exact CLI version belongs in package JSON + `agent.json`; stable docs use `@waitloop/cli@alpha`.
 
 ## Public Agent surface is API
 
@@ -224,48 +260,48 @@ worker/src/mcp.ts
 packages/cli
 ```
 
-Room modes, Join semantics, MCP tools, identity/recovery, capabilities, endpoints, installation, support status, discovery fallback, or harness continuation behavior require whole-surface consistency.
+Room modes, Join semantics, local/remote MCP tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
 
 ## Change completeness matrix
 
 | Change | Also inspect/update |
 | --- | --- |
-| Agent discovery / onboarding | `agent.md`, `agent.json`, `llms.txt`, Skill, CLI docs/doctor, real-harness regression evidence |
-| CLI / package / Join cache | CLI package/readme/tests, `docs/cli.md`, manifest, Agent guide/Skill, release docs |
+| CLI / package / Join cache | CLI readme/tests, `docs/cli.md`, manifest, Agent guide/Skill/llms, release docs |
+| Local MCP bridge/install | bridge/client/install tests, CLI help/doctor/package validation, architecture/MCP/protocol/security/status, Agent surfaces |
 | Room/Join modes/lifetime | Room API + GameRoom tests, architecture/game/protocol/security/status, all Agent surfaces |
 | Seat/Actor/capability | pure actor/control tests, GameRoom auth, Human projection, architecture/game/protocol/security/design/status |
 | Anonymous identity/recovery | identity parser tests, Room credential tests, security/protocol/architecture/status, browser UX |
-| Fallback/reconnect | pure room-control tests, DO auth, Web + MCP tools, game/design/MCP/protocol/security/status/Agent surfaces |
-| MCP tool/auth | MCP/DO tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
+| Fallback/reconnect | pure room-control tests, DO auth, Web + MCP, game/design/MCP/protocol/security/status/Agent surfaces |
+| MCP tool/auth/wait | remote/local tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
 | Hosted inference/public cost | hosted tests/docs, security/status/roadmap, rate/budget controls |
 | Lifecycle adapter | integration + CLI tests/docs + Agent surfaces |
 | Game rule | pure rules tests + `doudizhu-rules.md` |
 | Human UI/projection | browser JS, privacy tests, game/design docs |
 | Architecture boundary | architecture/status/repository map |
 
-If several rows apply, satisfy all of them.
+If several rows apply, satisfy all.
 
 ## Testing contract
 
-- Rules bugs get regression tests.
-- Trust/capability/credential boundaries get negative tests.
-- Actor ID without credential must never authenticate.
-- Hidden-information changes get non-leakage tests.
-- Fallback tests prove owner/Seat preservation and cleanup of temporary Actor only.
-- Controller changes prove only active Controller can mutate.
-- Comments prove no game-revision/state mutation.
-- CLI packaging changes run package validation.
-- CLI help/read-only diagnostics must have side-effect regression coverage when they touch installation paths.
-- Join/onboarding docs must distinguish claim/cache from authenticated MCP connection.
-- Browser changes pass JS syntax validation.
-- Public Agent changes pass `pnpm check:repo-contract`.
-- Worker/config changes pass `wrangler deploy --dry-run`.
+- rules bugs get regression tests;
+- trust/capability/credential boundaries get negative tests;
+- Actor ID without credential never authenticates;
+- hidden-information changes get non-leakage tests;
+- fallback proves owner/Seat preservation and temporary Actor cleanup;
+- Controller tests prove only active Controller mutates;
+- comments prove no game-revision/state mutation;
+- wait tests prove reasons/bounds/no implicit mutation contract;
+- local bridge tests prove tool list/instructions/credential non-disclosure;
+- Room bridge tests prove create -> Join -> authenticated connect;
+- installer tests prove exact/idempotent harness commands;
+- CLI packaging changes run package validation;
+- browser changes pass JS syntax validation;
+- public Agent changes pass `pnpm check:repo-contract`;
+- Worker/config changes pass Wrangler dry-run.
 
-Do not weaken tests to fit an implementation unless the contract intentionally changed.
+Do not weaken tests to fit implementation unless contract intentionally changed.
 
 ## Refactoring cycle
-
-Early correct implementations may be replaced when patch pressure reveals better stable responsibilities.
 
 ```text
 feature -> feature -> patch pressure
@@ -275,9 +311,7 @@ feature -> feature -> patch pressure
 -> continue
 ```
 
-Signals include giant mixed-responsibility files, repeated mode branches, duplicated validation, abstractions being bypassed, tests becoming only E2E, docs no longer matching ownership, or new Agents requiring historical context to understand current code.
-
-Prefer local refactors during normal features. Structural refactors require behavior tests first and removal of superseded compatibility/transition paths when safe.
+Signals: mixed-responsibility giant files, repeated mode branches, duplicated validation, bypassed abstractions, E2E-only tests, docs mismatching ownership, or new Agents needing history to understand current code.
 
 Do not maximize abstraction; optimize for continued change.
 
@@ -294,12 +328,11 @@ CI also validates browser JS and Wrangler dry-run.
 
 ## Preferred implementation order
 
-1. reproduce/understand the current-flow problem;
-2. establish the durable contract;
-3. shared types / pure capability logic;
-4. regression + negative tests;
-5. runtime/API/CLI wiring;
-6. UI/platform adapters;
-7. public Agent + canonical docs sync;
-8. remove transition material;
-9. run complete validation.
+1. establish durable contract;
+2. shared types / pure capability logic;
+3. regression + negative tests;
+4. runtime/API wiring;
+5. UI/platform adapters;
+6. public Agent + canonical docs sync;
+7. remove transition material;
+8. run complete validation.

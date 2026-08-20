@@ -4,20 +4,18 @@ Waitloop uses small versioned protocols so vendor-specific coding-agent details 
 
 ## Lifecycle protocol
 
-Canonical coding-agent states:
-
 ```text
 idle | running | waiting | completed | failed
 ```
 
-Lifecycle events intentionally contain no prompt/source/repository/cwd/transcript/tool/assistant/native-session payloads. Lifecycle is a separate credential/protocol from game participation.
+Lifecycle events contain no prompt/source/repository/cwd/transcript/tool/assistant/native-session payloads. Lifecycle credentials and game credentials are separate.
 
 ## Game identity
 
 ```ts
 interface GameSeatV1 {
   version: 1;
-  id: string;                 // stable within one Room
+  id: string;
   label: string;
   ownerActorId: string;
   activeControllerActorId: string;
@@ -39,9 +37,9 @@ interface GameActorBindingV1 {
 }
 ```
 
-New Dou Dizhu Rooms use `seat-1`, `seat-2`, `seat-3`. Seat/Actor IDs are context identifiers, never credentials.
+New Dou Dizhu Rooms use `seat-1`, `seat-2`, `seat-3`. Room/Seat/Actor IDs are identifiers, not credentials.
 
-Runtime capabilities include:
+Capabilities include:
 
 ```text
 room:view-public
@@ -53,7 +51,7 @@ seat:control
 room:comment
 ```
 
-## Runtime state
+## Runtime projection
 
 Room phase:
 
@@ -67,7 +65,7 @@ Actor status:
 ready | waiting | connecting | connected | disconnected
 ```
 
-Snapshots augment the game projection with:
+Agent snapshots include:
 
 ```text
 actors[]
@@ -83,26 +81,14 @@ roomPhase
 turnStartedAt
 createdAt
 expiresAt
+revision
+currentPlayerId
+legalMoves[]
 ```
 
-Human browser snapshots remove exhaustive `legalMoves[]` and expose `canPlay/canPass/canHint`.
+Human browser snapshots remove exhaustive machine `legalMoves[]` and expose constrained Human actions.
 
-## Anonymous browser Actor identity
-
-Browser creation can issue a persistent anonymous identity:
-
-```text
-actorId      actor_...
-credential   wla_...
-```
-
-The pair is stored in an HttpOnly cookie. Only the credential digest is persisted in each Room. Actor ID without credential does not authenticate.
-
-If the room-specific viewer cookie is absent, the browser can present the anonymous Actor cookie indirectly (normal cookie transport); the Worker verifies the Room's stored digest and issues a new `wlview_...` room viewer credential.
-
-## Room API
-
-Control-plane endpoints include:
+## Room HTTP control protocol
 
 ```text
 POST /api/v1/rooms
@@ -116,21 +102,9 @@ POST /api/v1/rooms/:roomId/pause
 POST /api/v1/rooms/:roomId/resume
 ```
 
-`/control` chooses another Actor already bound to the Human-owned Seat.
+HTTP remains the server control protocol used by Web, CLI, local MCP, and advanced raw clients. It is not duplicated as separate game logic inside clients.
 
-`/fallback` accepts:
-
-```json
-{
-  "version": 1,
-  "targetSeatId": "seat-2",
-  "action": "bot"
-}
-```
-
-or `"action":"owner"`. Only Room owner or target Seat owner may perform it. Temporary Bot takeover changes Controller only.
-
-Headless room creation remains available through `mode:"agent-bots"`.
+Headless `mode:"agent-bots"` creates one connected Agent Seat plus two deterministic Bot Seats and returns a Join code.
 
 ## Join protocol
 
@@ -140,13 +114,13 @@ POST /api/v1/join/<join-code>/claim
 GET  /join/<join-code>
 ```
 
-Current new-Room semantics:
+Current semantics:
 
 ```text
-Join expires ~20 min
-Join can issue one room Actor credential
-Room expires ~24 h
-claimed room Actor credential may reconnect while Room is active
+Join expires about 20 minutes
+Join issues one room Actor credential
+Room expires about 24 hours
+claimed credential may reconnect while Room is active
 ```
 
 Claim response includes:
@@ -157,42 +131,129 @@ actorId
 seatId
 relation
 seatStatus
-expiresAt          Join expiry
-roomExpiresAt      Room expiry
-seatToken          room Actor credential
-mcp                fixed endpoint + headers
+expiresAt
+roomExpiresAt
+seatToken
+mcp endpoint + headers
 ```
 
-The `wlseat_` prefix is retained for compatibility even though authorization is Actor-binding scoped.
+Raw Join claim and MCP connection are separate states. The stable local bridge performs the first authenticated gameplay request before it reports `connected: true`.
 
-## MCP protocol
+## Remote Room MCP protocol
 
-Transport headers:
+Transport:
 
 ```text
+POST https://waitloop.run/mcp
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Tools:
+Remote tools:
 
 ```text
 get_turn()
+wait_for_turn(timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
 ```
 
-`yield_to_bot` is valid only for an Actor that owns and actively controls its Seat. It adds a temporary Bot Actor/controller to the same Seat and preserves the original owner.
+### `wait_for_turn`
 
-`take_control` is valid for the reconnected Seat owner and removes the temporary Bot controller.
+Input:
 
-Reconnect itself only updates Actor presence; it does not change `activeControllerActorId`.
+```json
+{
+  "timeoutMs": 25000
+}
+```
+
+`timeoutMs` is optional, integer, minimum 1000 and maximum 25000.
+
+Result text decodes to:
+
+```json
+{
+  "version": 1,
+  "reason": "your_turn | game_finished | room_paused | waiting_for_players | controller_changed | timeout",
+  "waitedMs": 1234,
+  "stillWaiting": true,
+  "snapshot": {}
+}
+```
+
+`stillWaiting` appears for transport timeout. Actionable Room states return immediately. Transport timeout never mutates game state or authorizes fallback.
+
+### Mutations
+
+`play_move` requires `seat:play`, active Controller, authoritative turn, exact revision, and a server-generated move ID.
+
+`comment` is a bounded side channel and does not increment game revision.
+
+`yield_to_bot` is valid only for an Actor that owns and controls its Seat. `take_control` is valid for the reconnected Seat owner. Both preserve Seat identity/game state; reconnect alone does not change Controller.
+
+## Stable local MCP protocol
+
+Transport is local stdio:
+
+```text
+command: waitloop
+args: ["mcp"]
+```
+
+Install helpers:
+
+```text
+waitloop mcp install codex
+waitloop mcp install claude-code
+```
+
+Local tools:
+
+```text
+create_room()
+join_room(code)
+get_active_room()
+leave_room()
+get_turn()
+wait_for_turn(timeoutMs?)
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
+
+Control tools reuse HTTP; gameplay tools proxy remote MCP. The local server returns safe metadata/snapshots only. Raw credentials remain in private local cache.
+
+Active Room state:
+
+```json
+{
+  "version": 1,
+  "code": "WL-...",
+  "serverUrl": "https://waitloop.run",
+  "updatedAt": 0
+}
+```
+
+This pointer does not contain the bearer token. Credential material remains in the corresponding private Join cache entry.
+
+`leave_room` clears this pointer only and reports `credentialRevoked:false`.
+
+## Anonymous browser Actor identity
+
+Browser creation may issue:
+
+```text
+actorId    actor_...
+credential wla_...
+```
+
+The pair is transported in an HttpOnly cookie. Only the credential digest is stored per Room. Actor ID alone never authenticates. The credential may mint a fresh Room viewer credential while the Room remains active.
 
 ## Revisions and errors
-
-Game revision protects game mutations; comments/controller presence metadata do not invent alternative game rules.
 
 Relevant error codes include:
 
@@ -204,23 +265,16 @@ invalid_controller
 controller_not_ready
 room_manage_forbidden
 invalid_actor_credential
+invalid_wait_timeout
 rate_limited
 join_expired
 join_already_claimed
 ```
 
-JSON errors remain:
+HTTP errors remain versioned JSON. Remote/local MCP tool failures are returned as MCP tool errors with structured JSON text.
 
-```json
-{
-  "version": 1,
-  "error": {
-    "code": "...",
-    "message": "..."
-  }
-}
-```
+## Continuation boundary
 
-HTTP 429 is used for rate-limited public/runtime operations.
+MCP request/response transport cannot resume an Agent after the Agent sends a final response. Continuous-play intent must keep the current Agent run alive and repeat `wait_for_turn -> play_move` until its requested stopping condition.
 
-The Worker implementation is runtime truth; protocol docs must change in the same PR as public behavior.
+The implementation and public Agent surfaces must change in the same PR as protocol behavior.

@@ -2,35 +2,59 @@
 
 > Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; games fill short waits; work takes priority again when the agent needs attention.
 
-Canonical agent integration guide: https://waitloop.run/agent.md
+Canonical guide: https://waitloop.run/agent.md
 Guide mirror (raw GitHub): https://raw.githubusercontent.com/shixushi2025/waitloop/main/apps/web/public/agent.md
 Guide mirror (GitHub UI): https://github.com/shixushi2025/waitloop/blob/main/apps/web/public/agent.md
-Machine-readable manifest: https://waitloop.run/agent.json
-Waitloop skill: https://waitloop.run/skills/waitloop/SKILL.md
-Room API: https://waitloop.run/api/v1/rooms
-Room-specific join pattern: https://waitloop.run/join/<join-code>
-Game MCP endpoint: https://waitloop.run/mcp
-CLI alpha install/update: npm install -g @waitloop/cli@alpha
-CLI diagnostics: waitloop doctor
-Health: https://waitloop.run/api/v1/health
+Machine manifest: https://waitloop.run/agent.json
+Skill: https://waitloop.run/skills/waitloop/SKILL.md
+Local MCP command: waitloop mcp
+Remote room MCP: https://waitloop.run/mcp
+Room API fallback: https://waitloop.run/api/v1/rooms
+Join pattern: https://waitloop.run/join/<join-code>
+CLI install/update: npm install -g @waitloop/cli@alpha
+Diagnostics: waitloop doctor
 Source: https://github.com/shixushi2025/waitloop
 
 If an Agent browser blocks direct navigation to agent.md, use a declared mirror or agent.json instead of assuming Waitloop/Cloudflare is down.
 
-Seat and Actor are separate. New Dou Dizhu rooms use stable room-scoped Seat IDs. Actor ID is not a credential. Controllers play; Advisors may inspect/comment on the one Seat they are explicitly bound to.
+Seat != Actor != Controller. IDs are not credentials. Controllers play; Advisors may inspect/comment only on their explicitly bound Seat until delegated.
 
-Web is optional. A headless Agent can `POST /api/v1/rooms` with mode `agent-bots`, claim the returned Join code, then use MCP.
+Primary Agent path:
 
-`waitloop join <code>` claims and caches a temporary room Actor credential. Join success is not MCP connection: an authenticated request must reach `/mcp` before the Actor is online. The CLI does not hot-inject a newly claimed MCP server into an already-running harness session.
+```text
+install once: waitloop mcp install codex | claude-code
+runtime:      waitloop mcp
+```
 
-Current MCP tools: get_turn(), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
+Local MCP tools:
 
-MCP does not wake an Agent after the Agent returns a final response. If the user asks to keep playing or play until finished, keep the current Agent run active until that stopping condition. Current alpha has no wait_for_turn(), so avoid tight polling when another Human/connected Actor owns the turn.
+```text
+create_room()
+join_room(code)
+get_active_room()
+leave_room()
+get_turn()
+wait_for_turn(timeoutMs?)
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
 
-`yield_to_bot()` temporarily delegates an owned Seat to a deterministic Bot without changing Seat/hand/role/history. The cached room credential can reconnect; `take_control()` explicitly restores the owner. Casual fallback is never triggered solely by elapsed time.
+The local bridge reuses Room/Join HTTP and remote room MCP internally. It keeps bearer credentials in private local Waitloop state and never returns them through model-visible tools.
 
-Join codes are one-time and short-lived; rooms also expire. Human browser sessions use a persistent anonymous Actor ID plus a separate HttpOnly credential to recover room access without requiring an account.
+`create_room()` currently creates the existing fully headless `agent-bots` Dou Dizhu mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
-Codex command hooks require Codex review/trust even when bundled by a Plugin. A Plugin may improve packaging but does not remove the hook trust step.
+Join success is not MCP connection for raw clients. The local `join_room()` tool performs the authenticated connection check before reporting connected. Default CLI/JSON output is credential-safe; `--raw-mcp` is an explicit advanced fallback.
 
-Lifecycle hooks and game MCP remain separate security scopes.
+Remote MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
+
+`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
+
+MCP does not wake an Agent after it returns a final response. If the user asks to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition.
+
+`yield_to_bot()` temporarily delegates the same owned Seat to a deterministic Bot without changing Seat/hand/role/history. Cached active Room context can reconnect; `take_control()` explicitly restores the owner. Reconnect never silently steals control.
+
+Raw HTTP and remote MCP remain supported advanced fallbacks. Web is optional for Agent-only operation.
+
+Codex lifecycle command hooks still require Codex review/trust. Stable MCP configuration and lifecycle hooks are separate integrations/security scopes. Plugin packaging cannot bypass hook trust.

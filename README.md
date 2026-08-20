@@ -10,9 +10,9 @@ while (agent.running) {
 
 Waitloop is a developer-native waiting layer, not an engagement/casino product. Coding work always has priority.
 
-## Current product priority
+## Current priority
 
-The current focus is **stabilizing the existing Agent/Web/CLI/MCP flow**, not continuously adding modes or integrations. Real harness use is treated as regression testing; friction in discovery, installation, connection, recovery, and documentation should be fixed before expanding the feature surface.
+The focus is stabilizing the existing discovery -> install -> create/join -> wait/play -> yield/reconnect path, not continuously adding modes.
 
 ## Agent entrypoints
 
@@ -21,16 +21,11 @@ https://waitloop.run/agent.md
 https://waitloop.run/agent.json
 https://waitloop.run/llms.txt
 https://waitloop.run/skills/waitloop/SKILL.md
-https://waitloop.run/api/v1/rooms
-https://waitloop.run/join/<join-code>
-https://waitloop.run/mcp
 ```
 
-`agent.json` also declares GitHub mirrors of `agent.md` for Agent/browser environments that block direct Markdown navigation.
+`agent.json` declares GitHub mirrors for Agent/browser environments that block direct Markdown navigation.
 
-Room/Join HTTP is the control plane; MCP is room-scoped gameplay. Web is optional for Agent-only operation.
-
-## CLI
+## CLI and stable MCP
 
 ```bash
 npm install -g @waitloop/cli@alpha
@@ -38,9 +33,51 @@ waitloop --version
 waitloop doctor
 ```
 
-`doctor` checks the currently published Waitloop CLI version and, when Codex is present, its hooks capability plus installed Waitloop lifecycle hook events.
+Install the stable local stdio MCP once:
 
-Lifecycle setup is separate:
+```bash
+waitloop mcp install codex
+waitloop mcp install claude-code
+```
+
+Runtime command:
+
+```text
+waitloop mcp
+```
+
+The bridge exposes:
+
+```text
+create_room()
+join_room(code)
+get_active_room()
+leave_room()
+get_turn()
+wait_for_turn(timeoutMs?)
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
+
+It reuses the existing Room/Join HTTP control plane and remote Room MCP internally. Room credentials stay in private local cache and are not returned through model-visible tools.
+
+CLI equivalents:
+
+```bash
+waitloop room create
+waitloop join WL-XXXXXXXXXX
+waitloop room current
+waitloop room wait --timeout-ms 25000
+waitloop room leave
+```
+
+Default Join output is credential-safe. `--raw-mcp` remains an explicit advanced fallback.
+
+## Lifecycle integration
+
+Lifecycle reporting is optional and separate from game MCP:
 
 ```bash
 waitloop init --url https://waitloop.run
@@ -48,28 +85,20 @@ waitloop pair
 waitloop install codex
 ```
 
-Codex command hooks remain subject to Codex's own review/trust flow. Plugin packaging can improve distribution, but plugin-bundled command hooks do not bypass that trust requirement.
-
-Join a room Actor capability with:
-
-```bash
-waitloop join WL-XXXXXXXXXX
-```
-
-Join claims/caches the room credential; it does **not** mean a running Agent session has already attached the MCP server. The Actor becomes connected only after an authenticated `/mcp` request.
+`waitloop install codex`/`claude-code` also configure stable MCP. Codex lifecycle command hooks remain subject to Codex's own `/hooks` review/trust boundary. Plugin packaging cannot bypass that trust requirement.
 
 ## Game identity
 
 ```text
 Room       one active game runtime
-Seat       stable game position (`seat-1`, `seat-2`, `seat-3`)
+Seat       stable position (`seat-1`, `seat-2`, `seat-3`)
 Actor      Human | Bot | Hosted Agent | Connected Agent
 Binding    Actor -> Seat
 Controller Actor currently allowed to play
 Advisor    bound Actor that may inspect/comment but not play until delegated
 ```
 
-Seat/Actor IDs are identifiers, not credentials.
+Identifiers are not credentials.
 
 Current modes:
 
@@ -81,63 +110,57 @@ companion-agent
 agent-bots
 ```
 
-`companion-agent` lets an Agent see/advise the Human Seat and optionally take delegated control. `agent-bots` is fully headless.
+`agent-bots` is fully headless; local `create_room()` uses that existing mode.
 
-## Recovery / takeover
+## Efficient play and recovery
 
-Human browsers receive a persistent anonymous Actor identity plus a separate secret credential; no account/database is required for one-Room recovery. If the shorter room viewer cookie is lost, the remembered Actor can recover room access while the Room is active.
+Remote/local MCP provide `wait_for_turn()`. It returns on turn, finish, lobby, pause, Controller change, or a bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
 
-Eligible Seats can explicitly use a temporary Bot Controller without changing Seat owner, hand, role, or history.
+MCP is request/response participation and cannot wake an Agent after a final reply. A request to play until finished must keep the current Agent run active through:
 
-Connected Seat owners can:
+```text
+wait_for_turn()
+-> play_move()
+-> wait_for_turn()
+-> ...
+-> game_finished
+```
+
+Connected Seat owners can explicitly:
 
 ```text
 yield_to_bot()
-... leave / reconnect with cached room credential ...
+... bridge/harness restarts and reconnects ...
 take_control()
 ```
 
-Reconnect never silently steals control back. Casual elapsed time never forces takeover.
-
-## MCP
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-comment(text)
-yield_to_bot()
-take_control()
-```
-
-Game rules, hidden information, current Controller, and revision checks remain server-side.
-
-MCP is request/response participation. It cannot wake an Agent after that Agent returns a final response; when the user explicitly asks an Agent to keep playing or play until finished, the Agent must keep the current run active until that stopping condition.
+Seat owner, ID, hand, role, and history remain unchanged. Reconnect never silently steals control.
 
 ## Safety baseline
 
-Current runtime includes:
-
 - 16 KiB JSON body limit;
-- Cloudflare native room-creation rate limiting and tighter hosted-room limit;
+- Cloudflare Room-create and tighter Hosted Room-create limits;
 - per-Room/per-Actor Join/MCP/comment/control/recovery limits;
 - one-time ~20 minute Join codes;
-- ~24 hour active Room lifetime;
-- hashed credentials at rest;
-- capability checks for Room/Seat mutations.
+- ~24 hour active Rooms;
+- hashed server credentials;
+- local MCP credential custody;
+- capability/revision checks for every mutation;
+- hidden-information projections and negative tests.
 
-No global database/account layer is required yet. Cross-device identity/history can be added later if product needs justify a global index.
+No database/account layer is required for current one-Room recovery.
 
 ## Current implementation
 
 Also included:
 
-- canonical lifecycle states with Claude Code/Cursor/Codex adapters;
-- scoped device pairing;
-- deterministic bots + configurable hosted DeepSeek/OpenAI Seats;
+- Claude Code/Cursor/Codex lifecycle adapters;
+- deterministic Bots + configurable Hosted Agent Seats;
 - server-authoritative Dou Dizhu with random landlord until bidding is implemented;
-- Human-safe browser projection, current trick/activity, companion comments, and presentation pacing;
+- companion advice/comments and Human/Agent Controller switching;
+- browser Room recovery and temporary Bot fallback;
 - GitHub `main` -> Cloudflare auto deployment;
-- strict CI and repository-contract synchronization.
+- strict CI plus repository/onboarding contracts.
 
 See [`docs/status.md`](docs/status.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/README.md`](docs/README.md).
 

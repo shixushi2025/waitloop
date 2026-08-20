@@ -1,64 +1,114 @@
-# MCP game boundary
+# MCP boundaries
 
-Waitloop exposes one fixed remote gameplay endpoint at `/mcp` for a room-scoped **Actor binding**.
-
-MCP is not coding-agent lifecycle detection and is not the current Room creation control plane. HTTP/CLI create/claim/manage Rooms; MCP operates inside an already-authorized Room.
-
-## Authentication and identity
+Waitloop now has two MCP layers with distinct responsibilities:
 
 ```text
-Room ID  = routing context
-Seat ID  = stable room-scoped game position
-Actor ID = runtime identity
-credential = authorization secret
+local stdio MCP (`waitloop mcp`)
+  = stable Agent-facing bridge
+  = control-plane convenience + gameplay proxy
+
+remote HTTP MCP (`https://waitloop.run/mcp`)
+  = one already-authorized Room Actor binding
+  = gameplay only
 ```
 
-New three-player Dou Dizhu Rooms use stable Seat IDs `seat-1`, `seat-2`, and `seat-3`. Those IDs describe game positions only; they never authorize access.
+Neither layer performs coding-agent lifecycle detection. Lifecycle hooks remain a separate integration and credential scope.
 
-IDs never substitute for credentials.
+## Stable local bridge
 
-Every MCP request carries:
+Install once for supported harnesses:
+
+```bash
+waitloop mcp install codex
+waitloop mcp install claude-code
+```
+
+The stable command is always:
+
+```text
+waitloop mcp
+```
+
+It exposes:
+
+```text
+create_room()
+join_room(code)
+get_active_room()
+leave_room()
+get_turn()
+wait_for_turn(timeoutMs?)
+play_move(expectedRevision, moveId)
+comment(text)
+yield_to_bot()
+take_control()
+```
+
+The local bridge does not duplicate Room/game business logic:
+
+- `create_room` calls the existing Room HTTP endpoint, then claims Join;
+- `join_room` calls the existing Join HTTP endpoint;
+- gameplay/control tools proxy to the existing remote Room MCP;
+- authorization and legal-move validation remain server-side.
+
+Room credentials are read from private `~/.waitloop/joins` state and never returned through model-visible local MCP tools.
+
+## Active Room context
+
+`waitloop join`, `join_room`, and `create_room` select one active credential-backed Room. The active pointer contains Join code/server context, not a second secret copy.
+
+```text
+get_active_room()
+```
+
+loads the cached credential, authenticates the remote Room Actor, and returns safe metadata/snapshot.
+
+```text
+leave_room()
+```
+
+clears only local active selection. It does not revoke the remote credential or mutate the Room, preserving explicit reconnect until Room expiry.
+
+## Remote authentication and identity
+
+```text
+Room ID    routing context
+Seat ID    stable room-scoped game position
+Actor ID   runtime identity
+credential authorization secret
+```
+
+Remote MCP requests carry:
 
 ```text
 Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-The legacy `wlseat_` prefix authorizes one room-scoped Actor binding. The raw token is stored only by the client; Waitloop stores its digest.
+IDs never substitute for credentials. The historical `wlseat_` prefix authorizes one Room Actor binding. Waitloop stores only its digest in Room state.
 
-## Join / reconnect
+## Join / connect / reconnect
 
-Join paths:
-
-```text
-waitloop join <code>
-POST /api/v1/join/<code>/claim
-https://waitloop.run/join/<code>
-```
-
-Current Join code lifetime is about 20 minutes and it can issue one credential. The resulting Actor credential remains reconnectable while the Room remains active (about 24 hours for new Rooms).
-
-The CLI caches the claimed room credential plus `actorId`, `seatId`, relation, and Room expiry under `~/.waitloop/joins`.
-
-**Join claim and MCP connection are separate states.** `waitloop join` only claims/caches the Actor credential and prints configuration. It does not dynamically attach that MCP server to an already-running Agent harness.
+A Join code currently lasts about 20 minutes and is one-time. The claimed Actor credential remains reconnectable while the Room is active, currently about 24 hours.
 
 ```text
-Join claimed
-  -> credential exists locally
-  -> Actor runtime = connecting
+raw Join claim
+  -> credential exists
+  -> Actor connecting
 
-first authenticated /mcp request
-  -> Actor runtime = connected
+first authenticated remote MCP request
+  -> Actor connected
 ```
 
-Every authenticated MCP request refreshes Actor presence. Reconnecting does not automatically change the Seat Controller.
+The local `join_room` and `create_room` tools perform that first authenticated request before returning `connected: true`. Raw clients must preserve the distinction themselves.
 
-Until a stable local MCP bridge exists, harnesses that cannot hot-add remote MCP configuration must use the harness's supported config/reload path or issue raw MCP HTTP calls for the current task. Raw credentials must not be echoed into chat/log output just to make that work.
+Every authenticated MCP request refreshes presence. Reconnection never silently changes `activeControllerActorId`.
 
-## Tool surface
+## Remote tool surface
 
 ```text
 get_turn()
+wait_for_turn(timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -67,23 +117,57 @@ take_control()
 
 ### `get_turn()`
 
-Returns the private projection of the Actor's explicitly bound Seat plus public Room state, Actor/Seat/binding metadata, capabilities, Controller, revision, and server-generated legal moves.
+Returns the private projection of the explicitly bound Seat plus public Room state, Actor/Seat/binding metadata, capabilities, Controller, revision, and server-generated legal moves.
 
-An Advisor may see the private Seat it was explicitly bound to but never an unrelated Seat.
+An Advisor may see only the private Seat it was explicitly bound to.
+
+### `wait_for_turn(timeoutMs?)`
+
+The server re-reads the authenticated Actor snapshot at a bounded interval and returns when:
+
+```text
+your_turn
+game_finished
+waiting_for_players
+room_paused
+controller_changed
+timeout
+```
+
+Current bounds:
+
+```text
+default timeout 25 seconds
+maximum timeout 25 seconds
+minimum timeout 1 second
+poll interval about 750 ms
+```
+
+This timeout is transport protection only. It does not:
+
+```text
+auto-pass
+auto-play
+replace a slow Agent
+change Controller
+create a ranked/competitive clock
+```
+
+The client can call `wait_for_turn` again while the current Agent run remains active.
 
 ### `play_move(expectedRevision, moveId)`
 
-Succeeds only if the Actor has `seat:play`, is the active Controller, is acting on the authoritative turn, supplies the current revision, and selects a server-generated legal move ID.
+Succeeds only when the Actor has `seat:play`, is active Controller, owns the authoritative turn, supplies the current revision, and selects a server-generated legal move ID.
 
 ### `comment(text)`
 
-Bounded room comment side channel. It does not mutate game state, game revision, turn, or legal moves.
+Bounded side channel. It never changes game state, revision, turn, or legal moves.
 
-### `yield_to_bot()`
+### `yield_to_bot()` / `take_control()`
 
-Available to a connected Actor that owns and currently controls its Seat.
+A connected Seat owner may explicitly replace itself as Controller with a temporary deterministic Bot, then later reconnect and explicitly reclaim control.
 
-It creates a temporary deterministic Bot Actor bound as Controller of the **same Seat**. It preserves:
+Preserved throughout:
 
 ```text
 Seat ID
@@ -93,41 +177,42 @@ role
 history
 ```
 
-The connected owner is marked away/disconnected in runtime metadata. This is explicit; elapsed Casual time never triggers it automatically.
+Reconnect alone never calls `take_control`.
 
-### `take_control()`
+## Agent-run continuation
 
-Available to a connected Seat owner after reconnecting. It removes the temporary Bot Actor/binding and restores the owner as active Controller.
-
-Reconnect intentionally does not call this automatically. This prevents a returning client from silently racing the current Controller.
-
-## Agent-run continuation semantics
-
-The MCP server is passive request/response infrastructure. It does not schedule or wake Codex/Claude/Cursor after that Agent has returned a final reply.
-
-Therefore Agent behavior depends on the user's request:
+MCP is passive request/response participation. It cannot wake Codex/Claude/Cursor after the Agent has returned a final reply.
 
 ```text
-"connect/check the room"
-  -> authenticate
-  -> get_turn()
-  -> report connection/state
+connect/check
+  -> join_room/get_turn
+  -> report
 
-"take over and keep playing"
-  -> authenticate
-  -> get_turn()
-  -> play when authorized
-  -> keep the same Agent run alive
-  -> repeat until the requested stopping condition
+play until finished
+  -> keep current Agent run alive
+  -> wait_for_turn
+  -> play_move when your_turn
+  -> repeat timeout waits
+  -> stop only at game_finished or user-requested condition
 ```
 
-Current alpha has no `wait_for_turn()` server primitive. If another Human/connected Actor owns the turn, clients should wait briefly and re-read `get_turn()` at a low frequency. Tight polling wastes tool/model work and is not part of the intended flow.
-
-A final Agent response ends that Agent run; it must never be described as background MCP execution continuing by itself.
+The local bridge solves stable configuration and credential routing. `wait_for_turn` solves efficient in-run waiting. Neither is a background scheduler for ended Agent runs.
 
 ## Headless use
 
-MCP cannot create its own Room because it is room-scoped. Headless Agents first call:
+Preferred:
+
+```text
+create_room({gameId:"doudizhu", mode:"agent-bots"})
+```
+
+Equivalent CLI:
+
+```bash
+waitloop room create
+```
+
+Advanced raw fallback remains:
 
 ```http
 POST https://waitloop.run/api/v1/rooms
@@ -136,27 +221,18 @@ Content-Type: application/json
 {"version":1,"gameId":"doudizhu","mode":"agent-bots"}
 ```
 
-then claim Join and use MCP. A future separate control MCP could wrap HTTP if needed, but the current gameplay MCP stays narrow.
-
-## Controller delegation
-
-Human Seat owners may delegate to an Advisor through Room API/Web. That is a control-plane mutation. Once delegated, the same Advisor MCP token gains `seat:play` because server-side `activeControllerActorId` changed.
-
-Temporary Bot fallback uses the same rule: Controller changes; Seat identity does not.
-
-## Timing and rate protection
-
-Casual has no hard turn timeout. Current server safeguards include per-Actor limits for MCP connection/read/move/comment/control operations. Rate limiting protects abuse; it is not accounting and does not authorize automatic moves.
+The remote Room MCP itself remains room-scoped and therefore does not expose `create_room`; that tool belongs to the local control bridge and reuses HTTP.
 
 ## Security invariants
 
-- Actor authentication occurs before tool execution.
-- Room/Actor/Seat identity is transport-resolved, not model-supplied tool arguments.
-- stale/non-controller/illegal moves are rejected server-side.
-- Advisors see only their bound Seat's private state.
-- room Actor credentials never authorize lifecycle ingestion.
-- Join expiry and Room expiry are separate.
-- cached credential enables reconnect only for the same Actor binding.
-- Join success is not reported as MCP-connected until an authenticated MCP request reaches the Room.
+- local tools never return bearer credentials;
+- remote Actor authentication occurs before tool execution;
+- Room/Actor/Seat identity is transport-resolved, not model-supplied gameplay arguments;
+- stale/non-controller/illegal moves are rejected server-side;
+- Advisors see private state only for their bound Seat;
+- Room credentials never authorize lifecycle ingestion;
+- Join and Room expiry are separate;
+- rate limits are abuse controls, not automatic timing or accounting;
+- `yield_to_bot` and `take_control` are explicit owner-control transitions.
 
-See [`security.md`](security.md), [`protocol.md`](protocol.md), and [`game-system.md`](game-system.md).
+See [`security.md`](security.md), [`protocol.md`](protocol.md), [`architecture.md`](architecture.md), and [`game-system.md`](game-system.md).

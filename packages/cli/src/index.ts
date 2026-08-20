@@ -13,7 +13,20 @@ import { fetchPublishedCliDiagnostic, inspectCodexHooks, inspectCodexRuntime } f
 import { readLatestClaudeState, runClaudeCodeHook } from "./hook.js";
 import { commandJoin } from "./join.js";
 import type { LocalTurnState } from "./lifecycle.js";
+import { runLocalMcpBridge } from "./mcp-bridge.js";
+import {
+  inspectLocalMcp,
+  installLocalMcp,
+  uninstallLocalMcp,
+  type LocalMcpTarget,
+} from "./mcp-install.js";
 import { pairDevice, unpairDevice } from "./pairing.js";
+import {
+  callActiveRoomTool,
+  createAndActivateHeadlessRoom,
+  getActiveRoom,
+  leaveActiveRoom,
+} from "./room-client.js";
 import { getCliVersion } from "./version.js";
 
 const VERSION = getCliVersion();
@@ -29,7 +42,15 @@ Tiny games while your coding agent runs.
 Usage:
   waitloop init [--url URL] [--ingest-token TOKEN] [--access-token TOKEN] [--yes]
   waitloop pair [--no-open] [--bootstrap-token TOKEN]
-  waitloop join WL-XXXXXXXXXX [--url URL] [--json]
+  waitloop join WL-XXXXXXXXXX [--url URL] [--json] [--raw-mcp]
+  waitloop room create [--url URL] [--json]
+  waitloop room current [--json]
+  waitloop room wait [--timeout-ms N] [--json]
+  waitloop room leave [--json]
+  waitloop mcp
+  waitloop mcp install <codex|claude-code|all>
+  waitloop mcp uninstall <codex|claude-code|all>
+  waitloop mcp status <codex|claude-code|all>
   waitloop unpair
   waitloop doctor
   waitloop install <claude-code|cursor|codex|all>
@@ -48,6 +69,14 @@ function optionValue(args: string[], name: string): string | undefined {
   const value = args[index + 1];
   if (!value || value.startsWith("--")) throw new Error(`${name} requires a value.`);
   return value;
+}
+
+function integerOption(args: string[], name: string): number | undefined {
+  const value = optionValue(args, name);
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} requires an integer.`);
+  return parsed;
 }
 
 function hasFlag(args: string[], name: string): boolean {
@@ -90,6 +119,18 @@ async function uninstallTarget(target: InstallTarget): Promise<{ changed: boolea
   return uninstallCodex();
 }
 
+function lifecycleMcpTarget(target: InstallTarget): LocalMcpTarget | null {
+  if (target === "codex") return "codex";
+  if (target === "claude-code") return "claude-code";
+  return null;
+}
+
+function printMcpInstall(target: LocalMcpTarget): void {
+  const result = installLocalMcp(target);
+  console.log(`  ${result.changed ? "✓ installed" : "✓ already installed"} stable MCP · ${target}`);
+  console.log("  command  waitloop mcp");
+}
+
 async function commandInit(args: string[]): Promise<void> {
   const previous = await loadConfig();
   const url = optionValue(args, "--url");
@@ -121,7 +162,7 @@ async function commandInit(args: string[]): Promise<void> {
     return;
   }
 
-  const install = hasFlag(args, "--yes") || await promptYesNo("Install detected Waitloop lifecycle integrations?");
+  const install = hasFlag(args, "--yes") || await promptYesNo("Install detected Waitloop integrations?");
   if (!install) {
     console.log("\nSkipped integration install. Run `waitloop install <agent>` when ready.");
     return;
@@ -129,8 +170,10 @@ async function commandInit(args: string[]): Promise<void> {
 
   for (const agent of available) {
     const result = await installTarget(agent.id);
-    console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} ${agent.label}`);
+    console.log(`\n${result.changed ? "✓ installed" : "✓ already installed"} lifecycle · ${agent.label}`);
     console.log(`  ${result.path}`);
+    const mcpTarget = lifecycleMcpTarget(agent.id);
+    if (mcpTarget) printMcpInstall(mcpTarget);
     if (agent.id === "codex") {
       console.log("  Codex requires separate hook review/trust; run `waitloop doctor` for the installed-hook check.");
       console.log("  Use Codex CLI `/hooks` to review the exact hook definition before it can run.");
@@ -181,6 +224,14 @@ async function checkHealth(url: string): Promise<string> {
   }
 }
 
+function safeInspectLocalMcp(target: LocalMcpTarget): ReturnType<typeof inspectLocalMcp> | null {
+  try {
+    return inspectLocalMcp(target);
+  } catch {
+    return null;
+  }
+}
+
 async function commandDoctor(): Promise<void> {
   console.log("waitloop doctor\n");
   const config = await loadConfig();
@@ -209,16 +260,25 @@ async function commandDoctor(): Promise<void> {
   const codexDetection = detections.find((item) => item.id === "codex" && item.installed);
   if (codexDetection) {
     const [runtime, hooks] = await Promise.all([inspectCodexRuntime(), inspectCodexHooks()]);
+    const localMcp = safeInspectLocalMcp("codex");
     console.log("\ncodex/");
     console.log(`  cli      ${runtime.version ?? "detected"}`);
     console.log(`  hooks    ${runtime.hooksFeature}`);
     const installed = hooks.installedEvents.length;
     console.log(`  config   ${installed}/${hooks.installedEvents.length + hooks.missingEvents.length} Waitloop hook events · ${hooks.path}`);
+    console.log(`  mcp      ${localMcp?.configured ? "configured · waitloop mcp" : "not configured"}`);
     if (hooks.missingEvents.length > 0) console.log(`  missing  ${hooks.missingEvents.join(", ")}`);
     if (runtime.hooksFeature === "unavailable") console.log("  action   update Codex CLI before relying on lifecycle hooks");
     if (hooks.missingEvents.length === 0) {
       console.log("  trust    owned by Codex · review the current definition with Codex CLI `/hooks`");
     }
+  }
+
+  const claudeDetection = detections.find((item) => item.id === "claude-code" && item.installed);
+  if (claudeDetection) {
+    const localMcp = safeInspectLocalMcp("claude-code");
+    console.log("\nclaude-code/");
+    console.log(`  mcp      ${localMcp?.configured ? "configured · waitloop mcp" : "not configured"}`);
   }
 }
 
@@ -228,11 +288,22 @@ function parseInstallTargets(target: string | undefined): InstallTarget[] {
   throw new Error("Target must be `claude-code`, `cursor`, `codex`, or `all`.");
 }
 
+function parseMcpTargets(target: string | undefined): LocalMcpTarget[] {
+  if (target === "all") return ["claude-code", "codex"];
+  if (target === "claude-code" || target === "codex") return [target];
+  throw new Error("MCP target must be `claude-code`, `codex`, or `all`.");
+}
+
 async function commandInstall(target: string | undefined): Promise<void> {
   for (const item of parseInstallTargets(target)) {
     const result = await installTarget(item);
-    console.log(`${result.changed ? "installed" : "already installed"} ${item}`);
+    console.log(`${result.changed ? "installed" : "already installed"} lifecycle · ${item}`);
     console.log(result.path);
+    const mcpTarget = lifecycleMcpTarget(item);
+    if (mcpTarget) {
+      const mcp = installLocalMcp(mcpTarget);
+      console.log(`${mcp.changed ? "installed" : "already installed"} stable MCP · ${mcpTarget} · waitloop mcp`);
+    }
     if (item === "codex") {
       console.log("Codex hook configuration is installed, but Codex still requires review/trust before command hooks run.");
       console.log("Run `waitloop doctor`, then use Codex CLI `/hooks` to review the current definition.");
@@ -243,9 +314,86 @@ async function commandInstall(target: string | undefined): Promise<void> {
 async function commandUninstall(target: string | undefined): Promise<void> {
   for (const item of parseInstallTargets(target)) {
     const result = await uninstallTarget(item);
-    console.log(`${result.changed ? "removed" : "not installed"} ${item}`);
+    console.log(`${result.changed ? "removed" : "not installed"} lifecycle · ${item}`);
     console.log(result.path);
+    const mcpTarget = lifecycleMcpTarget(item);
+    if (mcpTarget) {
+      const mcp = uninstallLocalMcp(mcpTarget);
+      console.log(`${mcp.changed ? "removed" : "not installed"} stable MCP · ${mcpTarget}`);
+    }
   }
+}
+
+async function commandMcp(args: string[]): Promise<void> {
+  const action = args[0];
+  if (!action) return runLocalMcpBridge();
+  if (action === "install") {
+    for (const target of parseMcpTargets(args[1])) {
+      const result = installLocalMcp(target);
+      console.log(`${result.changed ? "installed" : "already installed"} ${target} MCP · waitloop mcp`);
+    }
+    return;
+  }
+  if (action === "uninstall") {
+    for (const target of parseMcpTargets(args[1])) {
+      const result = uninstallLocalMcp(target);
+      console.log(`${result.changed ? "removed" : "not installed"} ${target} MCP`);
+    }
+    return;
+  }
+  if (action === "status") {
+    for (const target of parseMcpTargets(args[1])) {
+      const result = inspectLocalMcp(target);
+      console.log(`${target.padEnd(12)} ${result.configured ? "configured · waitloop mcp" : "not configured"}`);
+    }
+    return;
+  }
+  throw new Error("Usage: waitloop mcp [install|uninstall|status <codex|claude-code|all>]");
+}
+
+function printRoomSummary(value: unknown): void {
+  if (typeof value !== "object" || value === null) {
+    console.log(JSON.stringify(value));
+    return;
+  }
+  const room = value as Record<string, unknown>;
+  console.log("waitloop room\n");
+  console.log(`active    ${room.active === false ? "no" : "yes"}`);
+  if (typeof room.roomId === "string") console.log(`room      ${room.roomId}`);
+  if (typeof room.actorId === "string") console.log(`actor     ${room.actorId}`);
+  if (typeof room.seatId === "string") console.log(`seat      ${room.seatId}${typeof room.relation === "string" ? ` · ${room.relation}` : ""}`);
+  if (typeof room.connected === "boolean") console.log(`connected ${room.connected ? "yes" : "no"}`);
+  if (typeof room.roomExpiresAt === "number") console.log(`expires   ${new Date(room.roomExpiresAt).toISOString()}`);
+}
+
+async function commandRoom(args: string[]): Promise<void> {
+  const action = args[0];
+  const json = hasFlag(args, "--json");
+  if (action === "create") {
+    const result = await createAndActivateHeadlessRoom(optionValue(args, "--url"));
+    if (json) console.log(JSON.stringify(result));
+    else printRoomSummary(result);
+    return;
+  }
+  if (action === "current") {
+    const result = await getActiveRoom();
+    const value = result ?? { version: 1, active: false };
+    if (json) console.log(JSON.stringify(value));
+    else printRoomSummary(value);
+    return;
+  }
+  if (action === "wait") {
+    const timeoutMs = integerOption(args, "--timeout-ms");
+    const result = await callActiveRoomTool("wait_for_turn", timeoutMs === undefined ? {} : { timeoutMs });
+    console.log(json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+    return;
+  }
+  if (action === "leave") {
+    const result = await leaveActiveRoom();
+    console.log(json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+    return;
+  }
+  throw new Error("Usage: waitloop room <create|current|wait|leave> [options]");
 }
 
 async function latestStates(): Promise<LocalTurnState[]> {
@@ -307,7 +455,8 @@ async function main(): Promise<void> {
   }
 
   // Help must always be side-effect free. In particular,
-  // `waitloop install codex --help` must never install a hook.
+  // `waitloop install codex --help` and `waitloop mcp install codex --help`
+  // must never modify another Agent's configuration.
   if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
     help();
     return;
@@ -316,6 +465,8 @@ async function main(): Promise<void> {
   if (command === "init") return commandInit(args.slice(1));
   if (command === "pair") return commandPair(args.slice(1));
   if (command === "join") return commandJoin(args[1], args.slice(2));
+  if (command === "room") return commandRoom(args.slice(1));
+  if (command === "mcp") return commandMcp(args.slice(1));
   if (command === "unpair") return commandUnpair();
   if (command === "doctor") return commandDoctor();
   if (command === "install") return commandInstall(args[1]);

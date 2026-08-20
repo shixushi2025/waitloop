@@ -1,10 +1,8 @@
 # Waitloop CLI
 
-The CLI is the local convenience/integration layer. It owns local config, lifecycle pairing/adapters, diagnostics, and Join exchange. Room/game authority remains server-side.
+The CLI is the local convenience/integration layer. It owns local config, lifecycle pairing/adapters, diagnostics, Join exchange, active Room selection, and the stable local MCP bridge. Room/game authority remains server-side.
 
 ## Install / update
-
-During the alpha channel, use the explicit dist-tag:
 
 ```bash
 npm install -g @waitloop/cli@alpha
@@ -12,7 +10,7 @@ waitloop --version
 waitloop doctor
 ```
 
-`waitloop doctor` checks the published CLI version from the configured Waitloop server's `agent.json`. If the local binary differs, it prints the canonical update command instead of leaving the user to infer which npm tag is current.
+`waitloop doctor` compares the local CLI against `agent.json`, checks server/pairing state, inspects Codex lifecycle hooks, and reports whether stable MCP is configured for detected Codex/Claude Code installations.
 
 Initialize/pair only when lifecycle reporting is desired:
 
@@ -21,9 +19,48 @@ waitloop init --url https://waitloop.run
 waitloop pair
 ```
 
-Exact package version/candidate status is authoritative in `packages/cli/package.json` and `agent.json`.
+CLI help is side-effect free. `waitloop install codex --help` and `waitloop mcp install codex --help` must never modify hooks or MCP configuration.
 
-CLI help is side-effect free. In particular, `waitloop install codex --help` prints help and must never create/modify a hook file.
+## Stable local MCP
+
+Run as an stdio MCP server:
+
+```bash
+waitloop mcp
+```
+
+Install once through the supported harness CLI:
+
+```bash
+waitloop mcp install codex
+waitloop mcp install claude-code
+```
+
+Inspect/remove:
+
+```bash
+waitloop mcp status codex
+waitloop mcp uninstall codex
+```
+
+`waitloop install codex` and `waitloop install claude-code` install both the lifecycle adapter and stable MCP entry. Cursor lifecycle installation remains separate; stdio MCP setup is currently manual where supported.
+
+The stable bridge exposes:
+
+```text
+create_room
+join_room
+get_active_room
+leave_room
+get_turn
+wait_for_turn
+play_move
+comment
+yield_to_bot
+take_control
+```
+
+It reuses server Room/Join HTTP and remote room MCP internally. It never implements game rules or authorization locally.
 
 ## Local files
 
@@ -31,19 +68,24 @@ CLI help is side-effect free. In particular, `waitloop install codex --help` pri
 ~/.waitloop/
 ├── config.json
 ├── joins/
+│   ├── WL-XXXXXXXXXX.json
+│   └── active.json
 └── state/
 ```
 
-Lifecycle device credentials, cached Room Actor credentials, and browser anonymous Actor credentials are different scopes.
+- Join credential files are mode `0600` where supported.
+- `active.json` contains only Join code/server selection, not a duplicated raw credential.
+- Expired Room credentials are ignored/removed and clear stale active selection.
+- Lifecycle, Room Actor, and browser anonymous credentials remain separate scopes.
 
-## Join cache
+## Join and active Room
 
 ```bash
 waitloop join WL-7K4P9Q2MZX
 waitloop join WL-7K4P9Q2MZX --json
 ```
 
-Current Join cache stores the room-scoped credential plus, when returned by the server:
+Default and `--json` output are safe metadata only:
 
 ```text
 roomId
@@ -51,70 +93,70 @@ actorId
 seatId
 relation
 roomExpiresAt
-MCP endpoint/headers
+active
 ```
 
-Human CLI output displays Actor/Seat/relation; `--json` exposes them for an automated harness.
+Use this explicit advanced fallback only when a client cannot run the stable local bridge:
 
-The raw credential is cached privately under `~/.waitloop/joins/<code>.json` so the same Actor can reconnect while the Room remains active. Expired room cache entries are ignored/removed rather than being printed as usable MCP configuration. The Join code itself is one-time and expires much sooner than the Room.
+```bash
+waitloop join WL-7K4P9Q2MZX --raw-mcp
+```
 
-A cached MCP credential is not a global Waitloop identity and is not reused for lifecycle reporting.
+That form exposes remote MCP headers and therefore must not be pasted into prompts, logs, source, or commits.
 
-### Join is not MCP attachment
+### Join is not MCP attachment for raw clients
 
-`waitloop join` claims/caches the room Actor capability and prints its MCP configuration. It does **not** hot-inject a new remote MCP server into an already-running Codex/Claude/Cursor session.
+Join is credential claim/cache plus active Room selection. Raw Join success alone is not MCP connection. The stable local `join_room()` tool and `waitloop room create` immediately make an authenticated gameplay request before reporting `connected: true`.
 
-Therefore:
+The bridge can restart and load the same active Room from private cache until Room expiry.
+
+## Headless Room commands
+
+```bash
+waitloop room create
+waitloop room current
+waitloop room wait --timeout-ms 25000
+waitloop room leave
+```
+
+`room create` uses the existing fully headless `agent-bots` Dou Dizhu mode, internally creates the Room, claims Join, selects it, and authenticates the connected Actor.
+
+`room leave` clears local active selection only. It does not revoke the cached Room credential or mutate the remote game.
+
+## Efficient waiting
+
+Remote and local MCP expose:
 
 ```text
-waitloop join succeeds
-    !=
-Agent is connected to the room
+wait_for_turn(timeoutMs?)
 ```
 
-The room considers the Actor connected only after an authenticated request reaches `/mcp`.
+It returns on:
 
-Until a stable local MCP bridge exists, a harness that cannot add MCP dynamically must use its own supported MCP configuration/reload path, or use raw MCP HTTP for that current task without leaking the cached bearer credential into chat/log output.
+```text
+your_turn
+game_finished
+room_paused
+waiting_for_players
+controller_changed
+timeout
+```
+
+The maximum transport wait is currently 25 seconds. A timeout never auto-passes, changes Controller, or triggers Casual fallback. The Agent may call it again while its requested run remains active.
+
+MCP is not a background scheduler: if an Agent returns its final response, no MCP server can spontaneously restart that Agent run.
 
 ## Recovery workflow
 
-After an Agent owns/controls a Seat:
-
 ```text
-MCP yield_to_bot()
--> CLI/MCP process may leave
--> cached room credential remains
--> reconnect same MCP config
--> MCP get_turn()
--> MCP take_control()
-```
-
-Reconnection does not automatically reclaim Controller authority. The explicit `take_control()` step is intentional.
-
-## Headless control plane
-
-CLI is optional. Agents may use raw HTTP:
-
-```text
-POST /api/v1/rooms
-POST /api/v1/join/<code>/claim
-```
-
-then use MCP. `mode:"agent-bots"` is fully headless.
-
-The CLI does not implement Room rules/capability decisions itself.
-
-## Current MCP tools
-
-```text
-get_turn()
-play_move(expectedRevision, moveId)
-comment(text)
 yield_to_bot()
-take_control()
+-> stable local active Room/credential remains
+-> MCP process or harness may restart
+-> get_active_room() / get_turn()
+-> take_control()
 ```
 
-MCP does not continue running after an Agent returns a final response. Continuous play is an Agent-run behavior, not a CLI background daemon.
+Reconnection restores Actor presence but never silently reclaims Controller authority. Seat owner/hand/role/history remain stable.
 
 ## Lifecycle adapters
 
@@ -124,38 +166,31 @@ waitloop install cursor
 waitloop install codex
 ```
 
-For Codex, `waitloop doctor` additionally checks:
+For Codex, `doctor` checks CLI/hooks availability, installed hook events, and stable MCP registration. Codex itself owns lifecycle command-hook trust; use Codex CLI `/hooks` to review the exact current definition.
 
-- detected Codex CLI version;
-- whether `codex features list` reports hooks available;
-- how many of the four Waitloop lifecycle hook events are installed.
+A Codex Plugin can improve packaging, but cannot bypass command-hook trust. Plugin packaging is not required for the stable local MCP path.
 
-Codex owns hook trust. An installed command hook is still skipped until the exact current definition is reviewed/trusted through Codex's hook review flow (`/hooks` in Codex CLI).
+Lifecycle delivery remains fail-open and excludes prompts, source, repository paths, cwd, transcripts, tool payloads, assistant output, and native session IDs.
 
-A Codex Plugin can improve packaging/distribution of Skill/MCP/hooks, but plugin-bundled command hooks use the same trust-review flow. Plugin packaging is not a substitute for trust.
+## Advanced protocol fallback
 
-Lifecycle delivery stays fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
+Agents without CLI can still use:
 
-## Diagnostics
-
-```bash
-waitloop doctor
-waitloop status
-waitloop config
-waitloop open --print
+```text
+POST /api/v1/rooms
+POST /api/v1/join/<code>/claim
+remote /mcp
 ```
 
-`doctor` is intended to answer the first-line questions before users start manual debugging: current Waitloop CLI, server reachability, pairing status, detected agents, and Codex hook compatibility/installation.
+Those are stable server protocols, but normal CLI/MCP users should not need to hand-build HTTP, load credential JSON, initialize remote MCP, or parse SSE.
 
-## Not implemented yet
+## Remaining gaps
 
-- stable local MCP bridge / automatic harness MCP configuration after Join;
-- `wait_for_turn`/long-poll integration;
-- automatic removal of temporary local MCP config at Room end;
-- account/cross-device identity.
-
-Do not describe those as current behavior.
+- automatic cleanup/revocation policy for expired local Room cache beyond lazy access;
+- automatic stable MCP configuration for additional harnesses such as Cursor/DSH;
+- cross-device/account identity and global Room history;
+- a transport that can resume a completely ended Agent run (outside MCP's scope).
 
 ## Maintenance
 
-CLI/Join changes require synchronized CLI package docs, public Agent surfaces, MCP/protocol/security docs, release metadata, and package validation. `pnpm check:repo-contract` enforces key cross-file invariants.
+CLI/Join/local-MCP changes require synchronized package tests/readme, public Agent surfaces, MCP/protocol/security/architecture/status docs, release metadata, and package/repository contract validation.

@@ -1,12 +1,18 @@
 # Game system
 
-This document defines the durable game/runtime contract. Game legality belongs in pure game packages; Room identity, Actor bindings, readiness, authorization, recovery, and presentation belong in the runtime.
+This document defines the durable game/runtime contract. Game legality belongs in pure game packages; Room identity, Actor bindings, readiness, authorization, recovery, and presentation belong in runtime. Local MCP/CLI are clients, never state authority.
 
 ## Authority model
 
-`packages/game-core` owns generic game-room revision/stale-turn checks. `packages/doudizhu` owns Dou Dizhu rules. `GameRoom` owns runtime identity/capability/persistence around the pure game.
-
-Clients never become state authority.
+```text
+packages/game-core  generic revision/stale-turn contract
+packages/doudizhu   pure Dou Dizhu rules
+GameRoom DO         Room identity, capability, persistence, automation
+Room/Join HTTP      server control protocol
+remote /mcp         authenticated Room Actor gameplay
+local waitloop mcp  stable Agent-facing bridge over HTTP + remote MCP
+Web                  Human presentation
+```
 
 ## Stable Seat vs Actor
 
@@ -19,22 +25,18 @@ Room
   Advisor     bound Actor that can inspect/comment but not play until delegated
 ```
 
-New three-player Dou Dizhu Rooms use `seat-1`, `seat-2`, `seat-3`. These IDs remain stable through Controller changes.
+New Dou Dizhu Rooms use `seat-1`, `seat-2`, `seat-3`. A Seat owns hand, landlord/farmer role, turn position, and history. Controller changes never rewrite that identity.
 
-A Seat owns the game identity: hand, landlord/farmer role, history, and turn position. Actor changes do not rewrite that identity.
-
-Actor ID and Seat ID are identifiers, never authorization secrets.
+Room/Seat/Actor IDs are identifiers, not credentials.
 
 ## Ownership and capabilities
-
-Seats track:
 
 ```text
 ownerActorId
 activeControllerActorId
 ```
 
-Current important capabilities:
+Important capabilities:
 
 ```text
 room:view-public
@@ -48,63 +50,82 @@ room:comment
 
 - Room owner gets `room:manage`.
 - Seat owner keeps `seat:control`.
-- Only active Controller gets `seat:play`.
-- Advisor can inspect/comment on its explicitly bound Seat but cannot play until delegated.
+- only active Controller gets `seat:play`.
+- Advisor gets private inspect/comment only for its bound Seat until delegated.
 
-Server capability checks are authoritative.
-
-## Anonymous Human Actor recovery
-
-Public browser rooms do not require an account.
-
-A browser receives:
-
-```text
-Actor ID      actor_...
-credential    wla_...  (separate secret)
-```
-
-Both travel only in an HttpOnly cookie. The Actor credential digest is stored in each Room where that Actor participates.
-
-The shorter `wl_room_...` viewer cookie authorizes normal Human room operations. If it is lost/expired while the anonymous Actor cookie remains valid, the Room can verify the Actor credential and mint a fresh room viewer credential.
-
-This is browser/device-local anonymous persistence. It is not cross-device identity or a global account database.
-
-## Runtime phases and Actor state
-
-Room phase:
+## Runtime phases and connected readiness
 
 ```text
 waiting_for_players -> playing -> paused -> playing -> finished
 ```
 
-Actor runtime state:
+Actor state:
 
 ```text
 ready | waiting | connecting | connected | disconnected
 ```
 
-The first authenticated MCP request marks a joined connected Actor ready and starts a one-joined-Actor waiting Room.
+Connected flow:
 
-Current fallback/disconnect behavior is explicit; there is no transport idle detector that automatically declares a slow Agent disconnected.
+```text
+Room created
+-> Join claimed
+-> Actor connecting
+-> first authenticated remote MCP request
+-> Actor connected / waiting Room starts
+```
+
+Local `join_room` and `create_room` perform the first authenticated request before reporting connected.
+
+## Stable local Agent bridge
+
+The stable stdio bridge exposes:
+
+```text
+create_room
+join_room
+get_active_room
+leave_room
+get_turn
+wait_for_turn
+play_move
+comment
+yield_to_bot
+take_control
+```
+
+`create_room` currently maps to the existing headless `agent-bots` mode. `join_room` claims the existing Join protocol. Both select a local active Room; all gameplay tools proxy the authoritative remote Room MCP.
+
+The bridge stores no alternate game state. It returns the same server snapshot projection and keeps credentials out of model-visible tool results.
+
+## Efficient waiting
+
+`wait_for_turn(timeoutMs?)` is an authenticated, bounded snapshot wait:
+
+```text
+if current Seat can play     -> your_turn
+if Room terminal             -> game_finished
+if waiting lobby             -> waiting_for_players
+if paused                    -> room_paused
+if Actor lost seat:play      -> controller_changed
+if transport bound reached   -> timeout
+otherwise re-read after ~750 ms
+```
+
+Maximum current wait is 25 seconds. Timeout is not a game mutation and never triggers auto-pass/auto-play/fallback.
+
+A user request for continuous play still requires the Agent harness to keep its current run active and call the tool again after transport timeout.
 
 ## Temporary Bot takeover
 
 An eligible Human/connected-Agent Seat can explicitly hand control to a deterministic temporary Bot.
 
 ```text
-before:
-seat-2
-  owner = actor-codex
-  controller = actor-codex
-
-fallback:
-seat-2
-  owner = actor-codex
-  controller = temporary-bot
+before: owner=Actor A, controller=Actor A
+after:  owner=Actor A, controller=temporary Bot
 ```
 
-Unchanged:
+Preserved:
 
 ```text
 Seat ID
@@ -114,106 +135,93 @@ history
 ownerActorId
 ```
 
-The temporary Bot is an Actor bound to the same Seat and the Seat is temporarily added to deterministic bot automation.
+No elapsed Casual timer triggers takeover.
 
-When the owner is ready again:
-
-```text
-restore owner
-```
-
-removes only the temporary Actor/binding and restores `activeControllerActorId` to the original owner.
-
-No elapsed Casual timer triggers this automatically.
-
-## Connected Actor yield/reconnect/reclaim
-
-MCP Seat owners may call:
+## Yield/reconnect/reclaim
 
 ```text
 yield_to_bot()
+-> active/cached Room credential remains
+-> Agent or bridge may restart
+-> get_active_room() / get_turn()
+-> take_control()
 ```
 
-before stepping away. The same claimed room credential is cached/reconnectable during Room lifetime.
+Reconnect restores presence only. `take_control` is explicit and removes only the temporary Bot Actor/binding.
 
-On reconnect, Actor presence becomes connected again but Controller authority does not silently move away from the temporary Bot. Owner explicitly calls:
+`leave_room` in local MCP clears local active selection only. It is not remote credential revocation.
 
-```text
-take_control()
-```
+## Anonymous Human Actor recovery
 
-This avoids concurrent mutation and makes takeover observable/intentional.
+A browser receives `actor_...` plus separate `wla_...` secret in HttpOnly cookie. Each Room stores only the credential digest.
+
+If the shorter Room viewer cookie is missing, the anonymous Actor credential may mint a fresh viewer credential during Room lifetime. Actor ID alone cannot authenticate. No cross-device account/database is implied.
 
 ## Room and Join lifetime
 
-Current values for new Rooms:
-
 ```text
-Join capability    ~20 minutes, one-time claim
-Room               ~24 hours
-room Actor token   usable for reconnect while Room is active
+Join capability    about 20 minutes, one-time
+Room               about 24 hours
+Room Actor token   reconnectable only while Room active
 ```
 
-Expired Room state is lazily removed when read. Global historical indexing is intentionally not implemented yet.
+GameRoom and CLI cache perform lazy expiry cleanup.
 
-## Human / machine projections
+## Projections
 
 ### Human browser
 
 - viewer-specific private Seat state;
-- no exhaustive machine `legalMoves[]`;
-- `canPlay/canPass/canHint` reflect current Controller authority;
-- Human owner may still see its hand while another Actor controls the Seat.
+- no exhaustive machine legal move list;
+- constrained action flags reflect `seat:play`;
+- owner may still see own hand while delegated.
 
 ### Connected/hosted Actor
 
 - private projection only for bound Seat;
 - server-generated legal move IDs;
-- exact Room revision required for mutation.
+- exact revision required for mutation.
 
-An unrelated Actor never receives another Seat's hidden hand.
+### Local bridge
 
-## Client-neutral Room creation
+- forwards the connected Actor projection unchanged;
+- may add safe local active/connection metadata;
+- never adds credentials or unrelated Seat state.
 
-Web is optional. HTTP/CLI form the control plane; room-scoped MCP is gameplay.
+## Client-neutral control
 
-```http
-POST /api/v1/rooms
-Content-Type: application/json
+Preferred Agent path is local MCP/CLI, but the server protocol remains HTTP:
 
-{"version":1,"gameId":"doudizhu","mode":"agent-bots"}
+```text
+create_room -> POST /api/v1/rooms
+join_room   -> POST /api/v1/join/<code>/claim
 ```
 
-returns Room/Join data. Agent claims Join, then uses `/mcp`.
-
-Do not duplicate Room creation/business rules in Web/CLI/MCP clients.
+This allows Web, CLI, MCP bridge, tests, and advanced clients to reuse one control plane. The remote Room MCP remains room-scoped and cannot bootstrap its own credential.
 
 ## Side-channel comments
 
-`comment(text)` is stored outside game action history and does not change:
-
-- game state;
-- revision;
-- turn;
-- legal moves.
+`comment(text)` is outside game action history and does not change game state, revision, turn, or legal moves.
 
 ## Automated players
 
-Native and temporary rule Bots use authoritative legal moves with no model call. Hosted models receive only their Seat projection/legal moves; provider timeout is infrastructure protection, not a Casual turn timeout.
+Native and temporary Bots use authoritative legal moves with no model call. Hosted models receive only their Seat projection/legal moves. Provider timeout is infrastructure protection, not a Casual turn timeout.
+
+A fully Bot-controlled table may finish within the bounded automated-action budget.
 
 ## Human-visible pacing
 
-Worker/domain logic does not sleep. Browser may replay authoritative history deltas while keeping presentation state distinct from authoritative current turn.
-
-Player rows may expose Seat label, Controller/runtime state, and explicit fallback/restore actions.
+Worker/domain logic does not sleep for presentation. Browser replays authoritative history deltas separately from authoritative current turn.
 
 ## Testing expectations
 
 - rule changes: pure game regression tests;
 - Actor/Seat changes: capability/identity tests;
-- fallback: preserve owner/Seat, remove only temporary Actor, reject native-Bot replacement;
-- recovery: ID alone must not authenticate; credentials required;
-- advisor: private bound-Seat view without play permission;
+- fallback: preserve owner/Seat and remove only temporary Actor;
+- recovery: identifier alone never authenticates;
+- advisor: bound private view without play permission;
+- wait: actionable reasons and timeout bounds, no mutation;
+- local bridge: safe tool list, credential non-disclosure, headless create/join/connect;
 - browser projection: hidden-information non-leakage;
-- stale/out-of-turn/non-controller mutations remain rejected;
-- generic runtime must not contain Dou Dizhu pattern logic.
+- stale/out-of-turn/non-controller moves rejected;
+- generic runtime contains no Dou Dizhu pattern logic.

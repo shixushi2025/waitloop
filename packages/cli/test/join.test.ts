@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { commandJoin } from "../src/join.js";
+import { commandJoin, loadActiveJoinCredential } from "../src/join.js";
 
 const originalFetch = globalThis.fetch;
 const originalJoinDir = process.env.WAITLOOP_JOIN_DIR;
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("waitloop join cache", () => {
-  it("ignores an expired room credential and refreshes the cache", async () => {
+  it("ignores an expired room credential, refreshes it, and selects the fresh room", async () => {
     const root = await mkdtemp(join(tmpdir(), "waitloop-join-"));
     const code = "WL-23456789AB";
     process.env.WAITLOOP_JOIN_DIR = root;
@@ -45,12 +45,13 @@ describe("waitloop join cache", () => {
       }));
 
       const roomExpiresAt = Date.now() + 60_000;
+      const seatToken = "wlseat_fresh_credential_value";
       const fetchMock = vi.fn(async () => new Response(JSON.stringify({
         version: 1,
         code,
         roomId: "room-fresh",
         joinUrl: `https://waitloop.run/join/${code}`,
-        seatToken: "wlseat_fresh_credential_value",
+        seatToken,
         actorId: "connected-agent",
         seatId: "seat-1",
         relation: "controller",
@@ -60,7 +61,7 @@ describe("waitloop join cache", () => {
           type: "http",
           url: "https://waitloop.run/mcp",
           headers: {
-            Authorization: "Bearer wlseat_fresh_credential_value",
+            Authorization: `Bearer ${seatToken}`,
             "X-Waitloop-Room": "room-fresh",
           },
         },
@@ -69,7 +70,8 @@ describe("waitloop join cache", () => {
         headers: { "content-type": "application/json" },
       }));
       globalThis.fetch = fetchMock as typeof fetch;
-      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const logs: string[] = [];
+      vi.spyOn(console, "log").mockImplementation((value?: unknown) => logs.push(String(value ?? "")));
 
       await commandJoin(code, ["--url", "https://waitloop.run", "--json"]);
 
@@ -80,6 +82,11 @@ describe("waitloop join cache", () => {
       };
       expect(cached.roomId).toBe("room-fresh");
       expect(cached.roomExpiresAt).toBe(roomExpiresAt);
+
+      const pointer = JSON.parse(await readFile(join(root, "active.json"), "utf8")) as { code: string };
+      expect(pointer.code).toBe(code);
+      expect((await loadActiveJoinCredential())?.roomId).toBe("room-fresh");
+      expect(logs.join("\n")).not.toContain(seatToken);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

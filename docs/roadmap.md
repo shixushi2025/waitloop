@@ -2,124 +2,125 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current product priority is **stabilization before feature expansion**. Do not interpret this roadmap as permission to keep adding modes/tools while the existing install -> connect -> play -> recover paths still have avoidable friction.
+The current product priority is **stabilization before feature expansion**. Stable local MCP and `wait_for_turn` are now part of the existing path; the next work is proving and hardening that path rather than immediately adding more modes/tools.
 
 ## 1. Current-flow stabilization
 
-Treat real harness use as product regression testing. Repeatedly validate the existing paths on supported environments rather than adding new product concepts first:
+Treat real harness use as product regression testing:
 
 ```text
 Agent discovery
 -> CLI install/update
 -> doctor
--> lifecycle adapter install/trust
--> create/join Room
--> establish MCP connection
--> play/advice/control
--> yield/reconnect/take control
--> finish/expire cleanly
+-> lifecycle adapter install/trust (optional)
+-> stable MCP install
+-> create_room / join_room
+-> wait_for_turn / play / advice
+-> yield / bridge restart / reconnect / take_control
+-> finish / leave / expire cleanly
 ```
 
-Near-term work should prioritize:
+Near-term work:
 
-- verify `agent.md`/`agent.json`/Skill/llms discovery from real Agent browser/search/shell environments and keep usable mirrors/fallbacks;
-- make `waitloop doctor` the first-line diagnosis for stale CLI, Codex hook capability, hook installation, server reachability, and pairing state;
-- keep CLI help/read-only diagnostics side-effect free;
-- make Join-vs-MCP-connected state unambiguous in CLI, docs, Web, and Agent instructions;
-- test continuous-play instructions so an Agent does not return immediately after connection when the user asked it to keep playing;
-- validate Codex Desktop + Codex CLI lifecycle setup, including the externally owned hook trust step;
-- exercise expired Join/Room/reconnect/fallback paths with regression tests;
-- keep public Agent surfaces synchronized with every behavior change.
+- run this entire path repeatedly in real Codex Desktop/CLI and Claude Code environments;
+- verify stdio MCP configuration survives harness restarts and existing definitions are never overwritten;
+- test `waitloop join`, local `join_room`, and raw fallback against expired/already-claimed/missing cache scenarios;
+- test continuous-play instructions over slow Human turns and repeated 25-second transport timeouts;
+- make every common failure return the next corrective action;
+- keep discovery mirrors, `doctor`, Skill, llms, package docs, and machine manifest synchronized;
+- verify Windows/macOS/Linux local file permissions/path/CLI subprocess behavior;
+- add integration/smoke tests against a deployed test Worker without exposing credentials.
 
-Acceptance: a new user/Agent can follow the current supported path without needing product-author knowledge, and common failures explain the next corrective action instead of requiring manual source inspection.
+Acceptance: a new Agent can install once, create/join, remain active through the requested game loop, restart/reconnect, and recover control without manual HTTP, credential-file parsing, or remote MCP JSON-RPC construction.
 
-## 2. Connected Actor runtime efficiency
+## 2. Presence, cleanup, and revocation
 
-Only after the current flow is stable, reduce unavoidable transport friction without changing the domain model:
+Stable bridge/waiting are implemented. Remaining runtime lifecycle work:
 
-- `wait_for_turn` or equivalent server-side long poll so Agents do not repeatedly poll `get_turn`;
-- transport-level disconnect detection and richer presence state, without timer-forced Casual moves;
-- stable local MCP bridge / optional automatic harness configuration so `waitloop join` need not require copying temporary MCP JSON;
-- cleanup of local temporary MCP configuration after Room end;
-- clearer MCP `clientInfo` labeling when the harness exposes it.
+- transport-level disconnect detection and richer presence state without timer-forced Casual moves;
+- explicit connected Actor leave/revoke endpoint and local tool semantics distinct from local-only `leave_room`;
+- proactive cleanup/retention for expired local Join cache and finished/expired Room state beyond lazy access;
+- safe rotation/revocation of one Room Actor credential;
+- clearer MCP `clientInfo` labeling when the harness exposes it;
+- observability for connect/wait/timeout/yield/reconnect/take-control without logging credentials/private hands.
 
-Acceptance: an Agent can join once, wait efficiently, disconnect/reconnect, and explicitly recover control with minimal model/tool churn.
+Acceptance: presence and cleanup are explicit, recoverable, and auditable without hidden game mutations.
 
-A Codex Plugin may be evaluated as a distribution/package improvement after the basic flow is reliable. OpenAI's current plugin model can bundle Skill/MCP/hooks, but plugin-bundled command hooks still use Codex hook review/trust; therefore Plugin work must not be justified as a way to bypass that security step.
+A Codex Plugin may still be evaluated as packaging/distribution improvement after the current CLI/MCP path is reliable. It must not be justified as a way to bypass Codex hook trust.
 
-## 3. Public hardening
+## 3. Additional harness support
 
-Current room creation, hosted-room creation, Join, MCP, comments, recovery, and control operations have baseline rate/expiry protection. Remaining work before broader public exposure:
+- stable MCP installer/doctor support for Cursor when its supported stdio configuration contract is clear;
+- DSH lifecycle and MCP adapter after its contract is understood;
+- other coding agents based on real demand;
+- preserve canonical lifecycle privacy and local credential custody.
 
-- rate limiting for lifecycle ingest and pairing flows;
-- hosted inference budgets/quotas and stronger cost accounting;
-- explicit finished/expired Room cleanup/retention policy beyond lazy expiry;
-- stronger CSP/CORS/security headers and production review;
-- private security-reporting path;
+Acceptance: each harness uses its supported configuration surface and does not require users to edit hidden files manually.
+
+## 4. Public hardening
+
+Current Room creation, Hosted Room creation, Join, MCP, comments, recovery, wait, and control operations have baseline rate/expiry protection. Remaining:
+
+- lifecycle ingest and pairing rate limits;
+- hosted inference budgets/quotas/accounting;
+- stronger CSP/CORS/security-header review;
+- private vulnerability reporting path;
 - persisted Durable Object migration/recovery tests, including legacy participant -> Actor/Seat normalization;
-- observability for rate-limit/recovery/fallback events without logging credentials/private hands.
+- abuse/latency metrics for `wait_for_turn` and local bridge failures;
+- concurrency review if many long waits target the same Room.
 
-Acceptance: abusive anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
+Acceptance: anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
 
-## 4. Dou Dizhu completeness
+## 5. Dou Dizhu completeness
 
-Only fill rule gaps that materially block the current product experience:
+Only fill rule gaps that materially improve the current product experience:
 
 - bidding / rob-landlord;
-- landlord resolution from bidding rather than pre-game random assignment;
-- bidding score/settlement;
-- bomb/rocket multipliers;
+- landlord resolution from bidding rather than random pre-game assignment;
+- settlement and multipliers;
 - spring / anti-spring;
 - regression coverage for the selected rule profile.
 
 Acceptance: rules docs, engine, tests, Human UI, and Agent-visible state agree exactly.
 
-## 5. Multiple connected Actors and richer relationships
+## 6. Multiple connected Actors and richer relationships
 
-Defer until current single-connected-Actor modes are stable. When needed, extend only through the Seat/Actor/Binding/capability model:
+Defer until the single-connected-Actor create/join/wait/recovery path is stable:
 
 - multiple Join capabilities per Room;
 - all-ready gating for multiple connected player Seats;
-- multiple advisors on one Seat;
-- public-only spectator/commentator Actors that cannot see private Seat state;
+- multiple Advisors on one Seat;
+- public-only spectator/commentator Actors;
 - per-turn one-shot delegation leases;
-- explicit leave/revoke flows for individual Actor credentials.
+- independent leave/revoke per Actor.
 
 Do not add these as `participant.kind` special cases.
 
-Acceptance: every connected Actor has independent identity/credential/scope and hidden-information access is explicit.
+Acceptance: each Actor has independent identity/credential/scope and hidden-information access is explicit.
 
-## 6. Cross-device identity only when needed
+## 7. Cross-device identity only when needed
 
-Current Human identity is anonymous and browser/device-local. Do not introduce a database/account system solely for one-Room resume.
+Do not introduce accounts/database solely for one-Room resume.
 
-If product needs become cross-Room/cross-device:
+If cross-Room/cross-device product needs arrive:
 
-- optional account attachment/claim of anonymous Actor identity;
+- optional attachment/claim of anonymous Actor identity;
 - device list/revoke/rotation;
-- Room/history indexing across Durable Objects;
-- explicit profile/nickname/avatar semantics;
-- D1/other global index only when cross-Room querying actually requires it.
-
-Accounts must remain optional for core headless/public game rooms unless product requirements change.
-
-## 7. Additional lifecycle adapters
-
-- DSH after its lifecycle contract is well understood;
-- other coding agents based on real demand;
-- preserve canonical lifecycle semantics and fail-open/privacy behavior.
+- Room/history index across Durable Objects;
+- profile/nickname/avatar semantics;
+- D1/global index only when actual cross-Room queries require it.
 
 ## 8. Arena / benchmark
 
-Arena remains separate from casual waiting and is intentionally low priority while the core waiting/game loop is being stabilized:
+Arena remains separate from Casual waiting and low priority:
 
 - deterministic Agent-vs-Agent runner;
 - reproducible seeds/config;
 - public-decision replay;
 - win/latency/fallback/tool-error metrics;
-- explicit hard turn limits only where benchmark fairness needs them.
+- hard turn limits only for benchmark fairness.
 
-Do not import Arena hard timing or engagement behavior into Casual Human/Agent tables.
+Never import Arena timing/engagement behavior into Casual Human/Agent tables.
 
 ## Maintenance rule
 

@@ -1,7 +1,12 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
-import type { GameRoom } from "./game-room";
+import type { GameRoom, GameRoomSnapshotV1 } from "./game-room";
+import {
+  classifyWaitForTurn,
+  normalizeWaitForTurnTimeout,
+  WAIT_FOR_TURN_POLL_MS,
+} from "./wait-for-turn";
 
 interface McpEnv {
   GAME_ROOMS: DurableObjectNamespace<GameRoom>;
@@ -35,6 +40,10 @@ function sameOriginOrAbsent(request: Request): boolean {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<Response> {
   if (!sameOriginOrAbsent(request)) return new Response("Forbidden origin.", { status: 403 });
 
@@ -57,7 +66,7 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
   }
 
   const handler = createMcpHandler(() => {
-    const server = new McpServer({ name: "waitloop", version: "0.1.0" });
+    const server = new McpServer({ name: "waitloop", version: "0.2.0" });
 
     server.registerTool(
       "get_turn",
@@ -74,10 +83,58 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
     );
 
     server.registerTool(
+      "wait_for_turn",
+      {
+        description:
+          "Wait efficiently until your bound seat can act or the room reaches another actionable state. timeoutMs only bounds this tool call; it never auto-passes, takes over a seat, or changes Casual game state.",
+        inputSchema: z.object({
+          timeoutMs: z.number().int().min(1_000).max(25_000).optional(),
+        }),
+      },
+      async ({ timeoutMs }) => {
+        let boundedTimeout: number;
+        try {
+          boundedTimeout = normalizeWaitForTurnTimeout(timeoutMs);
+        } catch (error) {
+          return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");
+        }
+
+        const startedAt = Date.now();
+        let latest: GameRoomSnapshotV1 | null = null;
+        while (true) {
+          const result = await room.getSnapshotBySeatToken(seatToken);
+          if (!result.ok) return errorResult(result.error.code, result.error.message);
+          latest = rpcValue(result) as GameRoomSnapshotV1;
+          const reason = classifyWaitForTurn(latest);
+          if (reason) {
+            return textResult({
+              version: 1,
+              reason,
+              waitedMs: Date.now() - startedAt,
+              snapshot: latest,
+            });
+          }
+
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= boundedTimeout) {
+            return textResult({
+              version: 1,
+              reason: "timeout",
+              waitedMs: elapsed,
+              stillWaiting: true,
+              snapshot: latest,
+            });
+          }
+          await sleep(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed));
+        }
+      },
+    );
+
+    server.registerTool(
       "play_move",
       {
         description:
-          "Play one server-generated legal move using the exact room revision from get_turn. This succeeds only when this actor is the bound seat's active controller.",
+          "Play one server-generated legal move using the exact room revision from get_turn or wait_for_turn. This succeeds only when this actor is the bound seat's active controller.",
         inputSchema: z.object({
           expectedRevision: z.number().int().nonnegative(),
           moveId: z.string().min(1).max(512),

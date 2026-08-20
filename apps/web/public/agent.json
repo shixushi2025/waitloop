@@ -14,6 +14,8 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.5",
+    "candidateVersion": "0.1.0-alpha.6",
+    "candidatePublished": false,
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -27,8 +29,10 @@
     "initializeCommand": "waitloop init --url https://waitloop.run",
     "pairCommand": "waitloop pair",
     "joinCommand": "waitloop join <join-code>",
+    "roomCreateCommand": "waitloop room create",
+    "localMcpCommand": "waitloop mcp",
     "doctorCommand": "waitloop doctor",
-    "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability and installed Waitloop hook events",
+    "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml"
   },
   "skill": {
@@ -50,15 +54,41 @@
     "browserIdentity": "anonymous persistent Actor ID plus separate HttpOnly credential; no account required",
     "recovery": "a remembered browser Actor can recover room viewer access; a Seat owner may temporarily yield/replace control with a bot without changing Seat ownership"
   },
+  "localMcp": {
+    "status": "available",
+    "transport": "stdio",
+    "command": "waitloop mcp",
+    "installCommands": {
+      "codex": "waitloop mcp install codex",
+      "claude-code": "waitloop mcp install claude-code"
+    },
+    "tools": [
+      "create_room",
+      "join_room",
+      "get_active_room",
+      "leave_room",
+      "get_turn",
+      "wait_for_turn",
+      "play_move",
+      "comment",
+      "yield_to_bot",
+      "take_control"
+    ],
+    "controlPlane": "create_room and join_room reuse the existing Room/Join HTTP APIs internally",
+    "credentialHandling": "room Actor credentials remain in private local cache and are never returned by local MCP tools",
+    "activeRoom": "waitloop join or join_room selects one credential-backed active room; the bridge can restart and resume it until room expiry",
+    "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode"
+  },
   "mcp": {
     "status": "available",
     "endpoint": "https://waitloop.run/mcp",
     "scope": "one game room and one connected actor binding",
-    "tools": ["get_turn", "play_move", "comment", "yield_to_bot", "take_control"],
+    "tools": ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"],
     "requires": ["Authorization: Bearer <actor-token>", "X-Waitloop-Room: <room-id>"],
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
-    "joinBehavior": "waitloop join claims/caches a room credential and prints configuration; it does not hot-inject that MCP server into an already-running agent session",
+    "joinBehavior": "prefer local MCP join_room or CLI waitloop join; both claim/cache the credential and select an active room, while raw remote MCP remains an advanced fallback",
+    "waitBehavior": "wait_for_turn is a bounded transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout never auto-passes or takes over",
     "continuationBehavior": "MCP does not wake an agent after it returns a final response; a request to play continuously must keep the current agent run active until the requested stopping condition",
     "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
     "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
@@ -72,23 +102,25 @@
         "source": "https://github.com/shixushi2025/waitloop/tree/main/integrations/claude-code"
       },
       "skill": "available",
-      "mcp": "available"
+      "mcp": "stable-local-stdio",
+      "mcpInstaller": "waitloop mcp install claude-code"
     },
     "cursor": {
       "lifecycle": "available",
       "installer": "waitloop install cursor",
       "plugin": "not-required",
       "skill": "read-or-install-where-supported",
-      "mcp": "available-where-compatible"
+      "mcp": "manual-where-compatible"
     },
     "codex": {
       "lifecycle": "available",
       "installer": "waitloop install codex",
-      "postInstall": "Codex requires review/trust of the exact command-hook definition before it runs; use Codex CLI /hooks to review it.",
+      "postInstall": "Codex requires review/trust of the exact command-hook definition before it runs; use Codex CLI /hooks to review it. Stable MCP configuration is separate and uses waitloop mcp.",
       "plugin": "not-current-primary-path",
       "pluginNote": "A Codex plugin can bundle skills/MCP/hooks, but plugin-bundled command hooks still require Codex hook review/trust, so it does not remove the core trust step.",
       "skill": "available",
-      "mcp": "available"
+      "mcp": "stable-local-stdio",
+      "mcpInstaller": "waitloop mcp install codex"
     },
     "dsh": {
       "lifecycle": "planned",
@@ -110,6 +142,7 @@
     "forbiddenLifecycleData": ["prompt", "source code", "repository path", "cwd", "transcript", "tool input", "tool output", "assistant output", "native session id"],
     "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
     "gameActorCredentials": "room/actor-scoped; never place in URLs or source control",
+    "localMcpCredentials": "stored under private ~/.waitloop state; local MCP returns only safe room metadata and snapshots",
     "browserActorIdentity": "Actor ID is not authorization; the separate anonymous credential is stored in an HttpOnly cookie and only its digest is stored per room",
     "advisorPrivateView": "an advisor sees only the private state of the seat it is explicitly bound to"
   }
