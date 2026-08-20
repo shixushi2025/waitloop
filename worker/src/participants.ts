@@ -5,10 +5,11 @@ export type GameActorKindV1 =
   | "connected-agent";
 
 export type GameParticipantKindV1 = GameActorKindV1;
-export type GameSeatStatusV1 = "ready" | "waiting" | "connecting" | "connected";
+export type GameSeatStatusV1 = "ready" | "waiting" | "connecting" | "connected" | "disconnected";
 export type GameActorRelationV1 = "controller" | "advisor";
 export type GameCapabilityV1 =
   | "room:view-public"
+  | "room:manage"
   | "seat:view-private"
   | "seat:inspect-legal"
   | "seat:play"
@@ -22,6 +23,7 @@ export interface GameActorV1 {
   id: string;
   kind: GameActorKindV1;
   label: string;
+  temporary?: boolean;
   hostedAgentId?: HostedAgentIdV1;
   provider?: "deepseek" | "openai";
   model?: string;
@@ -52,6 +54,8 @@ export interface GameActorRuntimeV1 {
   status: GameSeatStatusV1;
   statusChangedAt: number;
   connectedAt?: number;
+  disconnectedAt?: number;
+  lastSeenAt?: number;
 }
 
 // Legacy compatibility projection consumed by the current browser while room
