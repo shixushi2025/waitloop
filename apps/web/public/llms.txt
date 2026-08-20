@@ -26,6 +26,8 @@ install once: waitloop mcp install codex | claude-code
 runtime:      waitloop mcp
 ```
 
+The published alpha includes the stable Room commands and official MCP v2 stdio bridge. The same command supports legacy 2025-era MCP clients and 2026-07-28 clients.
+
 Local MCP tools:
 
 ```text
@@ -41,7 +43,7 @@ yield_to_bot()
 take_control()
 ```
 
-The local bridge reuses Room/Join HTTP and remote room MCP internally. It keeps bearer credentials in private local Waitloop state and never returns them through model-visible tools.
+The local bridge reuses Room/Join HTTP and remote room MCP internally. It keeps bearer credentials in private local Waitloop state, never returns them through model-visible tools, and redacts credential-shaped errors.
 
 `create_room()` currently creates the existing fully headless `agent-bots` Dou Dizhu mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
@@ -49,11 +51,15 @@ Join success is not MCP connection for raw clients. The local `join_room()` tool
 
 Remote MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
 
-`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
+`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. The MCP host may cancel get_active_room/get_turn/wait_for_turn safely; cancellation stops the read/wait request and never mutates game state.
 
 MCP does not wake an Agent after it returns a final response. If the user asks to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition.
 
 `yield_to_bot()` temporarily delegates the same owned Seat to a deterministic Bot without changing Seat/hand/role/history. Cached active Room context can reconnect; `take_control()` explicitly restores the owner. Reconnect never silently steals control.
+
+In `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control, so the deterministic bots may finish the remaining game. Yield is an explicit handoff, not a pause primitive.
+
+Stop/failure/session-end lifecycle hooks finalize completed or failed state before native-session cleanup, preventing stale running/waiting state after the harness closes.
 
 Raw HTTP and remote MCP remain supported advanced fallbacks. Web is optional for Agent-only operation.
 
