@@ -6,9 +6,12 @@ This is the compact handoff snapshot of current durable truth.
 
 - Production: `https://waitloop.run`.
 - Cloudflare Worker + Static Assets + Durable Objects.
-- GitHub `main` currently auto-deploys through Cloudflare.
+- Cloudflare retains the native Git integration and production credentials.
 - CI runs on `main`, pull requests, and `fix/**` branches.
-- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio wire behavior, browser JS, Agent discovery, and Wrangler dry-run.
+- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio wire behavior, browser JS, Agent discovery, Wrangler dry-run, and the Cloudflare deployment gate.
+- The final GitHub Actions job is named `ready-to-deploy` and succeeds only after the full `check` job plus a real Checks API gate verification succeed.
+- Cloudflare production builds wait for `ready-to-deploy=success` for the exact `WORKERS_CI_COMMIT_SHA` during dependency installation; failed, cancelled, or timed-out GitHub CI blocks deployment.
+- `pnpm deploy` applies the same production gate before `wrangler deploy`; local and non-production executions skip the production wait.
 
 ## Coding-agent lifecycle
 
@@ -214,7 +217,8 @@ Web can:
 - local MCP credential custody, credential-safe default output, and error redaction;
 - cancellation propagation only for read/wait operations;
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
-- side-effect-free nested CLI help.
+- side-effect-free nested CLI help;
+- fail-closed production deployment when final GitHub CI is not successful.
 
 Rate limiting remains abuse protection, not accounting.
 
@@ -230,7 +234,8 @@ Rate limiting remains abuse protection, not accounting.
 - Codex/Claude MCP installer command/idempotency;
 - wait-for-turn reason/timeout classification;
 - package/onboarding/public-surface consistency;
-- clean npm installation verification during trusted publication.
+- clean npm installation verification during trusted publication;
+- Cloudflare gate selector self-test plus a real post-`check` GitHub Checks API verification job.
 
 ## Known gaps
 
