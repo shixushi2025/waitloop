@@ -102,7 +102,7 @@ clears only local active selection. It does not revoke the remote credential or 
 
 ```text
 Room ID    routing context
-Seat ID    stable room-scoped game position
+Seat ID    stable room-scoped game position (`seat-1`, `seat-2`, `seat-3`)
 Actor ID   runtime identity
 credential authorization secret
 ```
@@ -209,6 +209,8 @@ history
 ```
 
 Reconnect alone never calls `take_control`.
+
+In a fully headless `agent-bots` Room, yielding `seat-1` leaves all three Seats under Bot control. The deterministic bots may therefore finish the remaining game before the Agent reconnects. `yield_to_bot()` is an explicit handoff, not a pause primitive.
 
 ## Agent-run continuation
 
