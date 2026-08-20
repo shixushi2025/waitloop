@@ -28,8 +28,10 @@ export function normalizeWaitForTurnTimeout(value: number | undefined): number {
 
 export function classifyWaitForTurn(snapshot: WaitForTurnSnapshotV1): WaitForTurnReasonV1 | null {
   if (snapshot.roomPhase === "finished" || snapshot.status === "finished") return "game_finished";
-  if (snapshot.roomPhase === "paused" || snapshot.status === "paused") return "room_paused";
+  // A connected-Actor lobby pauses the underlying rules room while exposing a
+  // distinct lifecycle phase. Preserve that more precise reason.
   if (snapshot.roomPhase === "waiting_for_players") return "waiting_for_players";
+  if (snapshot.roomPhase === "paused" || snapshot.status === "paused") return "room_paused";
   if (!snapshot.capabilities.includes("seat:play")) return "controller_changed";
   if (snapshot.currentPlayerId === snapshot.viewerSeatId) return "your_turn";
   return null;
