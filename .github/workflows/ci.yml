@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck and test
         run: pnpm check
 
+      - name: Validate repository contract
+        run: pnpm check:repo-contract
+
       - name: Validate CLI npm package
         run: pnpm check:cli-package
 
