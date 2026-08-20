@@ -1,7 +1,7 @@
 import {
+  finishTurn,
   readHookInput,
   readLatestAgentState,
-  removeTurnState,
   startTurn,
   transitionTurn,
   type LocalTurnState,
@@ -17,22 +17,16 @@ export async function runClaudeCodeHook(): Promise<void> {
     await startTurn("claude-code", claudeSessionId);
     return;
   }
-  if (hook === "SessionEnd") {
-    await removeTurnState("claude-code", claudeSessionId);
-    return;
-  }
   if (hook === "PermissionRequest" || hook === "Notification") {
     await transitionTurn("claude-code", claudeSessionId, "waiting");
     return;
   }
-  if (hook === "Stop") {
-    await transitionTurn("claude-code", claudeSessionId, "completed");
-    await removeTurnState("claude-code", claudeSessionId);
+  if (hook === "Stop" || hook === "SessionEnd") {
+    await finishTurn("claude-code", claudeSessionId, "completed");
     return;
   }
   if (hook === "StopFailure") {
-    await transitionTurn("claude-code", claudeSessionId, "failed");
-    await removeTurnState("claude-code", claudeSessionId);
+    await finishTurn("claude-code", claudeSessionId, "failed");
   }
 }
 
