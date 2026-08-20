@@ -13,9 +13,7 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
-    "version": "0.1.0-alpha.5",
-    "candidateVersion": "0.1.0-alpha.6",
-    "candidatePublished": false,
+    "version": "0.1.0-alpha.6",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -33,7 +31,8 @@
     "localMcpCommand": "waitloop mcp",
     "doctorCommand": "waitloop doctor",
     "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
-    "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml"
+    "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml",
+    "publicationVerification": "alpha.6 was verified from a clean npm installation, including CLI help and the packaged MCP stdio wire protocol"
   },
   "skill": {
     "status": "available",
@@ -52,12 +51,14 @@
     "roomLifetime": "24 hours",
     "joinLifetime": "20 minutes; one-time claim",
     "browserIdentity": "anonymous persistent Actor ID plus separate HttpOnly credential; no account required",
-    "recovery": "a remembered browser Actor can recover room viewer access; a Seat owner may temporarily yield/replace control with a bot without changing Seat ownership"
+    "recovery": "a remembered browser Actor can recover room viewer access; a Seat owner may temporarily yield/replace control with a bot without changing Seat ownership",
+    "headlessYieldBehavior": "in agent-bots mode, yielding seat-1 leaves all Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect"
   },
   "localMcp": {
     "status": "available",
     "transport": "stdio",
     "command": "waitloop mcp",
+    "protocolCompatibility": "official MCP v2 stdio server supports legacy 2025-era clients and 2026-07-28 clients from the same command",
     "installCommands": {
       "codex": "waitloop mcp install codex",
       "claude-code": "waitloop mcp install claude-code"
@@ -75,9 +76,10 @@
       "take_control"
     ],
     "controlPlane": "create_room and join_room reuse the existing Room/Join HTTP APIs internally",
-    "credentialHandling": "room Actor credentials remain in private local cache and are never returned by local MCP tools",
+    "credentialHandling": "room Actor credentials remain in private local cache and are never returned by local MCP tools; credential-shaped local errors are redacted",
     "activeRoom": "waitloop join or join_room selects one credential-backed active room; the bridge can restart and resume it until room expiry",
-    "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode"
+    "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode",
+    "cancellation": "get_active_room, get_turn, and wait_for_turn propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
   },
   "mcp": {
     "status": "available",
@@ -88,7 +90,7 @@
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
     "joinBehavior": "prefer local MCP join_room or CLI waitloop join; both claim/cache the credential and select an active room, while raw remote MCP remains an advanced fallback",
-    "waitBehavior": "wait_for_turn is a bounded transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout never auto-passes or takes over",
+    "waitBehavior": "wait_for_turn is a bounded cancellable transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout or cancellation never auto-passes or takes over",
     "continuationBehavior": "MCP does not wake an agent after it returns a final response; a request to play continuously must keep the current agent run active until the requested stopping condition",
     "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
     "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
@@ -103,14 +105,16 @@
       },
       "skill": "available",
       "mcp": "stable-local-stdio",
-      "mcpInstaller": "waitloop mcp install claude-code"
+      "mcpInstaller": "waitloop mcp install claude-code",
+      "terminalState": "Stop, StopFailure, and SessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "cursor": {
       "lifecycle": "available",
       "installer": "waitloop install cursor",
       "plugin": "not-required",
       "skill": "read-or-install-where-supported",
-      "mcp": "manual-where-compatible"
+      "mcp": "manual-where-compatible",
+      "terminalState": "stop and sessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "codex": {
       "lifecycle": "available",
@@ -120,7 +124,8 @@
       "pluginNote": "A Codex plugin can bundle skills/MCP/hooks, but plugin-bundled command hooks still require Codex hook review/trust, so it does not remove the core trust step.",
       "skill": "available",
       "mcp": "stable-local-stdio",
-      "mcpInstaller": "waitloop mcp install codex"
+      "mcpInstaller": "waitloop mcp install codex",
+      "terminalState": "Stop and SessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "dsh": {
       "lifecycle": "planned",
