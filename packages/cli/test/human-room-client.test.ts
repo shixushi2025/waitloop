@@ -10,6 +10,7 @@ import {
   hintHumanTurn,
   passHumanTurn,
   playHumanCards,
+  reopenHumanGame,
 } from "../src/human-room-client.js";
 
 const originalFetch = globalThis.fetch;
@@ -70,7 +71,7 @@ function createdResponse(roomId: string): Response {
 }
 
 describe("MCP App Human Room client", () => {
-  it("creates a real Human table, persists credentials privately, and never returns them to the model", async () => {
+  it("creates a real Human table while keeping cookies and the UI capability out of model-visible payload", async () => {
     const root = await mkdtemp(join(tmpdir(), "waitloop-app-room-"));
     process.env.WAITLOOP_APP_ROOM_DIR = root;
     const roomId = "room-human-inline";
@@ -93,16 +94,19 @@ describe("MCP App Human Room client", () => {
     }) as typeof fetch;
 
     try {
-      const created = await createHumanGame("https://waitloop.run");
-      expect(created).toMatchObject({
+      const access = await createHumanGame("https://waitloop.run");
+      expect(access.uiToken).toMatch(/^wlui_[a-f0-9]{64}$/);
+      expect(access.payload).toMatchObject({
         version: 1,
         kind: "waitloop.mcp-app.game",
         mode: "human-bots",
         roomId,
       });
-      expect(created.fallback).toMatchObject({ sameRoom: false, inlineUiRequired: true });
-      expect(JSON.stringify(created)).not.toContain("wlview_");
-      expect(JSON.stringify(created)).not.toContain("wla_");
+      expect(access.payload.fallback).toMatchObject({ sameRoom: false, inlineUiRequired: true });
+      const visible = JSON.stringify(access.payload);
+      expect(visible).not.toContain("wlview_");
+      expect(visible).not.toContain("wla_");
+      expect(visible).not.toContain("wlui_");
 
       const files = await readdir(root);
       expect(files).toHaveLength(1);
@@ -110,16 +114,26 @@ describe("MCP App Human Room client", () => {
       const privateState = await readFile(join(root, files[0]!), "utf8");
       expect(privateState).toContain("wlview_");
       expect(privateState).toContain("wla_");
+      expect(privateState).toContain(access.uiToken);
 
-      const refreshed = await getHumanGame(roomId);
-      expect(refreshed.snapshot.revision).toBe(1);
+      const reopened = await reopenHumanGame(roomId);
+      expect(reopened.uiToken).toBe(access.uiToken);
+      expect(reopened.payload.snapshot.revision).toBe(1);
       expect(calls).toHaveLength(2);
+
+      const refreshed = await getHumanGame(roomId, access.uiToken);
+      expect(refreshed.snapshot.revision).toBe(1);
+      expect(calls).toHaveLength(3);
+
+      const wrongToken = `wlui_${"0".repeat(64)}`;
+      await expect(getHumanGame(roomId, wrongToken)).rejects.toThrow(/capability is invalid/);
+      expect(calls).toHaveLength(3);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("proxies Human play, pass, and hint through the stored Room cookies", async () => {
+  it("requires the UI capability before proxying Human play, pass, and hint through private Room cookies", async () => {
     const root = await mkdtemp(join(tmpdir(), "waitloop-app-actions-"));
     process.env.WAITLOOP_APP_ROOM_DIR = root;
     const roomId = "room-human-actions";
@@ -144,10 +158,11 @@ describe("MCP App Human Room client", () => {
     }) as typeof fetch;
 
     try {
-      await createHumanGame("https://waitloop.run");
-      await expect(playHumanCards(roomId, 1, ["c-3-clubs"])).resolves.toMatchObject({ roomId });
-      await expect(passHumanTurn(roomId, 2)).resolves.toMatchObject({ roomId });
-      await expect(hintHumanTurn(roomId, 3, 0)).resolves.toMatchObject({
+      const access = await createHumanGame("https://waitloop.run");
+      const token = access.uiToken;
+      await expect(playHumanCards(roomId, token, 1, ["c-3-clubs"])).resolves.toMatchObject({ roomId });
+      await expect(passHumanTurn(roomId, token, 2)).resolves.toMatchObject({ roomId });
+      await expect(hintHumanTurn(roomId, token, 3, 0)).resolves.toMatchObject({
         roomId,
         hint: { cardIds: ["c-3-clubs"], label: "single 3" },
       });
@@ -156,7 +171,9 @@ describe("MCP App Human Room client", () => {
         { version: 1, expectedRevision: 2 },
         { version: 1, expectedRevision: 3, cursor: 0 },
       ]);
-      await expect(playHumanCards(roomId, 3, ["c-3-clubs", "c-3-clubs"])).rejects.toThrow(/duplicates/);
+      await expect(playHumanCards(roomId, token, 3, ["c-3-clubs", "c-3-clubs"])).rejects.toThrow(/duplicates/);
+      await expect(passHumanTurn(roomId, `wlui_${"f".repeat(64)}`, 3)).rejects.toThrow(/capability is invalid/);
+      expect(actionBodies).toHaveLength(3);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
