@@ -1,7 +1,7 @@
 {
   "name": "@waitloop/cli",
-  "version": "0.1.0-alpha.6",
-  "description": "Waitloop CLI and coding-agent lifecycle adapters.",
+  "version": "0.1.0-alpha.7",
+  "description": "Waitloop CLI, coding-agent lifecycle adapters, and local MCP Apps bridge.",
   "license": "MIT",
   "type": "module",
   "homepage": "https://waitloop.run",
@@ -19,7 +19,8 @@
     "codex",
     "claude-code",
     "cursor",
-    "mcp"
+    "mcp",
+    "mcp-apps"
   ],
   "bin": {
     "waitloop": "dist/index.js"
