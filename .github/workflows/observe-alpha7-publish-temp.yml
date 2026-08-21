@@ -1,0 +1,125 @@
+name: temporary alpha.7 publication observer
+
+on:
+  push:
+    branches: [fix/alpha7-publish-observe]
+
+permissions:
+  contents: write
+  checks: read
+  actions: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TARGET_SHA: 88387ddafbbba215fd2029a69711f943b1504be9
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Observe CI and publication checks
+        run: |
+          if test -f .alpha7-publish-observe.json; then
+            cat .alpha7-publish-observe.json
+            exit 0
+          fi
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const sha = process.env.TARGET_SHA;
+          const headers = {
+            accept: 'application/vnd.github+json',
+            authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            'user-agent': 'waitloop-alpha7-publish-observer',
+            'x-github-api-version': '2026-03-10',
+          };
+          const deadline = Date.now() + 10 * 60 * 1000;
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const terminal = new Set(['success', 'failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale', 'skipped']);
+
+          async function read(url) {
+            const response = await fetch(url, { headers });
+            if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+            return response.json();
+          }
+
+          let snapshot = null;
+          while (Date.now() <= deadline) {
+            const [checksBody, runsBody] = await Promise.all([
+              read(`https://api.github.com/repos/shixushi2025/waitloop/commits/${sha}/check-runs?filter=all&per_page=100`),
+              read(`https://api.github.com/repos/shixushi2025/waitloop/actions/runs?head_sha=${sha}&per_page=100`),
+            ]);
+            const checks = (checksBody.check_runs ?? []).map((run) => ({
+              id: run.id,
+              name: run.name,
+              app: run.app?.slug,
+              status: run.status,
+              conclusion: run.conclusion,
+              startedAt: run.started_at,
+              completedAt: run.completed_at,
+              detailsUrl: run.details_url,
+            }));
+            const runs = (runsBody.workflow_runs ?? []).map((run) => ({
+              id: run.id,
+              name: run.name,
+              event: run.event,
+              status: run.status,
+              conclusion: run.conclusion,
+              headBranch: run.head_branch,
+              headSha: run.head_sha,
+              createdAt: run.created_at,
+              updatedAt: run.updated_at,
+              htmlUrl: run.html_url,
+            }));
+            snapshot = {
+              version: 1,
+              targetSha: sha,
+              observedAt: new Date().toISOString(),
+              checks,
+              runs,
+            };
+            const ciRun = runs.find((run) => run.name === 'ci');
+            const publishRun = runs.find((run) => run.name === 'publish-cli');
+            const ready = checks.find((run) => run.name === 'ready-to-deploy' && run.app === 'github-actions');
+            const publish = checks.find((run) => run.name === 'publish' && run.app === 'github-actions');
+            if (publishRun && terminal.has(publishRun.conclusion)) {
+              snapshot.result = publishRun.conclusion;
+              snapshot.reason = 'publish-workflow-terminal';
+              break;
+            }
+            if (publish && publish.status === 'completed' && terminal.has(publish.conclusion)) {
+              snapshot.result = publish.conclusion;
+              snapshot.reason = 'publish-check-terminal';
+              break;
+            }
+            if (ciRun && terminal.has(ciRun.conclusion) && ciRun.conclusion !== 'success') {
+              snapshot.result = ciRun.conclusion;
+              snapshot.reason = 'ci-workflow-terminal-before-publish';
+              break;
+            }
+            if (ready && ready.status === 'completed' && terminal.has(ready.conclusion) && ready.conclusion !== 'success') {
+              snapshot.result = ready.conclusion;
+              snapshot.reason = 'ready-to-deploy-terminal-before-publish';
+              break;
+            }
+            await sleep(10_000);
+          }
+
+          if (!snapshot) snapshot = { version: 1, targetSha: sha, result: 'observer_error' };
+          if (!snapshot.result) {
+            snapshot.result = 'timeout';
+            snapshot.reason = 'publish-workflow-not-terminal-within-10-minutes';
+            snapshot.observedAt = new Date().toISOString();
+          }
+          fs.writeFileSync('.alpha7-publish-observe.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          console.log(JSON.stringify(snapshot, null, 2));
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .alpha7-publish-observe.json
+          git commit -m "chore: record alpha.7 publication observation"
+          git push origin HEAD:fix/alpha7-publish-observe
