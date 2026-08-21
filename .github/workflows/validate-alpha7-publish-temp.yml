@@ -1,0 +1,72 @@
+name: temporary alpha.7 publication validation
+
+on:
+  push:
+    branches: [fix/cli-alpha7-publish-verify]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stop after result was recorded
+        if: hashFiles('.alpha7-publish-ci.result') != ''
+        run: |
+          cat .alpha7-publish-ci.result
+          exit 0
+
+      - name: Setup pnpm
+        if: hashFiles('.alpha7-publish-ci.result') == ''
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        if: hashFiles('.alpha7-publish-ci.result') == ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run complete checks and persist diagnostics
+        if: hashFiles('.alpha7-publish-ci.result') == ''
+        run: |
+          set +e
+          : > .alpha7-publish-ci.txt
+          overall=0
+          run_check() {
+            label="$1"
+            shift
+            printf '\n===== %s =====\n' "$label" >> .alpha7-publish-ci.txt
+            "$@" >> .alpha7-publish-ci.txt 2>&1
+            rc=$?
+            printf '\nexit=%s\n' "$rc" >> .alpha7-publish-ci.txt
+            if test "$rc" -ne 0; then overall=1; fi
+          }
+
+          run_check "install frozen" pnpm install --frozen-lockfile
+          if test "$overall" -eq 0; then
+            run_check "typecheck and tests" pnpm check
+            run_check "repository contract" pnpm check:repo-contract
+            run_check "CLI package" pnpm check:cli-package
+            run_check "MCP stdio and App wire" pnpm check:mcp-stdio
+            run_check "browser JavaScript" bash -lc "find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check"
+            run_check "Agent discovery" bash -lc "test -s apps/web/public/agent.md && test -s apps/web/public/llms.txt && test -s apps/web/public/skills/waitloop/SKILL.md && node -e \"JSON.parse(require('node:fs').readFileSync('apps/web/public/agent.json', 'utf8'))\""
+            run_check "Worker dry run" pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+            run_check "one-shot marker" bash -lc "test \"$(cat .github/publish-cli-alpha7)\" = '0.1.0-alpha.7'"
+            run_check "publication trigger contract" node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('packages/cli/package.json'));const m=JSON.parse(fs.readFileSync('apps/web/public/agent.json'));if(p.version!=='0.1.0-alpha.7'||m.cli.candidateVersion!==p.version||m.cli.candidatePublished!==false||m.mcpApps.status!=='candidate-alpha.7')process.exit(1)"
+          fi
+
+          test "$overall" -eq 0 && echo passed > .alpha7-publish-ci.result || echo failed > .alpha7-publish-ci.result
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .alpha7-publish-ci.result .alpha7-publish-ci.txt
+          git commit -m "chore: record alpha.7 publication validation"
+          git push origin HEAD:fix/cli-alpha7-publish-verify
+          exit "$overall"
