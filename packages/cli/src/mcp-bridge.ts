@@ -7,6 +7,8 @@ import {
   hintHumanTurn,
   passHumanTurn,
   playHumanCards,
+  reopenHumanGame,
+  type HumanGameAccessV1,
 } from "./human-room-client.js";
 import {
   MCP_APP_MIME_TYPE,
@@ -33,6 +35,12 @@ interface LocalToolDefinition {
   structuredResult?: boolean;
 }
 
+interface UiAccessResult {
+  __waitloopUiAccess: true;
+  payload: Record<string, unknown>;
+  uiToken: string;
+}
+
 const EMPTY_OBJECT_SCHEMA = {
   type: "object",
   properties: {},
@@ -44,8 +52,13 @@ const ROOM_ID_SCHEMA = {
   pattern: "^[A-Za-z0-9._:-]{1,128}$",
 } as const;
 
+const UI_TOKEN_SCHEMA = {
+  type: "string",
+  pattern: "^wlui_[a-f0-9]{64}$",
+} as const;
+
 export const LOCAL_MCP_INSTRUCTIONS =
-  "Waitloop keeps all Room credentials inside the local bridge. When the user wants to click cards and play personally inside the Agent client, call open_game() so an MCP Apps-capable Host can render the Human table. Use create_room() only when the Agent should own seat-1 and play autonomously against bots. Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling. If the user asks the Agent to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout or cancellation never auto-passes, plays, changes Controller, or mutates Casual game state. Hosts without MCP Apps still receive text fallback instructions.";
+  "Waitloop keeps all Room credentials inside the local bridge. When the user wants to click cards and play personally inside the Agent client, call open_game() so an MCP Apps-capable Host can render the Human table. Use create_room() only when the Agent should own seat-1 and play autonomously against bots. Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling. If the user asks the Agent to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout or cancellation never auto-passes, plays, changes Controller, or mutates Casual game state. Hosts without MCP Apps still receive text fallback instructions. Human mutation capability is delivered only to the embedded App through tool-result metadata and is never part of model-visible content.";
 
 export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
   {
@@ -157,8 +170,8 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
     description: "MCP App-only: refresh one private Human table. The model should use open_game(roomId) instead.",
     inputSchema: {
       type: "object",
-      properties: { roomId: ROOM_ID_SCHEMA },
-      required: ["roomId"],
+      properties: { roomId: ROOM_ID_SCHEMA, uiToken: UI_TOKEN_SCHEMA },
+      required: ["roomId", "uiToken"],
       additionalProperties: false,
     },
     uiVisibility: ["app"],
@@ -172,6 +185,7 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
       type: "object",
       properties: {
         roomId: ROOM_ID_SCHEMA,
+        uiToken: UI_TOKEN_SCHEMA,
         expectedRevision: { type: "integer", minimum: 0 },
         cardIds: {
           type: "array",
@@ -181,7 +195,7 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
           items: { type: "string", minLength: 1, maxLength: 128 },
         },
       },
-      required: ["roomId", "expectedRevision", "cardIds"],
+      required: ["roomId", "uiToken", "expectedRevision", "cardIds"],
       additionalProperties: false,
     },
     uiVisibility: ["app"],
@@ -195,9 +209,10 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
       type: "object",
       properties: {
         roomId: ROOM_ID_SCHEMA,
+        uiToken: UI_TOKEN_SCHEMA,
         expectedRevision: { type: "integer", minimum: 0 },
       },
-      required: ["roomId", "expectedRevision"],
+      required: ["roomId", "uiToken", "expectedRevision"],
       additionalProperties: false,
     },
     uiVisibility: ["app"],
@@ -211,10 +226,11 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
       type: "object",
       properties: {
         roomId: ROOM_ID_SCHEMA,
+        uiToken: UI_TOKEN_SCHEMA,
         expectedRevision: { type: "integer", minimum: 0 },
         cursor: { type: "integer", minimum: 0, default: 0 },
       },
-      required: ["roomId", "expectedRevision"],
+      required: ["roomId", "uiToken", "expectedRevision"],
       additionalProperties: false,
     },
     uiVisibility: ["app"],
@@ -224,6 +240,18 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUiAccessResult(value: unknown): value is UiAccessResult {
+  return isRecord(value) && value.__waitloopUiAccess === true && isRecord(value.payload) && typeof value.uiToken === "string";
+}
+
+function uiAccessResult(access: HumanGameAccessV1): UiAccessResult {
+  return {
+    __waitloopUiAccess: true,
+    payload: access.payload as unknown as Record<string, unknown>,
+    uiToken: access.uiToken,
+  };
 }
 
 function requiredString(args: Record<string, unknown>, key: string, maxLength: number): string {
@@ -240,22 +268,34 @@ function requiredRoomId(args: Record<string, unknown>): string {
   return value;
 }
 
+function requiredUiToken(args: Record<string, unknown>): string {
+  const value = requiredString(args, "uiToken", 96);
+  if (!/^wlui_[a-f0-9]{64}$/.test(value)) throw new Error("Interactive UI capability is invalid.");
+  return value;
+}
+
 function requiredRevision(args: Record<string, unknown>): number {
   const value = args.expectedRevision;
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error("expectedRevision must be a non-negative integer.");
   return value as number;
 }
 
-function toolResult(value: unknown, isError = false, structured = false) {
+function toolResult(
+  value: unknown,
+  isError = false,
+  structured = false,
+  resultMeta?: Record<string, unknown>,
+) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     ...(structured && isRecord(value) ? { structuredContent: value } : {}),
+    ...(resultMeta ? { _meta: resultMeta } : {}),
     ...(isError ? { isError: true } : {}),
   };
 }
 
 function redactCredentialText(value: string): string {
-  return value.replace(/\bwl(?:seat|dev|view|room|join|a)_[A-Za-z0-9._~-]+\b/g, "[redacted]");
+  return value.replace(/\bwl(?:seat|dev|view|room|join|ui|a)_[A-Za-z0-9._~-]+\b/g, "[redacted]");
 }
 
 function isAbortError(error: unknown): boolean {
@@ -272,6 +312,13 @@ export function localToolErrorPayload(error: unknown): { code: string; message: 
       code: "cancelled",
       message: "Waitloop tool call was cancelled.",
       nextAction: "Retry when ready; local Room selections are preserved.",
+    };
+  }
+  if (lower.includes("interactive ui capability")) {
+    return {
+      code: "interactive_ui_unauthorized",
+      message,
+      nextAction: "Reopen the table with open_game(roomId) so the Host can issue a fresh App view.",
     };
   }
   if (lower.includes("interactive room") && (lower.includes("not available") || lower.includes("expired"))) {
@@ -329,8 +376,10 @@ async function callLocalTool(name: string, args: Record<string, unknown>, signal
   if (name === "open_game") {
     if (args.gameId !== undefined && args.gameId !== "doudizhu") throw new Error("Only gameId doudizhu is currently supported.");
     if (args.mode !== undefined && args.mode !== "human-bots") throw new Error("open_game currently supports mode human-bots.");
-    if (args.roomId !== undefined) return getHumanGame(requiredRoomId(args), signalForRemoteRead("ui_get_game", signal));
-    return createHumanGame();
+    const access = args.roomId !== undefined
+      ? await reopenHumanGame(requiredRoomId(args), signalForRemoteRead("ui_get_game", signal))
+      : await createHumanGame();
+    return uiAccessResult(access);
   }
   if (name === "create_room") {
     if (args.gameId !== undefined && args.gameId !== "doudizhu") throw new Error("Only gameId doudizhu is currently supported.");
@@ -364,14 +413,19 @@ async function callLocalTool(name: string, args: Record<string, unknown>, signal
   if (name === "comment") return callActiveRoomTool("comment", { text: requiredString(args, "text", 280) });
   if (name === "yield_to_bot") return callActiveRoomTool("yield_to_bot");
   if (name === "take_control") return callActiveRoomTool("take_control");
-  if (name === "ui_get_game") return getHumanGame(requiredRoomId(args), signalForRemoteRead(name, signal));
-  if (name === "ui_play_cards") {
-    return playHumanCards(requiredRoomId(args), requiredRevision(args), args.cardIds);
+  if (name === "ui_get_game") {
+    return getHumanGame(requiredRoomId(args), requiredUiToken(args), signalForRemoteRead(name, signal));
   }
-  if (name === "ui_pass") return passHumanTurn(requiredRoomId(args), requiredRevision(args));
+  if (name === "ui_play_cards") {
+    return playHumanCards(requiredRoomId(args), requiredUiToken(args), requiredRevision(args), args.cardIds);
+  }
+  if (name === "ui_pass") {
+    return passHumanTurn(requiredRoomId(args), requiredUiToken(args), requiredRevision(args));
+  }
   if (name === "ui_hint") {
     return hintHumanTurn(
       requiredRoomId(args),
+      requiredUiToken(args),
       requiredRevision(args),
       args.cursor,
       signalForRemoteRead(name, signal),
@@ -418,6 +472,14 @@ export function createLocalMcpServer(): McpServer {
         try {
           const args = isRecord(rawArgs) ? rawArgs : {};
           const value = await callLocalTool(tool.name, args, ctx.mcpReq.signal);
+          if (isUiAccessResult(value)) {
+            return toolResult(
+              value.payload,
+              false,
+              true,
+              { "waitloop/uiToken": value.uiToken },
+            );
+          }
           return toolResult(value, false, tool.structuredResult === true);
         } catch (error) {
           return toolResult({ error: localToolErrorPayload(error) }, true, tool.structuredResult === true);
