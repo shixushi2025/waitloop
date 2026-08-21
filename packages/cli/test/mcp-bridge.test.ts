@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -39,7 +44,10 @@ describe("stable local MCP bridge", () => {
     const open = LOCAL_MCP_TOOLS.find((tool) => tool.name === "open_game");
     expect(open?.uiVisibility).toEqual(["model", "app"]);
     for (const name of ["ui_get_game", "ui_play_cards", "ui_pass", "ui_hint"]) {
-      expect(LOCAL_MCP_TOOLS.find((tool) => tool.name === name)?.uiVisibility).toEqual(["app"]);
+      const tool = LOCAL_MCP_TOOLS.find((candidate) => candidate.name === name);
+      expect(tool?.uiVisibility).toEqual(["app"]);
+      expect(JSON.stringify(tool?.inputSchema)).toContain("uiToken");
+      expect(JSON.stringify(tool?.inputSchema)).toContain("wlui_");
     }
   });
 
@@ -49,15 +57,19 @@ describe("stable local MCP bridge", () => {
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("create_room()");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("MCP Apps-capable Host");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("credentials inside the local bridge");
+    expect(LOCAL_MCP_INSTRUCTIONS).toContain("tool-result metadata");
+    expect(LOCAL_MCP_INSTRUCTIONS).toContain("never part of model-visible content");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("keep the current Agent run active");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_turn");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("cancellation");
   });
 
-  it("ships a self-contained credential-free MCP App resource", () => {
+  it("ships a self-contained credential-free MCP App resource with valid JavaScript", () => {
     expect(WAITLOOP_GAME_UI_URI).toBe("ui://waitloop/doudizhu/v1");
     expect(MCP_APP_MIME_TYPE).toBe("text/html;profile=mcp-app");
     expect(WAITLOOP_GAME_APP_HTML).toContain("ui/initialize");
+    expect(WAITLOOP_GAME_APP_HTML).toContain("ui/notifications/tool-result");
+    expect(WAITLOOP_GAME_APP_HTML).toContain("waitloop/uiToken");
     expect(WAITLOOP_GAME_APP_HTML).toContain("ui_get_game");
     expect(WAITLOOP_GAME_APP_HTML).toContain("ui_play_cards");
     expect(WAITLOOP_GAME_APP_HTML).toContain("ui_pass");
@@ -65,8 +77,20 @@ describe("stable local MCP bridge", () => {
     expect(WAITLOOP_GAME_APP_HTML).not.toContain("wlview_");
     expect(WAITLOOP_GAME_APP_HTML).not.toContain("wla_");
     expect(WAITLOOP_GAME_APP_HTML).not.toContain("wlseat_");
+    expect(WAITLOOP_GAME_APP_HTML).not.toMatch(/wlui_[a-f0-9]{64}/);
     expect(WAITLOOP_GAME_APP_HTML).not.toMatch(/<script[^>]+src=/i);
     expect(WAITLOOP_GAME_APP_HTML).not.toMatch(/<link[^>]+href=/i);
+
+    const script = /<script>([\s\S]*?)<\/script>/i.exec(WAITLOOP_GAME_APP_HTML)?.[1];
+    expect(script).toBeTruthy();
+    const root = mkdtempSync(join(tmpdir(), "waitloop-mcp-app-js-"));
+    try {
+      const path = join(root, "app.js");
+      writeFileSync(path, script!, "utf8");
+      expect(() => execFileSync(process.execPath, ["--check", path], { stdio: "pipe" })).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("returns corrective actions and redacts credential-shaped error text", () => {
@@ -78,8 +102,13 @@ describe("stable local MCP bridge", () => {
     expect(interactive).toMatchObject({ code: "interactive_room_missing" });
     expect(interactive.nextAction).toContain("open_game()");
 
-    const leaked = localToolErrorPayload(new Error("remote failed for wlseat_super_secret_123"));
+    const unauthorized = localToolErrorPayload(new Error("Interactive UI capability is invalid."));
+    expect(unauthorized).toMatchObject({ code: "interactive_ui_unauthorized" });
+    expect(unauthorized.nextAction).toContain("open_game(roomId)");
+
+    const leaked = localToolErrorPayload(new Error("remote failed for wlseat_super_secret_123 and wlui_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
     expect(leaked.message).not.toContain("wlseat_");
+    expect(leaked.message).not.toContain("wlui_");
     expect(leaked.message).toContain("[redacted]");
 
     const cancelled = new Error("cancelled");
