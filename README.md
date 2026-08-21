@@ -1,6 +1,6 @@
 # Waitloop
 
-**Tiny games while your coding agent runs.**
+**Tiny games while your coding agent runs — including a Human-operated table inside MCP Apps-capable Agent clients.**
 
 ```ts
 while (agent.running) {
@@ -12,7 +12,7 @@ Waitloop is a developer-native waiting layer, not an engagement/casino product. 
 
 ## Current priority
 
-The focus is stabilizing the existing discovery -> install -> create/join -> wait/play -> yield/reconnect path, not continuously adding modes.
+The focus is stabilizing the existing Human MCP App and Agent create/join/wait/play/reconnect paths in real Hosts, not continuously adding modes.
 
 ## Agent entrypoints
 
@@ -46,9 +46,54 @@ Runtime command:
 waitloop mcp
 ```
 
-The bridge exposes:
+### Human wants to play in the Agent client
 
 ```text
+open_game({gameId:"doudizhu", mode:"human-bots"})
+```
+
+On an MCP Apps-capable Host, Waitloop renders:
+
+```text
+ui://waitloop/doudizhu/v1
+text/html;profile=mcp-app
+```
+
+The Human can select cards, play, pass, request a hint, clear, refresh, and use fullscreen where supported.
+
+The Human is the real owner/controller of `seat-1`; this is not an Agent pretending to be the Human. Existing Human Room APIs remain authoritative.
+
+App-only tools:
+
+```text
+ui_get_game
+ui_play_cards
+ui_pass
+ui_hint
+```
+
+Human cookies stay in private `~/.waitloop/app-rooms` state. A random `wlui_` capability is delivered only in tool-result `_meta` to the embedded App, is required by each app-only tool, and is absent from model-visible content.
+
+If the active Host does not support MCP Apps, Waitloop returns an explicit fallback. The standalone Web URL starts a separate browser-controlled game; it does not transfer the private inline Room.
+
+### Agent should play autonomously
+
+```text
+create_room({gameId:"doudizhu", mode:"agent-bots"})
+```
+
+This preserves the existing Agent-owned headless flow:
+
+```text
+seat-1 Agent
+seat-2 Bot
+seat-3 Bot
+```
+
+### Full model-visible local surface
+
+```text
+open_game()
 create_room()
 join_room(code)
 get_active_room()
@@ -61,9 +106,9 @@ yield_to_bot()
 take_control()
 ```
 
-It reuses the existing Room/Join HTTP control plane and remote Room MCP internally. Room credentials stay in private local cache and are not returned through model-visible tools.
+The bridge reuses existing Human Room HTTP, Room/Join HTTP, and remote Room MCP. Raw credentials are not returned through model-visible tools.
 
-CLI equivalents:
+CLI Agent-Room equivalents:
 
 ```bash
 waitloop room create
@@ -77,7 +122,7 @@ Default Join output is credential-safe. `--raw-mcp` remains an explicit advanced
 
 ## Lifecycle integration
 
-Lifecycle reporting is optional and separate from game MCP:
+Lifecycle reporting is optional and separate from Agent/Human game credentials:
 
 ```bash
 waitloop init --url https://waitloop.run
@@ -85,7 +130,7 @@ waitloop pair
 waitloop install codex
 ```
 
-`waitloop install codex`/`claude-code` also configure stable MCP. Codex lifecycle command hooks remain subject to Codex's own `/hooks` review/trust boundary. Plugin packaging cannot bypass that trust requirement.
+`waitloop install codex`/`claude-code` also configure stable MCP. Codex lifecycle command hooks remain subject to Codex's own `/hooks` review/trust boundary. Plugin packaging cannot bypass that requirement.
 
 ## Game identity
 
@@ -110,13 +155,13 @@ companion-agent
 agent-bots
 ```
 
-`agent-bots` is fully headless; local `create_room()` uses that existing mode.
+`open_game()` presents existing Human `bots` mode through an MCP App. `create_room()` uses existing fully headless `agent-bots` mode.
 
-## Efficient play and recovery
+## Efficient Agent play and recovery
 
-Remote/local MCP provide `wait_for_turn()`. It returns on turn, finish, lobby, pause, Controller change, or a bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
+Remote/local Agent MCP provide `wait_for_turn()`. It returns on turn, finish, lobby, pause, Controller change, or a bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
 
-MCP is request/response participation and cannot wake an Agent after a final reply. A request to play until finished must keep the current Agent run active through:
+MCP cannot wake an Agent after a final reply. A request for the Agent to play until finished must keep the current run active:
 
 ```text
 wait_for_turn()
@@ -126,6 +171,8 @@ wait_for_turn()
 -> game_finished
 ```
 
+Human-operated `open_game()` is different: after render, the Human drives the game by clicking.
+
 Connected Seat owners can explicitly:
 
 ```text
@@ -134,17 +181,20 @@ yield_to_bot()
 take_control()
 ```
 
-Seat owner, ID, hand, role, and history remain unchanged. Reconnect never silently steals control.
+Seat owner, ID, hand, role, and history remain unchanged. Reconnect never silently steals control. In `agent-bots`, yielding may let all three Bots finish the game.
 
 ## Safety baseline
 
 - 16 KiB JSON body limit;
 - Cloudflare Room-create and tighter Hosted Room-create limits;
-- per-Room/per-Actor Join/MCP/comment/control/recovery limits;
+- per-Room/per-Actor Join/MCP/comment/control/recovery/Human mutation limits;
 - one-time ~20 minute Join codes;
 - ~24 hour active Rooms;
 - hashed server credentials;
-- local MCP credential custody;
+- private local Agent credential and Human cookie custody;
+- UI-only `wlui_` capability in result `_meta`, absent from model content;
+- app-only Human tools requiring that capability;
+- self-contained MCP App with no direct credentialed network traffic;
 - capability/revision checks for every mutation;
 - hidden-information projections and negative tests.
 
@@ -157,12 +207,12 @@ Also included:
 - Claude Code/Cursor/Codex lifecycle adapters;
 - deterministic Bots + configurable Hosted Agent Seats;
 - server-authoritative Dou Dizhu with random landlord until bidding is implemented;
-- companion advice/comments and Human/Agent Controller switching;
+- companion advice/comments and Human/Agent Controller switching in standalone Web;
 - browser Room recovery and temporary Bot fallback;
-- GitHub `main` -> Cloudflare auto deployment;
-- strict CI plus repository/onboarding contracts.
+- CI-gated Cloudflare production deployment;
+- strict CI plus repository/onboarding/MCP Apps contracts.
 
-See [`docs/status.md`](docs/status.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/README.md`](docs/README.md).
+See [`docs/status.md`](docs/status.md), [`docs/architecture.md`](docs/architecture.md), [`docs/mcp.md`](docs/mcp.md), and [`docs/README.md`](docs/README.md).
 
 Repository-editing Agents must follow [`AGENTS.md`](AGENTS.md).
 
@@ -173,6 +223,7 @@ pnpm install --frozen-lockfile
 pnpm check
 pnpm check:repo-contract
 pnpm check:cli-package
+pnpm check:mcp-stdio
 pnpm dev
 ```
 
