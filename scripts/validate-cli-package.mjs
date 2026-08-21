@@ -24,6 +24,9 @@ if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org/") fail(
 if (packageJson.repository?.url !== "git+https://github.com/shixushi2025/waitloop.git") {
   fail("repository.url must use the normalized canonical GitHub repository URL");
 }
+if (!Array.isArray(packageJson.keywords) || !packageJson.keywords.includes("mcp-apps")) {
+  fail("package keywords must advertise MCP Apps support");
+}
 
 const prerelease = packageJson.version.match(/-([0-9A-Za-z-]+)/)?.[1];
 const expectedDistTag = prerelease ? prerelease.split(".")[0] : "latest";
@@ -41,6 +44,8 @@ if (agentManifest.cli?.published === false && agentManifest.cli.version !== pack
 if (agentManifest.cli?.candidateVersion !== undefined && agentManifest.cli.candidateVersion !== packageJson.version) {
   fail("agent.json candidateVersion is out of sync with package.json");
 }
+if (agentManifest.mcpApps?.resourceUri !== "ui://waitloop/doudizhu/v1") fail("agent.json MCP App resource is missing");
+if (agentManifest.mcpApps?.mimeType !== "text/html;profile=mcp-app") fail("agent.json MCP App MIME type is missing");
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const packOutput = execFileSync(
@@ -55,7 +60,15 @@ if (!Array.isArray(packed) || packed.length !== 1 || !Array.isArray(packed[0]?.f
 }
 
 const files = new Set(packed[0].files.map((file) => file.path));
-for (const required of ["package.json", "README.md", "LICENSE", "dist/index.js"]) {
+for (const required of [
+  "package.json",
+  "README.md",
+  "LICENSE",
+  "dist/index.js",
+  "dist/mcp-bridge.js",
+  "dist/mcp-app.js",
+  "dist/human-room-client.js",
+]) {
   if (!files.has(required)) fail(`packed tarball is missing ${required}`);
 }
 for (const path of files) {
@@ -67,6 +80,21 @@ for (const path of files) {
 const builtIndex = resolve(root, "packages/cli/dist/index.js");
 const builtSource = readFileSync(builtIndex, "utf8");
 if (!builtSource.startsWith("#!/usr/bin/env node")) fail("dist/index.js is missing its executable shebang");
+
+const builtApp = readFileSync(resolve(root, "packages/cli/dist/mcp-app.js"), "utf8");
+for (const needle of [
+  "ui://waitloop/doudizhu/v1",
+  "text/html;profile=mcp-app",
+  "ui/initialize",
+  "waitloop/uiToken",
+  "ui_play_cards",
+]) {
+  if (!builtApp.includes(needle)) fail(`built MCP App is missing ${needle}`);
+}
+if (/wlui_[a-f0-9]{64}/.test(builtApp)) fail("built MCP App contains a concrete UI capability");
+if (builtApp.includes("wlview_") || builtApp.includes("wlseat_") || builtApp.includes("wla_")) {
+  fail("built MCP App contains a Room credential prefix");
+}
 
 const versionOutput = execFileSync(process.execPath, [builtIndex, "--version"], {
   cwd: root,
@@ -90,4 +118,4 @@ try {
   rmSync(helpRoot, { recursive: true, force: true });
 }
 
-console.log(`@waitloop/cli@${packageJson.version} package validation passed (${files.size} files).`);
+console.log(`@waitloop/cli@${packageJson.version} package validation passed (${files.size} files, MCP App included).`);

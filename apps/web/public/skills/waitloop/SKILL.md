@@ -1,11 +1,11 @@
 ---
 name: waitloop
-description: Install and use Waitloop lifecycle integration plus the stable local MCP bridge to create, join, wait, play, advise, yield, reconnect, and recover a room-scoped game Actor.
+description: Install and use Waitloop lifecycle integration, the stable local MCP bridge, Human-operated MCP Apps, and Agent-owned game Rooms.
 ---
 
 # Waitloop
 
-Use this skill when the user asks to install, configure, diagnose, create, join, advise, comment, play continuously, yield, reconnect, or resume through Waitloop.
+Use this skill when the user asks to install, configure, diagnose, open a clickable game, create an Agent-owned game, join, advise, comment, play continuously, yield, reconnect, or resume through Waitloop.
 
 Canonical guide: https://waitloop.run/agent.md
 Machine manifest: https://waitloop.run/agent.json
@@ -23,7 +23,7 @@ Controller Actor currently allowed to play a Seat
 Advisor    bound Actor that may inspect/comment but not play until delegated
 ```
 
-Identifier is not credential. Lifecycle and game credentials are separate scopes.
+Identifier is not credential. Lifecycle, Agent Room, Human Room, and MCP App capabilities are separate scopes.
 
 ## Install and diagnose
 
@@ -33,7 +33,7 @@ waitloop --version
 waitloop doctor
 ```
 
-The published alpha includes the stable Room commands and official MCP v2 stdio bridge. The same `waitloop mcp` command supports legacy 2025-era clients and 2026-07-28 clients.
+The published alpha provides the stable Room commands and official MCP v2 stdio bridge. The same `waitloop mcp` command supports legacy 2025-era clients and 2026-07-28 clients.
 
 Install the stable MCP once:
 
@@ -42,15 +42,84 @@ waitloop mcp install codex
 waitloop mcp install claude-code
 ```
 
-`waitloop install codex` or `waitloop install claude-code` installs both the lifecycle adapter and stable local MCP entry. Codex command hooks still require review/trust in Codex CLI `/hooks`.
+`waitloop install codex` or `waitloop install claude-code` installs both lifecycle integration and the stable local MCP entry. Codex command hooks still require review/trust in Codex CLI `/hooks`. Plugin packaging does not remove that trust boundary.
 
-Plugin packaging may improve distribution, but does not remove Codex command-hook trust.
+## First decide who should play
 
-## Prefer local MCP tools
+### Human wants clickable controls inside the Agent client
 
-The Agent-facing bridge is `waitloop mcp`. It keeps Room credentials local and exposes:
+Call:
 
 ```text
+open_game({"gameId":"doudizhu","mode":"human-bots"})
+```
+
+Use `open_game()` when the user says “I want to play”, “let me choose the cards”, “open the UI”, or otherwise requests direct Human operation.
+
+On an MCP Apps-capable Host, Waitloop links the result to:
+
+```text
+ui://waitloop/doudizhu/v1
+text/html;profile=mcp-app
+```
+
+The Human can select cards, play, pass, request a hint, clear, refresh, and use fullscreen where the Host permits it.
+
+The embedded App may call these app-only tools:
+
+```text
+ui_get_game
+ui_play_cards
+ui_pass
+ui_hint
+```
+
+Do not call them as the model. They require a private `wlui_` capability delivered only in tool-result `_meta` to the embedded App. It is absent from model-visible text and structured content.
+
+If the active Host does not render or operate MCP Apps, say so. The returned fallback can open `https://waitloop.run/game.html` to start a **separate** browser-controlled game. Do not claim it resumes the private inline Room. `create_room()` remains the alternative when the Agent should play.
+
+To reopen a still-valid inline Room in a new tool result:
+
+```text
+open_game({"roomId":"<room-id>"})
+```
+
+### Agent should play autonomously
+
+Call:
+
+```text
+create_room({"gameId":"doudizhu","mode":"agent-bots"})
+```
+
+This creates:
+
+```text
+seat-1 Agent
+seat-2 deterministic Bot
+seat-3 deterministic Bot
+```
+
+Use `get_turn`, `wait_for_turn`, and `play_move`; do not pretend the Human has clickable control over this Agent-owned Seat.
+
+### Agent joins an existing Room
+
+```text
+join_room({"code":"WL-7K4P9Q2MZX"})
+```
+
+CLI equivalent:
+
+```bash
+waitloop join WL-7K4P9Q2MZX
+```
+
+Join is credential claim/cache plus active Agent-Room selection. It does **not** mean an arbitrary raw MCP client is connected. The local `join_room` authenticates a gameplay request before reporting `connected: true`.
+
+## Model-visible local tools
+
+```text
+open_game()
 create_room()
 join_room(code)
 get_active_room()
@@ -63,34 +132,11 @@ yield_to_bot()
 take_control()
 ```
 
-The bridge internally reuses Room/Join HTTP plus remote room MCP. A normal Agent should not manually construct HTTP requests, read cached credential JSON, initialize remote MCP, or parse SSE.
+The bridge internally reuses Human Room HTTP, Room/Join HTTP, and remote Room MCP. A normal Agent should not manually construct HTTP, read cached credential JSON, initialize remote MCP, or parse SSE.
 
-## Create or join
+## Continuous Agent play
 
-Create the existing fully headless Agent-vs-bots mode:
-
-```text
-create_room({"gameId":"doudizhu","mode":"agent-bots"})
-```
-
-Join a supplied Room:
-
-```text
-join_room({"code":"WL-7K4P9Q2MZX"})
-```
-
-CLI equivalents:
-
-```bash
-waitloop room create
-waitloop join WL-7K4P9Q2MZX
-```
-
-Join is credential claim/cache plus active-Room selection. `join_room` also authenticates a gameplay request before reporting `connected: true`. Default CLI and `--json` output are credential-safe; use `--raw-mcp` only for an explicit advanced fallback.
-
-## Normal continuous play
-
-MCP does not wake an Agent after it sends a final answer. When the user asks to keep playing or finish the game, keep the current Agent run active:
+MCP does not wake an Agent after it sends a final answer. When the user asks the **Agent** to keep playing or finish the game, keep the current Agent run active:
 
 ```text
 loop:
@@ -108,9 +154,9 @@ loop:
 
 `timeoutMs` bounds one transport wait only. It never auto-passes, changes Controller, or replaces a slow Casual Agent.
 
-The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`; cancellation is propagated through the read/wait request and never mutates game state. Mutation-capable calls are not abandoned mid-flight through propagated network cancellation, so refresh state before retrying after an uncertain transport failure.
+The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`; cancellation propagates through the read/wait request and never mutates game state. Mutation-capable calls are not abandoned mid-flight, so refresh state before retrying after an uncertain transport failure.
 
-If the user asks only to connect or verify, one `join_room`/`get_turn` result may be enough.
+Human-operated `open_game()` is different: once the App renders, the Human drives moves by clicking. Do not run the Agent gameplay loop on the Human's behalf unless the user explicitly changes intent.
 
 ## Gameplay rules
 
@@ -119,6 +165,7 @@ If the user asks only to connect or verify, one `join_room`/`get_turn` result ma
 3. Use the exact current revision and a server-generated move ID.
 4. On stale state, call `get_turn()` or `wait_for_turn()` again.
 5. Advisors may inspect/comment on their explicitly bound Seat but cannot play until delegated.
+6. Never use app-only Human tools without the Host-provided App capability.
 
 ## Yield and reconnect
 
@@ -133,17 +180,17 @@ yield_to_bot()
 
 Seat ID, owner, hand, role, and history remain stable. Reconnection never silently steals control from the temporary Bot.
 
-In `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect. `yield_to_bot()` is an explicit handoff, not a pause primitive.
+In `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect. It is an explicit handoff, not a pause primitive.
 
-`leave_room()` clears only local active selection; it does not revoke the cached credential or mutate the game.
+`leave_room()` clears only local Agent-Room selection; it does not revoke the cached credential or mutate the game. Human MCP App Rooms are stored separately under `~/.waitloop/app-rooms`.
 
 ## Lifecycle terminal state
 
-Stop, failure, and session-end hooks finalize the latest lifecycle state before native-session cleanup. A closed harness should therefore remain `completed` or `failed`, not stale `running`/`waiting`.
+Stop, failure, and session-end hooks finalize the latest lifecycle state before native-session cleanup. A closed harness should remain `completed` or `failed`, not stale `running`/`waiting`.
 
 ## Advanced fallback
 
-Without the local bridge, raw clients may use:
+Without the local bridge, raw Agent clients may use:
 
 ```text
 POST https://waitloop.run/api/v1/rooms
@@ -151,12 +198,16 @@ POST https://waitloop.run/api/v1/join/<code>/claim
 https://waitloop.run/mcp
 ```
 
-Remote MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield_to_bot`, and `take_control`. Keep all bearer credentials out of prompts, logs, source, and commits.
+Remote Room MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield_to_bot`, and `take_control`. The Human MCP App is local-bridge functionality and is not exposed by remote Room MCP.
 
 ## Security and privacy
 
 - Actor/Seat/Room IDs do not authorize access.
-- Local MCP never returns raw Room credentials to the model and redacts credential-shaped errors.
+- Local MCP never returns raw Agent Room credentials to the model and redacts credential-shaped errors.
+- Human Room cookies stay in private local state.
+- The `wlui_` App capability is sent only through result `_meta` to the embedded App.
+- App-only Human mutation tools require that capability.
+- The App is self-contained and makes no direct credentialed network requests.
 - Respect `room:manage`, `seat:control`, and `seat:play` capabilities.
 - Casual elapsed time alone never authorizes fallback.
 - Lifecycle reporting excludes prompt, source, repository, cwd, transcript, tool, assistant, and native-session content.

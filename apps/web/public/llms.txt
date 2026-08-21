@@ -1,6 +1,6 @@
 # Waitloop
 
-> Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; games fill short waits; work takes priority again when the agent needs attention.
+> Developer-native waiting layer for coding agents. Hooks report minimal lifecycle state; Humans can operate an MCP App table; Agents can own game Seats; work takes priority again when the agent needs attention.
 
 Canonical guide: https://waitloop.run/agent.md
 Guide mirror (raw GitHub): https://raw.githubusercontent.com/shixushi2025/waitloop/main/apps/web/public/agent.md
@@ -9,6 +9,7 @@ Machine manifest: https://waitloop.run/agent.json
 Skill: https://waitloop.run/skills/waitloop/SKILL.md
 Local MCP command: waitloop mcp
 Remote room MCP: https://waitloop.run/mcp
+Standalone Human table: https://waitloop.run/game.html
 Room API fallback: https://waitloop.run/api/v1/rooms
 Join pattern: https://waitloop.run/join/<join-code>
 CLI install/update: npm install -g @waitloop/cli@alpha
@@ -19,18 +20,52 @@ If an Agent browser blocks direct navigation to agent.md, use a declared mirror 
 
 Seat != Actor != Controller. IDs are not credentials. Controllers play; Advisors may inspect/comment only on their explicitly bound Seat until delegated.
 
-Primary Agent path:
+Primary setup:
 
 ```text
 install once: waitloop mcp install codex | claude-code
 runtime:      waitloop mcp
 ```
 
-The published alpha includes the stable Room commands and official MCP v2 stdio bridge. The same command supports legacy 2025-era MCP clients and 2026-07-28 clients.
+The bridge uses the official MCP v2 stdio server entry and supports legacy 2025-era clients and 2026-07-28 clients.
 
-Local MCP tools:
+Choose the correct game entry:
 
 ```text
+open_game()
+  Human plays by clicking an inline MCP App
+
+create_room()
+  Agent owns seat-1 and plays autonomously against two bots
+
+join_room(code)
+  Agent claims and joins an existing room-scoped Actor capability
+```
+
+When the Human says “I want to play”, “open the UI”, or “let me choose cards”, call:
+
+```text
+open_game({"gameId":"doudizhu","mode":"human-bots"})
+```
+
+The result links to:
+
+```text
+ui://waitloop/doudizhu/v1
+text/html;profile=mcp-app
+MCP Apps protocol 2026-01-26
+```
+
+On an MCP Apps-capable Host, the embedded Human table supports card selection, play, pass, hint, clear, refresh, and fullscreen where allowed. The App uses app-only tools `ui_get_game`, `ui_play_cards`, `ui_pass`, and `ui_hint`.
+
+Human Room cookies stay in private `~/.waitloop/app-rooms` state. A high-entropy `wlui_` capability is delivered only in tool-result `_meta` to the embedded App, is required by every app-only tool, and is absent from model-visible text and structuredContent. The App is self-contained and performs no direct credentialed network requests.
+
+Do not claim that every Codex, Claude, Cursor, terminal, or desktop surface renders MCP Apps. The active Host must read the linked `ui://` resource, render the MCP App MIME type, forward result `_meta`, and proxy App `tools/call` requests. If it cannot, say so. The returned web link starts a separate browser-controlled game; it does not resume the private inline Room.
+
+Model-visible local tools:
+
+```text
+open_game()
 create_room()
 join_room(code)
 get_active_room()
@@ -43,24 +78,18 @@ yield_to_bot()
 take_control()
 ```
 
-The local bridge reuses Room/Join HTTP and remote room MCP internally. It keeps bearer credentials in private local Waitloop state, never returns them through model-visible tools, and redacts credential-shaped errors.
-
-`create_room()` currently creates the existing fully headless `agent-bots` Dou Dizhu mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
+`create_room()` creates the fully headless `agent-bots` mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
 Join success is not MCP connection for raw clients. The local `join_room()` tool performs the authenticated connection check before reporting connected. Default CLI/JSON output is credential-safe; `--raw-mcp` is an explicit advanced fallback.
 
-Remote MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().
+Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control(). Remote Room MCP does not host the Human MCP App; the local bridge owns that private session.
 
 `wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. The MCP host may cancel get_active_room/get_turn/wait_for_turn safely; cancellation stops the read/wait request and never mutates game state.
 
-MCP does not wake an Agent after it returns a final response. If the user asks to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition.
+MCP does not wake an Agent after it returns a final response. If the user asks the Agent to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition. Human-operated `open_game()` is driven by clicks instead of that Agent loop.
 
-`yield_to_bot()` temporarily delegates the same owned Seat to a deterministic Bot without changing Seat/hand/role/history. Cached active Room context can reconnect; `take_control()` explicitly restores the owner. Reconnect never silently steals control.
-
-In `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control, so the deterministic bots may finish the remaining game. Yield is an explicit handoff, not a pause primitive.
+`yield_to_bot()` temporarily delegates the same owned Seat to a deterministic Bot without changing Seat/hand/role/history. Cached active Agent Room context can reconnect; `take_control()` explicitly restores the owner. In `agent-bots`, yielding `seat-1` may let all three bots finish the game; yield is an explicit handoff, not a pause.
 
 Stop/failure/session-end lifecycle hooks finalize completed or failed state before native-session cleanup, preventing stale running/waiting state after the harness closes.
 
-Raw HTTP and remote MCP remain supported advanced fallbacks. Web is optional for Agent-only operation.
-
-Codex lifecycle command hooks still require Codex review/trust. Stable MCP configuration and lifecycle hooks are separate integrations/security scopes. Plugin packaging cannot bypass hook trust.
+Codex lifecycle command hooks still require Codex review/trust. Stable MCP, MCP Apps, and lifecycle hooks are separate integration/security scopes. Plugin packaging cannot bypass hook trust.

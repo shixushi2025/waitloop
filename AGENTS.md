@@ -18,7 +18,7 @@ Do not reconstruct current behavior from old PRs/commits/superseded design notes
 
 Waitloop is a waiting layer for coding agents, not an engagement product. Coding-work attention always outranks the game.
 
-Current priority is stabilization of existing create/join/wait/play/recovery flow before feature expansion.
+Current priority is stabilization of existing Human MCP App and Agent create/join/wait/play/recovery flows before feature expansion.
 
 ## Architecture invariant
 
@@ -26,13 +26,14 @@ Current priority is stabilization of existing create/join/wait/play/recovery flo
 packages/protocol       lifecycle contracts
 packages/game-core      pure game-agnostic contracts
 packages/doudizhu       pure Dou Dizhu rules
-packages/cli            local config, lifecycle install, active Room, stable stdio MCP
+packages/cli            local config, lifecycle install, Agent Room cache,
+                        Human App Room cache, stable stdio MCP + MCP App resource
 integrations/*          vendor lifecycle adapters
-worker/*                HTTP control plane, DO runtime, remote MCP, hosted inference
-apps/web                 Human presentation + public Agent surfaces
+worker/*                HTTP control plane, DO runtime, remote Agent MCP, hosted inference
+apps/web                 standalone Human presentation + public Agent surfaces
 ```
 
-Web/CLI/local MCP/raw HTTP/remote MCP must converge on the same server runtime rather than duplicate rules or authorization.
+Web, MCP App, CLI, local MCP, raw HTTP, and remote MCP must converge on the same server runtime rather than duplicate rules or authorization.
 
 ## Privacy invariant
 
@@ -69,27 +70,28 @@ room:comment
 
 Only active Controller gets `seat:play`; Seat owner keeps `seat:control`; Room owner gets `room:manage`. Advisor private view is limited to its bound Seat.
 
-Game packages see Seat IDs only. Never branch rules on Codex/Claude/MCP/browser/provider concepts.
+Game packages see Seat IDs only. Never branch rules on Codex/Claude/MCP/MCP-Apps/browser/provider concepts.
 
 ## Identity / credential invariant
 
-Never use Room ID, Seat ID, Actor ID, or lifecycle session ID as authorization.
+Never use Room ID, Seat ID, Actor ID, lifecycle session ID, or UI resource URI as authorization.
 
 ```text
 wldev_   lifecycle device
 wlview_  one Room Human viewer
-WL-      one-time Join capability
-wlseat_  one Room connected Actor binding
-wla_     persistent anonymous browser Actor credential
+WL-      one-time Agent Join capability
+wlseat_  one Room connected Agent binding
+wla_     persistent anonymous Human Actor credential
+wlui_    one local interactive Human Room App capability
 ```
 
-Raw secrets must not be logged, placed in URLs/prompts/source/commits/docs/Skill, or returned to unrelated clients. Server persistence stores digests where applicable.
+Raw secrets must not be logged, placed in URLs/prompts/source/commits/public docs/Skill, or returned to unrelated clients. Server persistence stores digests where applicable. `wlui_` is local bridge state and is never sent to GameRoom.
 
-Anonymous browser identity is browser/device-local. Do not introduce account/database dependency merely to resume one active Room.
+Anonymous Human identity is browser/device/local-bridge scoped. Do not introduce account/database dependency merely to resume one active Room.
 
 ## Stable local MCP invariant
 
-The stable Agent-facing MCP command is:
+Stable Agent-facing command:
 
 ```text
 waitloop mcp
@@ -98,6 +100,7 @@ waitloop mcp
 Model-visible local tools:
 
 ```text
+open_game()
 create_room()
 join_room(code)
 get_active_room()
@@ -113,23 +116,70 @@ take_control()
 Responsibilities:
 
 ```text
-create/join tools -> reuse Room/Join HTTP
-other tools       -> proxy remote Room MCP
-credentials       -> private local cache only
-business rules    -> server only
+open_game/UI tools -> reuse existing Human Room HTTP
+create/join tools  -> reuse Room/Join HTTP
+Agent tools        -> proxy remote Room MCP
+credentials        -> private local cache only
+business rules     -> server only
 ```
 
-Local tools must never return raw bearer credentials. `active.json` may contain Room-selection context but not another secret copy.
+`open_game` and `create_room` must not be conflated:
 
-`leave_room` is local selection cleanup, not remote revoke. Any future revoke tool must be explicit and independently authorized.
+```text
+open_game   Human owns seat-1 and clicks an MCP App
+create_room Agent owns seat-1 and plays autonomously
+```
+
+Model-visible tools must never return raw Agent credentials, Human cookies, or `wlui_` capability values. `active.json` may contain Agent Room-selection context but not another secret copy.
+
+`leave_room` is Agent local-selection cleanup, not remote revoke and not Human App cleanup. Future revoke/close tools must be explicit and independently authorized.
 
 Stable MCP installers must use the harness's supported CLI/config surface, be idempotent, and not overwrite an existing `waitloop` definition.
 
 Nested help (`waitloop mcp install codex --help`) must be side-effect free.
 
+## Human MCP App invariant
+
+Trigger/resource:
+
+```text
+open_game({gameId:"doudizhu", mode:"human-bots"})
+ui://waitloop/doudizhu/v1
+text/html;profile=mcp-app
+protocol 2026-01-26
+```
+
+App-only tools:
+
+```text
+ui_get_game(roomId, uiToken)
+ui_play_cards(roomId, uiToken, expectedRevision, cardIds)
+ui_pass(roomId, uiToken, expectedRevision)
+ui_hint(roomId, uiToken, expectedRevision, cursor?)
+```
+
+Required design:
+
+- app-only tools declare `_meta.ui.visibility: ["app"]`;
+- `open_game` declares modern and compatibility resource URI metadata;
+- the App resource is self-contained HTML/CSS/JS;
+- the App makes no direct credentialed network request;
+- all Human actions flow App -> Host `tools/call` -> local bridge -> existing Human Room HTTP;
+- Human Room `wl_actor`/`wl_room_*` cookies stay under private `~/.waitloop/app-rooms` state;
+- local file name must not expose raw Room ID;
+- a random `wlui_` capability is delivered only in tool-result `_meta` to the App;
+- the capability is absent from text/structuredContent and required by every app-only tool;
+- capability comparison is constant-time;
+- app-only visibility is defense in depth, not authorization;
+- unsupported Hosts get an honest fallback, not fake inline success;
+- standalone Web fallback starts a separate game unless a future explicit transfer protocol exists;
+- `open_game(roomId)` may reopen only a still-valid local interactive Room.
+
+Do not claim Codex/Claude/Cursor/other Host UI support without testing the exact active product surface. Tool availability does not prove App render/action support.
+
 ## Remote MCP invariant
 
-Remote `/mcp` is one already-authorized Room Actor gameplay endpoint, not lifecycle detection and not the Room bootstrap control plane.
+Remote `/mcp` is one already-authorized Agent Room Actor gameplay endpoint, not lifecycle detection, Human MCP App hosting, or Room bootstrap control plane.
 
 Remote tools:
 
@@ -146,6 +196,8 @@ Room ID, Actor token, Seat binding, ownership, and Controller authority are tran
 
 `comment` never changes game revision/state/turn. `yield_to_bot`/`take_control` are explicit owner-control transitions.
 
+Do not add `open_game` or `ui_*` to remote MCP; local cookie/App capability custody is required.
+
 ## Wait-for-turn invariant
 
 `wait_for_turn` is an efficiency primitive, not a game clock.
@@ -160,17 +212,46 @@ Required behavior:
 - remains subject to per-Actor read/rate limits;
 - does not claim it can wake a harness after final Agent response.
 
-Continuous play is an Agent-run loop: keep the current run active through repeated `wait_for_turn -> play_move` until the requested stopping condition.
+Continuous Agent play keeps the current run active through repeated `wait_for_turn -> play_move` until the requested condition. Human `open_game` play is driven by App clicks instead.
+
+## Cancellation invariant
+
+Propagate cancellation only for safe read/wait operations:
+
+```text
+get_active_room
+get_turn
+wait_for_turn
+ui_get_game
+ui_hint
+```
+
+Do not network-abort mutation-capable calls under an implied non-execution guarantee:
+
+```text
+open_game create
+create_room
+join_room
+leave_room
+play_move
+comment
+yield_to_bot
+take_control
+ui_play_cards
+ui_pass
+```
+
+After uncertain mutation transport failure, refresh authoritative state before retrying.
 
 ## Room recovery invariant
 
-Current new-Room lifetime is bounded (~24h); Join is much shorter (~20m, one-time).
+Current Room lifetime is bounded (~24h); Agent Join is much shorter (~20m, one-time).
 
-If Human `wl_room_...` viewer cookie is missing, recovery may use persistent anonymous Actor ID + credential. **Actor ID alone must fail.**
+If Human `wl_room_...` viewer credential is missing, recovery may use persistent anonymous Actor ID + credential. **Actor ID alone must fail.**
 
-Connected Actor credential may reconnect during Room lifetime. Reconnect updates presence only and must not silently change `activeControllerActorId`.
+Connected Agent credential may reconnect during Room lifetime. Reconnect updates presence only and must not silently change `activeControllerActorId`.
 
-Local Join cache must reject expired Room credentials and clear stale active selection.
+Agent Join cache must reject expired credentials and clear stale active selection. Human App cache must reject expired/missing/unauthorized local sessions and never expose cookies/capability while doing so.
 
 ## Temporary Controller invariant
 
@@ -196,26 +277,25 @@ Keep transition logic in pure runtime modules such as `room-control.ts`, not sca
 ## Game projection invariant
 
 - construct public/private projections explicitly;
-- Human browser does not receive exhaustive machine `legalMoves[]`;
+- standalone Human browser and Human MCP App do not receive exhaustive machine `legalMoves[]`;
 - Human owner may see own hand while delegated, but controls reflect `seat:play`;
 - lobby hides dealt hand/landlord before readiness;
-- connected/hosted Actors use server-generated move IDs;
+- connected/hosted Agents use server-generated move IDs;
 - local bridge forwards server projection without widening it;
-- stale/out-of-turn/illegal/non-controller moves are rejected server-side.
+- stale/out-of-turn/illegal/non-controller moves are rejected server-side;
+- Human App capability controls transport access, not projection breadth.
 
 ## Client-neutral control plane
-
-Web is not required for operations without inherent Human UI.
 
 ```text
 POST /api/v1/rooms
 Join API
-Room Human control/fallback API
+Room Human play/pass/hint/control/fallback API
 ```
 
-remain stable server protocols. Local MCP and CLI should wrap/reuse them for normal Agent operation. Raw HTTP remains advanced fallback.
+remain stable server protocols. Local MCP, MCP App, CLI, and Web wrap/reuse them rather than creating alternative authority.
 
-Do not add `create_room` to remote room-scoped MCP. It belongs to local bridge because remote MCP requires a Room credential before connection.
+`create_room` belongs to local bridge because remote MCP needs a Room credential before connection. `open_game` also belongs locally because the bridge owns Human cookie/App capability custody.
 
 ## Abuse/safety invariant
 
@@ -225,10 +305,11 @@ Current baseline:
 
 - 16 KiB JSON body limit;
 - Cloudflare Room-create and tighter Hosted Room-create limits;
-- per-Room/per-Actor Join/MCP/comment/control/recovery counters;
+- per-Room/per-Actor Join/MCP/comment/control/recovery/Human mutation counters;
 - Join/Room expiry;
 - capability checks + game revision;
-- bounded `wait_for_turn` transport loop.
+- bounded `wait_for_turn` transport loop;
+- App refresh reuses existing authenticated Human reads.
 
 Rate limiting is abuse mitigation, not accounting or game timing. Hosted inference still needs explicit budgets before broad exposure.
 
@@ -260,23 +341,24 @@ worker/src/mcp.ts
 packages/cli
 ```
 
-Room modes, Join semantics, local/remote MCP tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
+Room modes, Join semantics, local/remote MCP tools, MCP App resources/tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
 
 ## Change completeness matrix
 
 | Change | Also inspect/update |
 | --- | --- |
-| CLI / package / Join cache | CLI readme/tests, `docs/cli.md`, manifest, Agent guide/Skill/llms, release docs |
+| CLI / package / Join/App cache | CLI readme/tests, `docs/cli.md`, manifest, Agent guide/Skill/llms, release docs |
 | Local MCP bridge/install | bridge/client/install tests, CLI help/doctor/package validation, architecture/MCP/protocol/security/status, Agent surfaces |
+| MCP App tool/resource/UI | Human client tests, embedded JS syntax, stdio resource wire test, architecture/MCP/security/status/roadmap, all public Agent surfaces |
 | Room/Join modes/lifetime | Room API + GameRoom tests, architecture/game/protocol/security/status, all Agent surfaces |
 | Seat/Actor/capability | pure actor/control tests, GameRoom auth, Human projection, architecture/game/protocol/security/design/status |
-| Anonymous identity/recovery | identity parser tests, Room credential tests, security/protocol/architecture/status, browser UX |
-| Fallback/reconnect | pure room-control tests, DO auth, Web + MCP, game/design/MCP/protocol/security/status/Agent surfaces |
+| Anonymous identity/recovery | identity parser tests, Room credential tests, security/protocol/architecture/status, browser/App UX |
+| Fallback/reconnect | pure room-control tests, DO auth, Web + MCP + App, game/design/MCP/protocol/security/status/Agent surfaces |
 | MCP tool/auth/wait | remote/local tests, MCP/protocol/security docs, Agent guide/json/Skill/llms |
 | Hosted inference/public cost | hosted tests/docs, security/status/roadmap, rate/budget controls |
 | Lifecycle adapter | integration + CLI tests/docs + Agent surfaces |
-| Game rule | pure rules tests + `doudizhu-rules.md` |
-| Human UI/projection | browser JS, privacy tests, game/design docs |
+| Game rule | pure rules tests + `doudizhu-rules.md` + Web/App presentation |
+| Human UI/projection | browser/App JS, privacy tests, game/design/security docs |
 | Architecture boundary | architecture/status/repository map |
 
 If several rows apply, satisfy all.
@@ -292,6 +374,9 @@ If several rows apply, satisfy all.
 - comments prove no game-revision/state mutation;
 - wait tests prove reasons/bounds/no implicit mutation contract;
 - local bridge tests prove tool list/instructions/credential non-disclosure;
+- Human App tests prove cookie custody, hashed file naming, UI capability separation, invalid-capability rejection, and Human action proxying;
+- embedded App JavaScript must pass syntax validation;
+- packaged MCP wire tests prove tools/list, resources/list/read, metadata, visibility, capability schema, and safe errors;
 - Room bridge tests prove create -> Join -> authenticated connect;
 - installer tests prove exact/idempotent harness commands;
 - CLI packaging changes run package validation;
@@ -322,9 +407,10 @@ pnpm install --frozen-lockfile
 pnpm check
 pnpm check:repo-contract
 pnpm check:cli-package
+pnpm check:mcp-stdio
 ```
 
-CI also validates browser JS and Wrangler dry-run.
+CI also validates embedded App JS, browser JS, Agent discovery, Cloudflare gate behavior, and Wrangler dry-run.
 
 ## Preferred implementation order
 

@@ -8,7 +8,7 @@ Waitloop uses small versioned protocols so vendor-specific coding-agent details 
 idle | running | waiting | completed | failed
 ```
 
-Lifecycle events contain no prompt/source/repository/cwd/transcript/tool/assistant/native-session payloads. Lifecycle credentials and game credentials are separate.
+Lifecycle events contain no prompt/source/repository/cwd/transcript/tool/assistant/native-session payloads. Lifecycle credentials and all game/UI credentials are separate.
 
 ## Game identity
 
@@ -86,7 +86,9 @@ currentPlayerId
 legalMoves[]
 ```
 
-Human browser snapshots remove exhaustive machine `legalMoves[]` and expose constrained Human actions.
+Human snapshots remove exhaustive machine `legalMoves[]` and expose constrained Human actions in `controls`.
+
+The Human MCP App receives the same Human projection as standalone Web. The App capability changes transport authorization only; it does not widen hidden information.
 
 ## Room HTTP control protocol
 
@@ -102,9 +104,17 @@ POST /api/v1/rooms/:roomId/pause
 POST /api/v1/rooms/:roomId/resume
 ```
 
-HTTP remains the server control protocol used by Web, CLI, local MCP, and advanced raw clients. It is not duplicated as separate game logic inside clients.
+HTTP remains the authoritative server control/Human protocol used by Web, CLI, local MCP, MCP App proxy, and advanced raw clients. Clients do not duplicate game logic.
 
-Headless `mode:"agent-bots"` creates one connected Agent Seat plus two deterministic Bot Seats and returns a Join code.
+```text
+mode:"bots"
+  Human seat-1 + two deterministic Bots
+  used by standalone Web and local open_game MCP App facade
+
+mode:"agent-bots"
+  connected Agent seat-1 + two deterministic Bots
+  returns a Join code
+```
 
 ## Join protocol
 
@@ -118,7 +128,7 @@ Current semantics:
 
 ```text
 Join expires about 20 minutes
-Join issues one room Actor credential
+Join issues one room Agent Actor credential
 Room expires about 24 hours
 claimed credential may reconnect while Room is active
 ```
@@ -137,7 +147,9 @@ seatToken
 mcp endpoint + headers
 ```
 
-Raw Join claim and MCP connection are separate states. The stable local bridge performs the first authenticated gameplay request before it reports `connected: true`.
+Raw Join claim and MCP connection are separate states. The stable local bridge performs the first authenticated Agent gameplay request before reporting `connected: true`.
+
+Human `open_game` does not use Join. It uses the ordinary Human Room creation response and locally retains the returned Human cookies.
 
 ## Remote Room MCP protocol
 
@@ -149,7 +161,7 @@ Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-Remote tools:
+Remote Agent tools:
 
 ```text
 get_turn()
@@ -159,6 +171,8 @@ comment(text)
 yield_to_bot()
 take_control()
 ```
+
+Remote Room MCP does not expose `open_game` or Human `ui_*` tools.
 
 ### `wait_for_turn`
 
@@ -184,9 +198,9 @@ Result text decodes to:
 }
 ```
 
-`stillWaiting` appears for transport timeout. Actionable Room states return immediately. Transport timeout never mutates game state or authorizes fallback.
+`stillWaiting` appears for transport timeout. Actionable Room states return immediately. Timeout never mutates game state or authorizes fallback.
 
-### Mutations
+### Agent mutations
 
 `play_move` requires `seat:play`, active Controller, authoritative turn, exact revision, and a server-generated move ID.
 
@@ -196,7 +210,7 @@ Result text decodes to:
 
 ## Stable local MCP protocol
 
-Transport is local stdio:
+Transport:
 
 ```text
 command: waitloop
@@ -210,9 +224,12 @@ waitloop mcp install codex
 waitloop mcp install claude-code
 ```
 
-Local tools:
+The server supports legacy 2025-era and 2026-07-28 MCP clients from the same official v2 stdio entry.
+
+### Model-visible tools
 
 ```text
+open_game(gameId?, mode?, roomId?)
 create_room()
 join_room(code)
 get_active_room()
@@ -225,9 +242,157 @@ yield_to_bot()
 take_control()
 ```
 
-Control tools reuse HTTP; gameplay tools proxy remote MCP. The local server returns safe metadata/snapshots only. Raw credentials remain in private local cache.
+`open_game` starts/reopens Human operation. `create_room` remains Agent-owned play.
 
-Active Room state:
+### MCP App-only tools
+
+```text
+ui_get_game(roomId, uiToken)
+ui_play_cards(roomId, uiToken, expectedRevision, cardIds)
+ui_pass(roomId, uiToken, expectedRevision)
+ui_hint(roomId, uiToken, expectedRevision, cursor?)
+```
+
+They declare:
+
+```json
+{
+  "ui": {
+    "resourceUri": "ui://waitloop/doudizhu/v1",
+    "visibility": ["app"]
+  }
+}
+```
+
+The `uiToken` schema is:
+
+```text
+^wlui_[a-f0-9]{64}$
+```
+
+Visibility is not sufficient authorization; the local bridge validates the stored capability.
+
+## MCP App resource protocol
+
+Resource:
+
+```text
+URI       ui://waitloop/doudizhu/v1
+MIME      text/html;profile=mcp-app
+version   2026-01-26
+```
+
+`open_game` tool metadata includes:
+
+```text
+_meta.ui.resourceUri = ui://waitloop/doudizhu/v1
+_meta["ui/resourceUri"] = ui://waitloop/doudizhu/v1
+_meta.ui.visibility = ["model", "app"]
+```
+
+The resource supports the following MCP Apps messages:
+
+```text
+App -> Host
+  ui/initialize
+  ui/notifications/initialized
+  ui/notifications/size-changed
+  ui/request-display-mode
+  ui/open-link
+  tools/call
+
+Host -> App
+  ui/notifications/tool-result
+  ui/notifications/host-context-changed
+  ui/resource-teardown
+```
+
+The App advertises inline/fullscreen display modes. Fullscreen remains Host-controlled.
+
+## Human open-game result protocol
+
+Safe `open_game` text/structured content:
+
+```json
+{
+  "version": 1,
+  "kind": "waitloop.mcp-app.game",
+  "uiVersion": 1,
+  "gameId": "doudizhu",
+  "mode": "human-bots",
+  "roomId": "room-...",
+  "snapshot": {},
+  "fallback": {
+    "inlineUiRequired": true,
+    "webUrl": "https://waitloop.run/game.html",
+    "sameRoom": false,
+    "message": "..."
+  }
+}
+```
+
+Private result metadata:
+
+```json
+{
+  "waitloop/uiToken": "wlui_<64 hex>"
+}
+```
+
+The token appears only in result `_meta`. It must not appear in text or `structuredContent`.
+
+The safe payload is duplicated in text and `structuredContent` because some Hosts may omit structured content while still rendering a resource.
+
+`open_game({roomId})` reopens a still-valid local Human session, refreshes its safe snapshot, and emits the existing private App capability through result metadata.
+
+## Human app-only calls
+
+### `ui_get_game`
+
+Read-only. Loads the private local Human session, verifies `uiToken`, sends Human cookies to `GET /api/v1/rooms/:roomId`, and returns safe snapshot payload.
+
+### `ui_play_cards`
+
+Mutation input:
+
+```json
+{
+  "roomId": "room-...",
+  "uiToken": "wlui_...",
+  "expectedRevision": 4,
+  "cardIds": ["..."]
+}
+```
+
+Requires 1–20 unique bounded card IDs. Server validates Human credential, authoritative turn, exact revision, selected cards, and legal pattern.
+
+### `ui_pass`
+
+Requires Room ID, App capability, and exact revision. Server decides whether passing is legal.
+
+### `ui_hint`
+
+Read-only from a game-state mutation perspective. Requires Room ID, App capability, revision, and optional non-negative cursor. Returns a legal card selection hint plus refreshed Human snapshot.
+
+## Local Human session record
+
+Private local record:
+
+```json
+{
+  "version": 1,
+  "roomId": "room-...",
+  "serverUrl": "https://waitloop.run",
+  "cookieHeader": "wl_actor=...; wl_room_...=...",
+  "uiToken": "wlui_...",
+  "createdAt": 0,
+  "expiresAt": 0
+}
+```
+
+File name is a SHA-256-derived value rather than raw Room ID. This record is never a model-visible protocol.
+
+## Agent active Room pointer
 
 ```json
 {
@@ -238,24 +403,51 @@ Active Room state:
 }
 ```
 
-This pointer does not contain the bearer token. Credential material remains in the corresponding private Join cache entry.
+This pointer does not contain Agent bearer token. Credential material remains in the private Join cache entry.
 
-`leave_room` clears this pointer only and reports `credentialRevoked:false`.
+`leave_room` clears this Agent pointer only and reports `credentialRevoked:false`.
 
-## Anonymous browser Actor identity
+## Anonymous Human Actor identity
 
-Browser creation may issue:
+Human Room creation may issue:
 
 ```text
 actorId    actor_...
 credential wla_...
 ```
 
-The pair is transported in an HttpOnly cookie. Only the credential digest is stored per Room. Actor ID alone never authenticates. The credential may mint a fresh Room viewer credential while the Room remains active.
+Standalone Web transports it in an HttpOnly cookie. Local MCP App bridge captures the same cookie from `Set-Cookie` and stores it privately. Only credential digest is stored per Room. Actor ID alone never authenticates.
+
+## Cancellation protocol
+
+Safe cancellation-propagating operations:
+
+```text
+get_active_room
+get_turn
+wait_for_turn
+ui_get_game
+ui_hint
+```
+
+Mutation-capable operations are not network-aborted under a false non-execution assumption:
+
+```text
+open_game create
+create_room
+join_room
+leave_room
+play_move
+comment
+yield_to_bot
+take_control
+ui_play_cards
+ui_pass
+```
 
 ## Revisions and errors
 
-Relevant error codes include:
+Relevant server/local error codes include:
 
 ```text
 stale_revision
@@ -269,12 +461,18 @@ invalid_wait_timeout
 rate_limited
 join_expired
 join_already_claimed
+interactive_room_missing
+interactive_ui_unauthorized
+network_unavailable
+cancelled
 ```
 
-HTTP errors remain versioned JSON. Remote/local MCP tool failures are returned as MCP tool errors with structured JSON text.
+HTTP errors remain versioned JSON. Remote/local MCP failures are MCP tool errors with structured JSON text. Credential-shaped values are redacted.
 
 ## Continuation boundary
 
-MCP request/response transport cannot resume an Agent after the Agent sends a final response. Continuous-play intent must keep the current Agent run alive and repeat `wait_for_turn -> play_move` until its requested stopping condition.
+MCP request/response cannot resume an Agent after final response. Continuous Agent play keeps the current run alive and repeats `wait_for_turn -> play_move` until the requested stopping condition.
 
-The implementation and public Agent surfaces must change in the same PR as protocol behavior.
+Human MCP App interaction persists only while the Host keeps the App iframe/tool bridge available. It does not imply the Agent run remains active.
+
+Implementation and public Agent surfaces must change together with protocol behavior.

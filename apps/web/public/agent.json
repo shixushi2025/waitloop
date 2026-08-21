@@ -10,10 +10,12 @@
   "manifest": "https://waitloop.run/agent.json",
   "llms": "https://waitloop.run/llms.txt",
   "source": "https://github.com/shixushi2025/waitloop",
-  "description": "Developer-native waiting layer for coding agents with lifecycle hooks, tiny games, hosted AI players, and room-scoped MCP game actors.",
+  "description": "Developer-native waiting layer for coding agents with lifecycle hooks, Human-operated MCP Apps, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.6",
+    "candidateVersion": "0.1.0-alpha.7",
+    "candidatePublished": false,
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -32,7 +34,7 @@
     "doctorCommand": "waitloop doctor",
     "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml",
-    "publicationVerification": "alpha.6 was verified from a clean npm installation, including CLI help and the packaged MCP stdio wire protocol"
+    "publicationVerification": "alpha.6 was verified from a clean npm installation, including CLI help and the packaged MCP stdio wire protocol; alpha.7 is the MCP Apps candidate"
   },
   "skill": {
     "status": "available",
@@ -44,6 +46,7 @@
     "gameId": "doudizhu",
     "modes": ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"],
     "headlessAgentMode": "agent-bots",
+    "inlineHumanMode": "bots via open_game Human MCP App facade",
     "companionMode": "companion-agent",
     "seatIds": "stable room-scoped seat-1/seat-2/seat-3 identifiers for the current three-seat game",
     "actorRelations": ["controller", "advisor"],
@@ -64,6 +67,7 @@
       "claude-code": "waitloop mcp install claude-code"
     },
     "tools": [
+      "open_game",
       "create_room",
       "join_room",
       "get_active_room",
@@ -75,11 +79,33 @@
       "yield_to_bot",
       "take_control"
     ],
-    "controlPlane": "create_room and join_room reuse the existing Room/Join HTTP APIs internally",
-    "credentialHandling": "room Actor credentials remain in private local cache and are never returned by local MCP tools; credential-shaped local errors are redacted",
-    "activeRoom": "waitloop join or join_room selects one credential-backed active room; the bridge can restart and resume it until room expiry",
+    "appTools": [
+      "ui_get_game",
+      "ui_play_cards",
+      "ui_pass",
+      "ui_hint"
+    ],
+    "humanEntry": "open_game starts or reopens a Human-controlled Dou Dizhu table and links the tool result to the MCP App resource",
+    "agentEntry": "create_room keeps its existing meaning: the Agent owns seat-1 in agent-bots and plays through Agent tools",
+    "controlPlane": "create_room and join_room reuse the existing Room/Join HTTP APIs internally; open_game reuses the existing Human bots Room and Human mutation APIs",
+    "credentialHandling": "Agent Room credentials, Human Room cookies, and the private MCP App capability remain in private local cache and are never returned in model-visible content; credential-shaped local errors are redacted",
+    "activeRoom": "waitloop join or join_room selects one credential-backed Agent room; the bridge can restart and resume it until room expiry",
     "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode",
-    "cancellation": "get_active_room, get_turn, and wait_for_turn propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
+    "cancellation": "get_active_room, get_turn, wait_for_turn, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
+  },
+  "mcpApps": {
+    "status": "candidate-alpha.7",
+    "protocolVersion": "2026-01-26",
+    "resourceUri": "ui://waitloop/doudizhu/v1",
+    "mimeType": "text/html;profile=mcp-app",
+    "triggerTool": "open_game",
+    "displayModes": ["inline", "fullscreen"],
+    "interaction": ["select cards", "play", "pass", "hint", "clear", "refresh"],
+    "hostRequirement": "an MCP Apps-capable Host that renders the linked ui:// resource and proxies App server-tool calls",
+    "hostFallback": "Hosts without MCP Apps receive a safe textual result and a link to start a separate browser-controlled table; create_room remains available for Agent-owned play",
+    "sameRoomFallback": false,
+    "privacy": "Human Room cookies stay in ~/.waitloop/app-rooms; a wlui_ capability is delivered only in tool-result _meta to the embedded App, is required by all app-only tools, and is absent from model-visible text and structuredContent",
+    "network": "the App resource is self-contained and performs no direct credentialed network requests; all game actions flow through the local MCP bridge"
   },
   "mcp": {
     "status": "available",
@@ -106,6 +132,7 @@
       "skill": "available",
       "mcp": "stable-local-stdio",
       "mcpInstaller": "waitloop mcp install claude-code",
+      "mcpApps": "host-dependent; use open_game when the active client supports MCP Apps",
       "terminalState": "Stop, StopFailure, and SessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "cursor": {
@@ -114,6 +141,7 @@
       "plugin": "not-required",
       "skill": "read-or-install-where-supported",
       "mcp": "manual-where-compatible",
+      "mcpApps": "host-dependent",
       "terminalState": "stop and sessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "codex": {
@@ -125,6 +153,7 @@
       "skill": "available",
       "mcp": "stable-local-stdio",
       "mcpInstaller": "waitloop mcp install codex",
+      "mcpApps": "host-dependent; do not claim inline rendering until the active Codex surface advertises MCP Apps support",
       "terminalState": "Stop and SessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "dsh": {
@@ -132,7 +161,8 @@
       "installer": null,
       "plugin": "planned",
       "skill": "readable",
-      "mcp": "protocol-compatible-after-adapter"
+      "mcp": "protocol-compatible-after-adapter",
+      "mcpApps": "planned-after-host-support"
     }
   },
   "endpoints": {
@@ -148,6 +178,7 @@
     "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
     "gameActorCredentials": "room/actor-scoped; never place in URLs or source control",
     "localMcpCredentials": "stored under private ~/.waitloop state; local MCP returns only safe room metadata and snapshots",
+    "mcpAppCredentials": "Human cookies and wlui_ App capability are private local state; wlui_ is sent to the embedded App only through result _meta and is required for app-only Human mutation tools",
     "browserActorIdentity": "Actor ID is not authorization; the separate anonymous credential is stored in an HttpOnly cookie and only its digest is stored per room",
     "advisorPrivateView": "an advisor sees only the private state of the seat it is explicitly bound to"
   }
