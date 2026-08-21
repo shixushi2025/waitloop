@@ -8,12 +8,12 @@ This is the compact handoff snapshot of current durable truth.
 - Cloudflare Worker + Static Assets + Durable Objects.
 - Cloudflare retains the native Git integration and production credentials.
 - CI runs on `main`, pull requests, and `fix/**` branches.
-- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio wire behavior, browser JS, Agent discovery, Wrangler dry-run, and the Cloudflare deployment gate.
+- CI validates TypeScript, Vitest, repository/onboarding contracts, CLI package behavior, packaged MCP stdio/MCP Apps wire behavior, embedded App JavaScript, browser JS, Agent discovery, Wrangler dry-run, and the Cloudflare deployment gate.
 - The final GitHub Actions job is named `ready-to-deploy` and succeeds only after the full `check` job plus a real Checks API gate verification succeed.
-- Cloudflare production builds wait for `ready-to-deploy=success` for the exact `WORKERS_CI_COMMIT_SHA` during dependency installation; failed, cancelled, or timed-out GitHub CI blocks deployment.
+- Cloudflare production builds wait for `ready-to-deploy=success` for the exact `WORKERS_CI_COMMIT_SHA`; failed, cancelled, or timed-out GitHub CI blocks deployment.
 - Ordinary local install/development and non-production Cloudflare branches skip the production wait.
-- Explicit `pnpm deploy` is allowed only from a clean local `main`; it rejects staged, modified, untracked, detached-HEAD, and feature-branch states, checks `origin/main` when available, and then requires that exact `HEAD` commit's `ready-to-deploy` check before `wrangler deploy`.
-- The anonymous Cloudflare production path polls GitHub at most once per minute and fails closed after 15 minutes; `WAITLOOP_GITHUB_TOKEN` remains an optional higher-rate override.
+- Explicit `pnpm deploy` is allowed only from a clean local `main`; it rejects staged, modified, untracked, detached-HEAD, and feature-branch states, checks `origin/main` when available, and requires that exact `HEAD` commit's `ready-to-deploy` check before `wrangler deploy`.
+- The anonymous Cloudflare production path polls GitHub at most once per minute and fails closed after 15 minutes; `WAITLOOP_GITHUB_TOKEN` is an optional higher-rate override.
 
 ## Coding-agent lifecycle
 
@@ -23,7 +23,7 @@ idle | running | waiting | completed | failed
 
 Claude Code, Cursor, and Codex lifecycle adapters are available; DSH remains planned. Reporting is fail-open and excludes prompt/source/repository/cwd/transcript/tool/assistant/native-session content.
 
-Stop, failure, and session-end hooks finalize the latest state as `completed` or `failed` before native-session cleanup. This prevents `waitloop status`, `waitloop open`, and the remote AgentSession from remaining stale `running`/`waiting` after a harness closes.
+Stop, failure, and session-end hooks finalize the latest state as `completed` or `failed` before native-session cleanup. This prevents `waitloop status`, `waitloop open`, and remote AgentSession state from remaining stale `running`/`waiting` after a harness closes.
 
 Codex owns lifecycle command-hook review/trust. `waitloop doctor` checks local/published Waitloop CLI, Codex version/hooks capability, installed Waitloop events, and stable local MCP registration. A Plugin is not required and cannot bypass lifecycle hook trust.
 
@@ -39,7 +39,7 @@ https://waitloop.run/join/<join-code>
 https://waitloop.run/mcp
 ```
 
-`agent.json` declares GitHub mirrors of `agent.md` so Agent discovery does not depend on one browser navigation path.
+`agent.json` declares GitHub mirrors of `agent.md` so discovery does not depend on one browser navigation path.
 
 Published CLI alpha:
 
@@ -47,14 +47,20 @@ Published CLI alpha:
 0.1.0-alpha.6
 ```
 
+Current source candidate:
+
+```text
+0.1.0-alpha.7
+```
+
+Alpha.7 adds the Human-operated MCP App path and remains unpublished until trusted publishing plus clean npm installation verification complete.
+
 Install/update:
 
 ```bash
 npm install -g @waitloop/cli@alpha
 waitloop doctor
 ```
-
-The publication was verified from a clean npm installation, including CLI version/help and the installed package's MCP stdio wire protocol.
 
 ## Stable local MCP bridge
 
@@ -73,11 +79,12 @@ waitloop mcp install claude-code
 
 The ordinary lifecycle installers for Codex/Claude Code also install this stable MCP entry.
 
-The local bridge uses the official MCP v2 stdio server entry, serving both legacy 2025-era MCP clients and 2026-07-28 clients from the same command rather than maintaining a hand-written JSON-RPC protocol loop.
+The local bridge uses the official MCP v2 stdio server entry, serving legacy 2025-era clients and 2026-07-28 clients from the same command.
 
-Local tools:
+### Model-visible tools
 
 ```text
+open_game()
 create_room()
 join_room(code)
 get_active_room()
@@ -90,19 +97,111 @@ yield_to_bot()
 take_control()
 ```
 
+### MCP App-only tools
+
+```text
+ui_get_game(roomId, uiToken)
+ui_play_cards(roomId, uiToken, expectedRevision, cardIds)
+ui_pass(roomId, uiToken, expectedRevision)
+ui_hint(roomId, uiToken, expectedRevision, cursor?)
+```
+
 The bridge:
 
-- calls existing Room/Join HTTP for control operations;
-- proxies existing remote Room MCP for gameplay;
-- keeps Room Actor credentials in private local cache;
-- never returns raw credentials through model-visible tools and redacts credential-shaped error text;
-- stores one active Room pointer that survives bridge restart until Room expiry;
+- calls existing Room/Join HTTP for Agent control operations;
+- proxies existing remote Room MCP for Agent gameplay;
+- calls existing Human Room HTTP APIs for MCP App state/play/pass/hint;
+- keeps Agent credentials and Human cookies in separate private local caches;
+- never returns raw credentials through model-visible content and redacts credential-shaped errors;
+- stores one active Agent Room pointer that survives bridge restart until Room expiry;
+- stores Human MCP App Room sessions under `~/.waitloop/app-rooms` and reopens them explicitly through `open_game(roomId)`;
 - supports Codex/Claude Code configuration through their CLI MCP surfaces;
-- propagates MCP cancellation through safe read/wait calls without abandoning mutation-capable calls mid-flight.
+- propagates cancellation through safe read/wait calls without abandoning mutation-capable calls mid-flight.
 
 Cursor lifecycle integration remains available, while stable stdio MCP setup is currently manual where supported.
 
-## CLI Room flow
+## Agent-native interactive Human table
+
+The alpha.7 candidate adds:
+
+```text
+open_game({gameId:"doudizhu", mode:"human-bots"})
+```
+
+This creates an ordinary Human `bots` Room:
+
+```text
+seat-1 Human
+seat-2 deterministic Bot
+seat-3 deterministic Bot
+```
+
+The tool result links to:
+
+```text
+URI       ui://waitloop/doudizhu/v1
+MIME      text/html;profile=mcp-app
+protocol  2026-01-26
+```
+
+The self-contained App supports:
+
+```text
+select cards
+play
+pass
+hint
+clear
+refresh
+inline/fullscreen where the Host permits it
+```
+
+The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
+
+This is intentionally different from:
+
+```text
+create_room()
+```
+
+which remains Agent-owned `agent-bots` play. When the user wants clickable Human operation, the Agent should call `open_game`; when the Agent should play autonomously, it should call `create_room`.
+
+### Host support boundary
+
+Inline operation requires an MCP Apps-capable Host that:
+
+- preserves tool UI metadata;
+- reads `ui://` resources;
+- renders the MCP App MIME type;
+- forwards the initial tool result including result `_meta`;
+- proxies App server-tool calls.
+
+Waitloop does not claim every Codex/Claude/Cursor/terminal/desktop surface currently implements all of these behaviors. Unsupported Hosts receive safe text/structured results and fallback guidance.
+
+The fallback web URL starts a separate browser-controlled game. It does not resume the private inline Room.
+
+### Human UI credential boundary
+
+The local bridge captures the Human `wl_actor` and `wl_room_*` cookies and stores them privately under a hashed local file name in `~/.waitloop/app-rooms`.
+
+Each interactive Room also receives a high-entropy:
+
+```text
+wlui_<64 hex>
+```
+
+capability. It is:
+
+- stored only in private local state;
+- delivered to the embedded App only through `tool result _meta["waitloop/uiToken"]`;
+- absent from model-visible text and `structuredContent`;
+- required by all app-only tools;
+- checked with a constant-time comparison;
+- redacted from local error text.
+
+The App contains no concrete credential and makes no direct credentialed network request. Host visibility and the private capability are independent defenses.
+
+## CLI Agent Room flow
 
 ```bash
 waitloop room create
@@ -112,12 +211,14 @@ waitloop room wait --timeout-ms 25000
 waitloop room leave
 ```
 
-- `room create` creates/connects the existing `agent-bots` mode.
-- `join` claims/cache/selects active Room.
+- `room create` creates/connects the existing Agent-owned `agent-bots` mode.
+- `join` claims/cache/selects an active Agent Room.
 - default and `--json` Join output omit bearer credentials.
 - `--raw-mcp` is the explicit advanced remote configuration fallback.
-- `room leave` clears active selection but does not revoke cached credential or mutate the Room.
-- expired Room cache clears stale active selection.
+- `room leave` clears Agent active selection but does not revoke cached credential or mutate the Room.
+- expired Agent Room cache clears stale active selection.
+
+Human MCP App Rooms are not CLI active Agent Rooms; they use `open_game` and separate private state.
 
 ## Identity and game model
 
@@ -132,7 +233,7 @@ Advisor    bound Actor that may inspect/comment but cannot play until delegated
 
 Actor/Seat/Room IDs are identifiers, not credentials.
 
-Human Web identity remains anonymous and browser/device-local (`actor_...` + separate HttpOnly `wla_...` credential). No database/D1 is required for one-Room recovery.
+Human Web identity remains anonymous and browser/device-local (`actor_...` + separate HttpOnly `wla_...` credential). The local MCP App reuses the same server-side Human identity/authorization model while retaining the cookies in local bridge custody.
 
 ## Current Dou Dizhu modes
 
@@ -144,6 +245,7 @@ companion-agent
 agent-bots
 ```
 
+- `bots`: Human + two deterministic bots; used by standalone Web and `open_game`.
 - `connected-agent`: Human and Agent occupy separate Seats.
 - `companion-agent`: Agent is Advisor of Human Seat until explicit delegation.
 - `agent-bots`: connected Agent owns `seat-1` against two deterministic bots; fully headless.
@@ -159,7 +261,7 @@ Join claim          one-time
 Room Actor token    reconnectable while Room active
 ```
 
-Connected start:
+Connected Agent start:
 
 ```text
 Room created
@@ -173,9 +275,20 @@ Room created
 
 Join success is not raw MCP connection. Local `join_room` and `create_room` perform the authenticated request before reporting connected.
 
-Current modes still gate one joined connected Actor. Generalized multiple connected Actors remain unshipped.
+Human MCP App start has no Join phase:
 
-## Remote MCP gameplay
+```text
+open_game
+-> create Human bots Room
+-> capture private Human cookies locally
+-> emit safe snapshot + private App metadata
+-> Host renders App
+-> App calls Human APIs through local bridge
+```
+
+Current modes still gate one joined connected Agent Actor. Generalized multiple connected Actors remain unshipped.
+
+## Remote MCP Agent gameplay
 
 ```text
 get_turn()
@@ -188,17 +301,17 @@ take_control()
 
 `wait_for_turn` uses authenticated snapshot reads, about 750 ms polling, and a maximum 25-second transport wait. It returns on turn, finish, lobby, pause, Controller change, or timeout.
 
-Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback. MCP client cancellation also stops the in-flight wait promptly without a game mutation.
+Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback. MCP client cancellation stops the in-flight wait promptly without a game mutation.
 
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
-In fully headless `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control. The automated players may finish the game before the owner reconnects; yield is therefore an explicit handoff rather than a pause primitive.
+In fully headless `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control. The automated players may finish the game before the owner reconnects; yield is an explicit handoff rather than a pause primitive.
 
-MCP is request/response participation. It cannot wake an Agent after final response. Continuous-play intent must keep the current Agent run active through `wait_for_turn -> play_move` until the requested stopping condition.
+MCP is request/response participation. It cannot wake an Agent after final response. Agent-controlled continuous play must keep the current Agent run active through `wait_for_turn -> play_move`. Human `open_game` play is driven by App clicks instead.
 
 ## Human Web recovery / takeover
 
-Web can:
+Standalone Web can:
 
 - delegate Human Seat to a connected companion and take it back;
 - let a temporary Bot control an eligible Seat;
@@ -206,6 +319,8 @@ Web can:
 - restore original owner when available;
 - recover Room viewer access from anonymous Actor credential;
 - preserve Seat/hand/role/history through takeover.
+
+The first MCP App release intentionally exposes only Human-vs-bots play/pass/hint. Companion/connected-agent control UI remains in the standalone Web surface until an explicit MCP App design is added.
 
 ## Security currently implemented
 
@@ -216,7 +331,11 @@ Web can:
 - hashed server credential storage;
 - server capability/revision checks;
 - hidden-information projection tests;
-- local MCP credential custody, credential-safe default output, and error redaction;
+- local Agent credential custody, credential-safe output, and error redaction;
+- private local Human cookie custody for MCP Apps;
+- UI-only capability in result `_meta`, absent from model-visible content;
+- app-only Human tools requiring the capability;
+- self-contained App resource with no direct credentialed network traffic;
 - cancellation propagation only for read/wait operations;
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
 - side-effect-free nested CLI help;
@@ -227,13 +346,19 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 85 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, and MCP;
+- 88 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, and Human MCP App custody;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
-- local bridge tool/instruction contract and corrective error/redaction behavior;
+- Human Room creation through existing HTTP and private Set-Cookie capture;
+- hashed local Human session file name and private credential storage;
+- `wlui_` capability absence from safe payload and rejection of invalid capability;
+- Human play/pass/hint proxying through private cookies;
+- local bridge tool/instruction/resource metadata and error redaction;
+- embedded MCP App JavaScript syntax;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
-- packaged CLI MCP stdio `initialize -> tools/list -> tools/call` wire validation;
-- headless create -> Join claim -> authenticated MCP connect;
-- active Room pointer and expired cache handling;
+- packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;
+- 15 tools with correct model/app visibility and one MCP App resource;
+- headless Agent create -> Join claim -> authenticated MCP connect;
+- active Agent Room pointer and expired cache handling;
 - Codex/Claude MCP installer command/idempotency;
 - wait-for-turn reason/timeout classification;
 - package/onboarding/public-surface consistency;
@@ -242,6 +367,10 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Known gaps
 
+- real-host smoke verification of inline rendering/action forwarding for each Codex/Claude/other Host surface;
+- same-Room transfer from local MCP App to standalone browser without exposing long-lived credentials;
+- Human connected-agent/companion controls inside the MCP App;
+- proactive cleanup/list/revoke commands for local interactive Human Rooms;
 - full Dou Dizhu bidding / rob-landlord / scoring;
 - transport-level disconnect detection richer than explicit yield/reconnect;
 - generalized multiple connected Actors / multiple Join capabilities;
@@ -249,7 +378,7 @@ Rate limiting remains abuse protection, not accounting.
 - per-turn one-shot delegation;
 - automatic MCP setup for Cursor/DSH;
 - explicit remote Room Actor revoke/leave semantics;
-- proactive rather than lazy expired local/Room cleanup;
+- proactive rather than lazy expired Agent cache/Room cleanup;
 - cross-device accounts/global history/index;
 - hosted inference budget/accounting;
 - broader lifecycle/pairing rate limits and CSP/CORS hardening;
