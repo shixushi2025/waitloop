@@ -309,8 +309,7 @@ export function localToolErrorPayload(error: unknown): { code: string; message: 
   };
 }
 
-function uiMeta(visibility: readonly UiVisibility[] | undefined): Record<string, unknown> | undefined {
-  if (!visibility) return undefined;
+function uiMeta(visibility: readonly UiVisibility[]): Record<string, unknown> {
   return {
     ui: {
       resourceUri: WAITLOOP_GAME_UI_URI,
