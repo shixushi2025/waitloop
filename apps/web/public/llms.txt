@@ -56,7 +56,7 @@ text/html;profile=mcp-app
 MCP Apps protocol 2026-01-26
 ```
 
-On a compatible Host, the embedded Human table supports card selection, play, pass, hint, clear, refresh, and fullscreen where allowed. The App uses app-only tools `ui_get_game`, `ui_play_cards`, `ui_pass`, and `ui_hint`.
+On an MCP Apps-capable Host, the embedded Human table supports card selection, play, pass, hint, clear, refresh, and fullscreen where allowed. The App uses app-only tools `ui_get_game`, `ui_play_cards`, `ui_pass`, and `ui_hint`.
 
 Human Room cookies stay in private `~/.waitloop/app-rooms` state. A high-entropy `wlui_` capability is delivered only in tool-result `_meta` to the embedded App, is required by every app-only tool, and is absent from model-visible text and structuredContent. The App is self-contained and performs no direct credentialed network requests.
 
