@@ -20,11 +20,34 @@ while (agent.running) {
 
 The core experience has three modes:
 
-1. **Waiting** — the user plays while an agent is busy.
-2. **Play** — a user and one or more agents participate in the same game.
-3. **Arena** — agents play each other for experiments and evaluation.
+1. **Waiting** — the Human operates a small game while an Agent is busy, either in standalone Web or inside an MCP Apps-capable Agent client.
+2. **Play** — a Human and one or more Agents participate in the same game with explicit Seat/Controller relationships.
+3. **Arena** — Agents play each other for experiments and evaluation.
 
-Only Waiting is required for the first release. Play is the first differentiator. Arena is intentionally later.
+Waiting and a constrained Play path are implemented. Arena remains intentionally later.
+
+## Human versus Agent operation
+
+Starting a game from an Agent conversation must not automatically mean the Agent plays.
+
+```text
+open_game()
+  Human owns seat-1
+  Human clicks an embedded MCP App
+
+create_room()
+  Agent owns seat-1
+  Agent plays through constrained MCP tools
+```
+
+This distinction is part of the product, not an implementation detail. The system should infer the entry from user intent:
+
+```text
+“I want to play”       -> open_game
+“play a game for me”   -> create_room
+```
+
+If the active Host cannot render/operate MCP Apps, Waitloop should state that clearly and offer either a separate standalone Web game or Agent-owned play. It must not present a non-interactive JSON result as though the Human can click it.
 
 ## Non-goals
 
@@ -36,22 +59,41 @@ Waitloop is not trying to become:
 - an attention/engagement optimizer
 - a replacement for coding-agent UIs
 - a telemetry collector for source code or prompts
-- an agent orchestration framework
+- an Agent orchestration framework
+- a browser-automation layer that makes Agents click Human UI
+- a system that leaks Human/Agent credentials merely to transfer a Room between surfaces
 
-## First user journey
+## First user journeys
 
-1. User installs a Waitloop integration for a supported coding agent.
-2. The adapter observes a lifecycle event and maps it to the Waitloop protocol.
-3. Waitloop shows `running` with elapsed time.
-4. After a configurable grace period, a game can be entered.
-5. The game is keyboard-first and designed for short sessions.
-6. When the agent completes, fails, or requires user input, the game is paused.
-7. The work state is shown above the game and becomes the primary action.
-8. The user returns to the agent.
+### Human waiting inside an Agent client
+
+1. User installs Waitloop stable MCP in a compatible Host.
+2. User asks to open a game they can operate.
+3. Agent calls `open_game()`.
+4. Host renders the linked `ui://` MCP App.
+5. Human selects cards and uses play/pass/hint controls.
+6. Human Room credentials remain in local bridge custody, not model/App source.
+7. If work becomes actionable, lifecycle attention remains primary where integrated.
+8. User returns to work without being trapped in an engagement loop.
+
+### Agent participates or plays
+
+1. User asks the Agent to join or play.
+2. Agent calls `join_room(code)` or `create_room()`.
+3. Agent uses `wait_for_turn`, legal move IDs, and exact revisions.
+4. Agent keeps the current run active only when the requested stopping condition requires continued play.
+5. Agent may explicitly yield to a temporary Bot and later reconnect/take control.
+
+### Standalone Web
+
+1. User opens the Web table.
+2. User chooses bots, hosted Agent, connected Agent, or companion relationship.
+3. Human uses the browser UI; connected Agents use MCP.
+4. Work attention remains more important than game continuity.
 
 ## Attention policy
 
-The following states interrupt a game immediately:
+These lifecycle states interrupt a linked game immediately:
 
 - `agent.waiting`: user input or approval is likely needed
 - `agent.completed`: work is ready to inspect
@@ -59,26 +101,31 @@ The following states interrupt a game immediately:
 
 `agent.running` never steals focus by itself.
 
-A game may continue in the background after interruption, but the UI must not hide or defer the work notification.
+A game may remain recoverable after interruption, but UI must not hide or defer the work notification.
 
 ## First game
 
-Dou Dizhu is the first multiplayer game because it exercises useful architectural constraints:
+Dou Dizhu is first because it exercises:
 
 - hidden information
 - turn order
 - deterministic legality checks
 - non-trivial strategic decisions
-- agent participation via MCP
+- Human and Agent participation through different interfaces
+- MCP Apps interaction and remote MCP Agent moves
 - a culturally recognizable game for Chinese users
 
-The first practical table is:
+Current practical tables include:
 
 ```text
-human + coding agent + deterministic/simple bot
+Human + two deterministic Bots          (Web / MCP App)
+Human + connected Agent + Bot           (Web + MCP)
+Human + Agent Advisor + two Bots         (Web + MCP)
+Agent + two deterministic Bots          (headless MCP)
+Human + Hosted Agent + Bot              (Web)
 ```
 
-This avoids requiring three simultaneously connected human/agent clients while still proving multiplayer state, hidden information, and MCP moves.
+These avoid requiring three simultaneously connected Human/Agent clients while still proving multiplayer state, hidden information, and constrained actions.
 
 ## Experience language
 
@@ -90,6 +137,8 @@ Preferred vocabulary:
 - status
 - elapsed
 - room
+- seat
+- controller
 - move
 - return
 - resume
@@ -104,15 +153,19 @@ Avoid:
 - flashy victory effects
 - autoplaying sound
 
-## Success criteria for v0.1
+## Success criteria for the current alpha
 
-A v0.1 demonstration is successful when all of the following happen in one flow:
+A strong alpha flow demonstrates:
 
-1. A real supported coding agent begins work.
-2. Waitloop reflects the running state without receiving source code or prompt content.
-3. The user can open a small game.
-4. The agent completion/waiting event reaches Waitloop in real time.
-5. The game pauses and the UI clearly returns attention to work.
-6. At least one agent can participate in Dou Dizhu through constrained game tools.
+1. a real supported coding Agent begins work;
+2. Waitloop reflects minimal lifecycle state without source/prompt content;
+3. a Human can ask an Agent client to open an interactive table;
+4. a compatible Host renders the MCP App and forwards Human actions securely;
+5. an incompatible Host reports the limitation and a truthful fallback;
+6. at least one connected Agent can participate through constrained Room MCP;
+7. an Agent can play headlessly through `create_room -> wait_for_turn -> play_move`;
+8. lifecycle attention can pause/interrupt the standalone experience;
+9. credentials/capabilities remain separated and non-model-visible;
+10. the entire path is packaged, installable, testable, and recoverable.
 
-Anything beyond those six points is secondary for v0.1.
+Feature breadth beyond this is secondary until these paths are reliable in real Hosts.
