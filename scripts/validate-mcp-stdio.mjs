@@ -135,9 +135,13 @@ try {
   assert(openGame?._meta?.ui?.resourceUri === "ui://waitloop/doudizhu/v1", "open_game is missing modern MCP App metadata");
   assert(openGame?._meta?.["ui/resourceUri"] === "ui://waitloop/doudizhu/v1", "open_game is missing legacy MCP App metadata");
   assert(openGame?._meta?.ui?.visibility?.includes("model"), "open_game must remain model-visible");
+  assert(!openGame?.inputSchema?.properties?.uiToken, "open_game must not accept a model-visible Human UI capability");
+
   for (const name of ["ui_get_game", "ui_play_cards", "ui_pass", "ui_hint"]) {
     const tool = tools.find((candidate) => candidate.name === name);
     assert(JSON.stringify(tool?._meta?.ui?.visibility) === JSON.stringify(["app"]), `${name} must be app-only`);
+    assert(tool?.inputSchema?.properties?.uiToken?.pattern === "^wlui_[a-f0-9]{64}$", `${name} must require the private UI capability`);
+    assert(tool?.inputSchema?.required?.includes("uiToken"), `${name} must require uiToken`);
   }
 
   const resources = await request("resources/list");
@@ -151,9 +155,12 @@ try {
   const appContent = read.result?.contents?.[0];
   assert(appContent?.mimeType === "text/html;profile=mcp-app", "MCP App content has the wrong MIME type");
   assert(typeof appContent?.text === "string" && appContent.text.includes("ui/initialize"), "MCP App HTML is missing the UI handshake");
+  assert(appContent.text.includes("ui/notifications/tool-result"), "MCP App HTML is missing tool-result delivery");
+  assert(appContent.text.includes("waitloop/uiToken"), "MCP App HTML is missing UI capability handling");
   assert(appContent.text.includes("ui_play_cards"), "MCP App HTML is missing Human play controls");
   assert(!appContent.text.includes("wlseat_"), "MCP App HTML leaked an Agent credential prefix");
   assert(!appContent.text.includes("wlview_"), "MCP App HTML leaked a viewer credential prefix");
+  assert(!/wlui_[a-f0-9]{64}/.test(appContent.text), "MCP App HTML leaked a concrete UI capability");
 
   const active = await request("tools/call", {
     name: "get_active_room",
@@ -162,6 +169,18 @@ try {
   assert(!active.error, `get_active_room transport failed: ${JSON.stringify(active.error)}`);
   const payload = JSON.parse(active.result?.content?.[0]?.text ?? "null");
   assert(payload?.active === false, "clean bridge should report no active Agent Room");
+
+  const unauthorized = await request("tools/call", {
+    name: "ui_get_game",
+    arguments: {
+      roomId: "room-not-local",
+      uiToken: `wlui_${"0".repeat(64)}`,
+    },
+  });
+  assert(!unauthorized.error, `ui_get_game transport failed unexpectedly: ${JSON.stringify(unauthorized.error)}`);
+  assert(unauthorized.result?.isError === true, "unknown Human Room must be a tool error");
+  const unauthorizedText = unauthorized.result?.content?.[0]?.text ?? "";
+  assert(!unauthorizedText.includes("wlui_"), "Human UI capability leaked through an error");
 
   console.log(`MCP stdio validation passed (${names.length} tools, 1 MCP App resource) using ${cli}.`);
 } finally {
