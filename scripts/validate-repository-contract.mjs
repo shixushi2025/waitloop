@@ -24,6 +24,10 @@ function requireIncludes(path, values, required) {
   if (!Array.isArray(values) || !values.includes(required)) fail(`${path} must include ${JSON.stringify(required)}`);
 }
 
+function requireString(path, value) {
+  if (typeof value !== "string" || value.length === 0) fail(`${path} is required`);
+}
+
 const cliPackage = json("packages/cli/package.json");
 const manifest = json("apps/web/public/agent.json");
 const agentGuide = read("apps/web/public/agent.md");
@@ -41,6 +45,9 @@ const publishedVersion = manifest.cli?.version;
 const candidateVersion = manifest.cli?.candidateVersion;
 if (publishedVersion !== packageVersion && candidateVersion !== packageVersion) {
   fail("agent.json must expose package.json version as either the published version or candidateVersion");
+}
+if (candidateVersion === packageVersion && manifest.cli?.candidatePublished !== false) {
+  fail("an unpublished candidate matching package.json must set candidatePublished:false");
 }
 
 const prerelease = String(packageVersion).match(/-([0-9A-Za-z-]+)/)?.[1];
@@ -61,16 +68,28 @@ if (manifest.localMcp?.transport !== "stdio" || manifest.localMcp?.command !== "
 const remoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];
 for (const tool of remoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
 
-const localTools = ["create_room", "join_room", "get_active_room", "leave_room", ...remoteTools];
+const localTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...remoteTools];
 for (const tool of localTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);
+
+const appTools = ["ui_get_game", "ui_play_cards", "ui_pass", "ui_hint"];
+for (const tool of appTools) requireIncludes("agent.json localMcp.appTools", manifest.localMcp?.appTools, tool);
+
+if (manifest.mcpApps?.protocolVersion !== "2026-01-26") fail("agent.json MCP Apps protocol version is out of sync");
+if (manifest.mcpApps?.resourceUri !== "ui://waitloop/doudizhu/v1") fail("agent.json MCP App resource URI is out of sync");
+if (manifest.mcpApps?.mimeType !== "text/html;profile=mcp-app") fail("agent.json MCP App MIME type is out of sync");
+if (manifest.mcpApps?.triggerTool !== "open_game") fail("agent.json MCP App trigger tool is out of sync");
+if (manifest.mcpApps?.sameRoomFallback !== false) fail("agent.json must not claim the standalone fallback resumes the private inline Room");
+for (const key of ["hostRequirement", "hostFallback", "privacy", "network"]) requireString(`agent.json mcpApps.${key}`, manifest.mcpApps?.[key]);
+if (!String(manifest.mcpApps?.privacy).includes("_meta")) fail("agent.json MCP App privacy must describe result _meta capability delivery");
+if (!String(manifest.mcpApps?.privacy).includes("model-visible")) fail("agent.json MCP App privacy must describe model visibility boundary");
 
 for (const mode of ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"]) {
   requireIncludes("agent.json rooms.modes", manifest.rooms?.modes, mode);
 }
 if (manifest.rooms?.headlessAgentMode !== "agent-bots") fail("agent.json headlessAgentMode is out of sync");
 if (manifest.rooms?.companionMode !== "companion-agent") fail("agent.json companionMode is out of sync");
-for (const key of ["seatIds", "roomLifetime", "joinLifetime", "browserIdentity", "recovery"]) {
-  if (typeof manifest.rooms?.[key] !== "string" || manifest.rooms[key].length === 0) fail(`agent.json rooms.${key} is required`);
+for (const key of ["seatIds", "roomLifetime", "joinLifetime", "browserIdentity", "recovery", "inlineHumanMode"]) {
+  requireString(`agent.json rooms.${key}`, manifest.rooms?.[key]);
 }
 
 for (const needle of [
@@ -80,6 +99,7 @@ for (const needle of [
   "waitloop mcp",
   "waitloop join",
   "https://waitloop.run/mcp",
+  "open_game",
   "create_room()",
   "join_room",
   "get_active_room()",
@@ -90,6 +110,16 @@ for (const needle of [
   "comment(text)",
   "yield_to_bot()",
   "take_control()",
+  "ui_get_game",
+  "ui_play_cards",
+  "ui_pass",
+  "ui_hint",
+  "ui://waitloop/doudizhu/v1",
+  "text/html;profile=mcp-app",
+  "MCP Apps-capable Host",
+  "separate",
+  "wlui_",
+  "_meta",
   "seat-1",
   "Actor ID is not a credential",
   "companion-agent",
@@ -101,6 +131,7 @@ for (const needle of [
   "npm install -g @waitloop/cli@alpha",
   "waitloop mcp",
   "waitloop doctor",
+  "open_game",
   "create_room()",
   "join_room",
   "get_active_room()",
@@ -111,6 +142,13 @@ for (const needle of [
   "comment(text)",
   "yield_to_bot()",
   "take_control()",
+  "ui_get_game",
+  "ui_play_cards",
+  "ui://waitloop/doudizhu/v1",
+  "MCP Apps-capable Host",
+  "separate",
+  "wlui_",
+  "_meta",
   "seat-1",
   "Advisor",
 ]) requireText("SKILL.md", skill, needle);
@@ -124,12 +162,17 @@ for (const needle of [
   "https://waitloop.run/mcp",
   "npm install -g @waitloop/cli@alpha",
   "waitloop mcp",
-  "agent-bots",
+  "open_game",
   "create_room()",
   "join_room",
   "wait_for_turn",
   "yield_to_bot()",
   "take_control()",
+  "ui://waitloop/doudizhu/v1",
+  "text/html;profile=mcp-app",
+  "MCP Apps-capable Host",
+  "wlui_",
+  "_meta",
 ]) requireText("llms.txt", llms, needle);
 
 for (const needle of [
@@ -142,6 +185,10 @@ for (const needle of [
   "yield_to_bot()",
   "take_control()",
   "credential",
+  "open_game",
+  "ui://waitloop/doudizhu/v1",
+  "MCP App",
+  "wlui_",
 ]) {
   requireText("README.md", rootReadme, needle);
   requireText("AGENTS.md", agents, needle);
@@ -190,5 +237,9 @@ for (const path of ["docs/game-system.md", "docs/mcp.md", "docs/protocol.md", "d
   const content = read(path);
   for (const needle of ["yield_to_bot", "take_control"]) requireText(path, content, needle);
 }
+for (const path of ["docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs/architecture.md", "docs/status.md"]) {
+  const content = read(path);
+  for (const needle of ["open_game", "MCP App", "ui://waitloop/doudizhu/v1", "wlui_", "_meta"]) requireText(path, content, needle);
+}
 
-console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/local+remote MCP/wait/recovery Agent surfaces synchronized.`);
+console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/Agent MCP/Human MCP App/wait/recovery surfaces synchronized.`);
