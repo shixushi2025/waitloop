@@ -45,7 +45,7 @@ for (const needle of [
   "Human play inside an Agent client",
   "MCP Apps-capable Host",
   "separate game",
-  "tool result _meta",
+  "result `_meta`",
 ]) requireText("apps/web/public/agent.md", needle);
 
 for (const needle of [
