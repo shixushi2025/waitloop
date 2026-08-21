@@ -11,7 +11,89 @@ Waitloop should feel like a developer utility that happens to contain small game
 - motion only to communicate state/history;
 - no autoplay sound/reward mechanics;
 - coding-agent attention outranks game UI;
-- normal Agent paths should not expose transport credentials or implementation plumbing.
+- normal Agent/Human paths do not expose transport credentials or implementation plumbing;
+- unsupported Host capability is stated honestly rather than hidden behind a broken control.
+
+## Human UI versus Agent play language
+
+The first choice is who operates the Seat:
+
+```text
+open_game
+  Human clicks an MCP App table
+
+create_room
+  Agent owns seat-1 and plays through MCP tools
+```
+
+Human-facing prompts such as “I want to play”, “open the game UI”, or “let me choose cards” should lead to `open_game`. Agent-autonomous prompts should lead to `create_room`.
+
+Never render an Agent-owned Room as though the Human can click its hand, and never let a Human MCP App impersonate an Agent Actor.
+
+## MCP App visual contract
+
+Resource:
+
+```text
+ui://waitloop/doudizhu/v1
+text/html;profile=mcp-app
+```
+
+The inline App is a compact utility panel, not a miniature casino page. Required visual regions:
+
+```text
+brand + refresh/fullscreen controls
+role / turn / status / revision
+three Seat summaries
+current trick
+recent activity
+your hand
+actions: play / pass / hint / clear
+state/error/fallback message
+```
+
+The App should inherit Host color/font variables where available and remain readable with its own neutral fallbacks. It must support narrow layouts by stacking players/table panels.
+
+Interaction rules:
+
+- cards are buttons with visible selected state;
+- unavailable actions are disabled, not silently ignored;
+- Human can always distinguish current turn and own Seat;
+- refresh is explicit in addition to bounded automatic polling;
+- fullscreen is offered only if the Host advertises it;
+- teardown stops polling;
+- no autoplay audio, confetti, reward animation, or retention prompt;
+- activity is recent authoritative history, not model narration;
+- error text tells the Human what to do next.
+
+The App is self-contained: no external script, stylesheet, tracking pixel, or direct credentialed fetch.
+
+## MCP App Host fallback language
+
+Do not say “your game is open” when the Host did not render or operate the App.
+
+Use explicit wording:
+
+```text
+This Host does not currently provide the MCP Apps capabilities needed for inline controls.
+
+Open the standalone web table to start a separate Human game,
+or use create_room if the Agent should play.
+```
+
+The fallback URL starts a **separate game**. Do not imply same-Room continuation because private Human cookies and `wlui_` capability are not transferable in the URL.
+
+## MCP App private capability UX
+
+The Human should never see or manually copy:
+
+```text
+wl_actor
+wl_room_*
+wlui_*
+```
+
+The Host/App/local bridge handles them invisibly. If the App capability is missing/invalid, disable actions and advise reopening with `open_game(roomId)` rather than displaying the token.
 
 ## Seat and Actor language
 
@@ -33,9 +115,11 @@ players/
   bot      FARMER      13 cards    READY
 ```
 
+The first MCP App Human-vs-bots release may use simpler Seat summaries, but it still preserves this semantic model.
+
 ## Agent connection hierarchy
 
-Primary connected-Agent guidance should be simple:
+Primary connected-Agent guidance:
 
 ```text
 connect your agent/
@@ -50,9 +134,9 @@ advanced
 show raw MCP configuration
 ```
 
-With stable MCP installed, an Agent may call `join_room(code)` directly. Raw headers remain collapsed/advanced and must be labeled sensitive.
+With stable MCP installed, an Agent may call `join_room(code)` directly. Raw headers remain collapsed/advanced and labeled sensitive.
 
-The lobby should distinguish:
+The lobby distinguishes:
 
 ```text
 Join claimed / active locally
@@ -73,6 +157,8 @@ you control this seat · Codex advises
 
 After delegation the row remains the Human Seat. Human may see hand, but play/pass/hint disable because `seat:play` is absent. Delegation/take-back are explicit.
 
+The first MCP App release does not yet expose connected-agent/companion delegation controls. Those remain standalone Web functionality until added with explicit server capabilities.
+
 ## Temporary Bot fallback
 
 Fallback is Controller state, not replacement player identity.
@@ -92,9 +178,11 @@ Rules:
 - reconnect alone does not imply Controller returned;
 - work attention outranks fallback controls.
 
+In `agent-bots`, yielding Agent `seat-1` may allow all three Bots to finish. UI/docs must call it handoff, not pause.
+
 ## Efficient wait language
 
-`wait_for_turn()` is invisible transport efficiency, not a visible competitive timer.
+`wait_for_turn()` is invisible Agent transport efficiency, not a visible competitive timer.
 
 Human-facing UI may show elapsed status:
 
@@ -105,7 +193,7 @@ Codex · TURN · 1m 14s · taking longer than usual
 
 A 25-second MCP transport timeout should not appear as “Agent timed out” or “move expired”. The Agent simply waits again while its run remains active.
 
-No aggressive countdown unless a future Arena policy enforces one.
+The Human MCP App uses bounded state refresh while the iframe remains open. This is not a model loop or turn deadline.
 
 ## Continuous-play expectation
 
@@ -115,11 +203,15 @@ Agent-facing instructions distinguish:
 connect / verify
 -> one snapshot may finish the request
 
-play until finished
+Agent plays until finished
 -> keep current Agent run active
 -> wait_for_turn
 -> play_move
 -> repeat until game_finished
+
+Human plays inline
+-> open_game
+-> Human clicks App controls
 ```
 
 Do not imply that an ended Agent response continues in background.
@@ -152,17 +244,26 @@ Distinguish:
 
 ```text
 room expired
-room unavailable / this browser is not the owning Actor
+room unavailable / this client is not the owning Actor
+interactive Room not present in this local bridge
+Host cannot operate MCP Apps
 ```
 
-Never display anonymous Actor or cached MCP secret. Join pages may show Room/Join expiry, Actor ID, Seat ID, relation.
+Never display anonymous Actor, cached Agent secret, Human cookies, or App capability.
 
-Local bridge `leave_room` messaging must be explicit:
+Local bridge `leave_room` messaging:
 
 ```text
-active room cleared locally
+active Agent room cleared locally
 credential remains cached until room expiry
 remote game unchanged
+```
+
+Human App reopen messaging:
+
+```text
+open_game(roomId)
+-> reopen still-valid local interactive Room
 ```
 
 ## Game presentation
@@ -178,19 +279,24 @@ Controller/runtime status
 presentation replay
 ```
 
-Worker/game logic never sleeps for visual effect; browser may replay authoritative history. Respect reduced motion.
+Worker/game logic never sleeps for visual effect; Web/App may present authoritative history. Respect reduced motion.
 
 ## Headless use
 
-Web is Human UI, not an Agent requirement. Primary headless path is stable local MCP/CLI. Raw Room HTTP + remote MCP remain advanced fallback.
+Standalone Web is not an Agent requirement. Primary Agent headless path is stable local MCP/CLI. Raw Room HTTP + remote MCP remain advanced fallback.
+
+Human inline use is also local MCP but requires an MCP Apps-capable Host. Tool support alone is not sufficient proof of UI support.
 
 ## Responsive/accessibility
 
-- stack player/control sections on narrow screens;
+- stack player/control/table sections on narrow screens;
 - fallback actions remain readable/touchable;
 - never encode readiness/control only by color;
 - preserve focus states, contrast, reduced motion;
-- cards/actions remain touch-safe.
+- cards/actions remain touch-safe;
+- selected cards expose pressed state;
+- disabled actions remain visibly distinguishable;
+- App resizes through Host notifications without page-level scroll assumptions.
 
 ## Product mark
 
