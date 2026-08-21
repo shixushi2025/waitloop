@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { resolveWaitloopServerUrl } from "./join.js";
 
 const ROOM_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const UI_TOKEN_PATTERN = /^wlui_[a-f0-9]{64}$/;
 const COOKIE_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const MAX_COOKIE_HEADER_LENGTH = 4_096;
 
@@ -14,6 +15,7 @@ interface HumanRoomSessionV1 {
   roomId: string;
   serverUrl: string;
   cookieHeader: string;
+  uiToken: string;
   createdAt: number;
   expiresAt: number;
 }
@@ -43,6 +45,11 @@ export interface HumanGameHintPayloadV1 extends HumanGamePayloadV1 {
     index: number;
     total: number;
   };
+}
+
+export interface HumanGameAccessV1 {
+  payload: HumanGamePayloadV1;
+  uiToken: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -84,8 +91,9 @@ function optionalTimestamp(value: unknown): number | null {
 
 function parseSession(value: unknown, expectedRoomId: string): HumanRoomSessionV1 | null {
   if (!isRecord(value) || value.version !== 1 || value.roomId !== expectedRoomId) return null;
-  if (typeof value.serverUrl !== "string" || typeof value.cookieHeader !== "string") return null;
+  if (typeof value.serverUrl !== "string" || typeof value.cookieHeader !== "string" || typeof value.uiToken !== "string") return null;
   if (value.cookieHeader.length === 0 || value.cookieHeader.length > MAX_COOKIE_HEADER_LENGTH) return null;
+  if (!UI_TOKEN_PATTERN.test(value.uiToken)) return null;
   const createdAt = optionalTimestamp(value.createdAt);
   const expiresAt = optionalTimestamp(value.expiresAt);
   if (createdAt === null || expiresAt === null) return null;
@@ -94,6 +102,7 @@ function parseSession(value: unknown, expectedRoomId: string): HumanRoomSessionV
     roomId: expectedRoomId,
     serverUrl: value.serverUrl,
     cookieHeader: value.cookieHeader,
+    uiToken: value.uiToken,
     createdAt,
     expiresAt,
   };
@@ -116,6 +125,19 @@ async function loadSession(roomIdInput: string): Promise<HumanRoomSessionV1> {
     }
     throw error;
   }
+}
+
+function tokenMatches(expected: string, provided: string): boolean {
+  if (!UI_TOKEN_PATTERN.test(expected) || !UI_TOKEN_PATTERN.test(provided)) return false;
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const providedBytes = Buffer.from(provided, "utf8");
+  return expectedBytes.length === providedBytes.length && timingSafeEqual(expectedBytes, providedBytes);
+}
+
+async function authorizedSession(roomId: string, uiToken: string): Promise<HumanRoomSessionV1> {
+  const session = await loadSession(roomId);
+  if (!tokenMatches(session.uiToken, uiToken)) throw new Error("Interactive UI capability is invalid.");
+  return session;
 }
 
 function splitCombinedSetCookie(value: string): string[] {
@@ -195,6 +217,10 @@ function gamePayload(session: HumanRoomSessionV1, snapshot: Record<string, unkno
   };
 }
 
+function gameAccess(session: HumanRoomSessionV1, snapshot: Record<string, unknown>): HumanGameAccessV1 {
+  return { payload: gamePayload(session, snapshot), uiToken: session.uiToken };
+}
+
 function shouldForget(status: number): boolean {
   return status === 401 || status === 403 || status === 404 || status === 410;
 }
@@ -242,7 +268,7 @@ function selectedCardIds(value: unknown): string[] {
   return value as string[];
 }
 
-export async function createHumanGame(explicitServerUrl?: string): Promise<HumanGamePayloadV1> {
+export async function createHumanGame(explicitServerUrl?: string): Promise<HumanGameAccessV1> {
   const serverUrl = await resolveWaitloopServerUrl(explicitServerUrl);
   const response = await fetch(`${serverUrl}/api/v1/rooms`, {
     method: "POST",
@@ -263,15 +289,23 @@ export async function createHumanGame(explicitServerUrl?: string): Promise<Human
     roomId,
     serverUrl,
     cookieHeader: cookieHeader(response),
+    uiToken: `wlui_${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`,
     createdAt: Date.now(),
     expiresAt,
   };
   await writePrivateJson(sessionPath(roomId), session);
-  return gamePayload(session, snapshot);
+  return gameAccess(session, snapshot);
 }
 
-export async function getHumanGame(roomId: string, signal?: AbortSignal): Promise<HumanGamePayloadV1> {
+export async function reopenHumanGame(roomId: string, signal?: AbortSignal): Promise<HumanGameAccessV1> {
   const session = await loadSession(roomId);
+  const body = await roomRequest(session, "snapshot", undefined, signal);
+  if (!isRecord(body)) throw new Error("Waitloop returned an invalid Human Room response.");
+  return gameAccess(session, parseSnapshot(body.snapshot, session.roomId));
+}
+
+export async function getHumanGame(roomId: string, uiToken: string, signal?: AbortSignal): Promise<HumanGamePayloadV1> {
+  const session = await authorizedSession(roomId, uiToken);
   const body = await roomRequest(session, "snapshot", undefined, signal);
   if (!isRecord(body)) throw new Error("Waitloop returned an invalid Human Room response.");
   return gamePayload(session, parseSnapshot(body.snapshot, session.roomId));
@@ -279,10 +313,11 @@ export async function getHumanGame(roomId: string, signal?: AbortSignal): Promis
 
 export async function playHumanCards(
   roomId: string,
+  uiToken: string,
   revisionInput: unknown,
   cardIdsInput: unknown,
 ): Promise<HumanGamePayloadV1> {
-  const session = await loadSession(roomId);
+  const session = await authorizedSession(roomId, uiToken);
   const body = await roomRequest(session, "play", {
     version: 1,
     expectedRevision: expectedRevision(revisionInput),
@@ -292,8 +327,12 @@ export async function playHumanCards(
   return gamePayload(session, parseSnapshot(body.snapshot, session.roomId));
 }
 
-export async function passHumanTurn(roomId: string, revisionInput: unknown): Promise<HumanGamePayloadV1> {
-  const session = await loadSession(roomId);
+export async function passHumanTurn(
+  roomId: string,
+  uiToken: string,
+  revisionInput: unknown,
+): Promise<HumanGamePayloadV1> {
+  const session = await authorizedSession(roomId, uiToken);
   const body = await roomRequest(session, "pass", {
     version: 1,
     expectedRevision: expectedRevision(revisionInput),
@@ -304,20 +343,21 @@ export async function passHumanTurn(roomId: string, revisionInput: unknown): Pro
 
 export async function hintHumanTurn(
   roomId: string,
+  uiToken: string,
   revisionInput: unknown,
   cursorInput: unknown,
   signal?: AbortSignal,
 ): Promise<HumanGameHintPayloadV1> {
   const cursor = cursorInput === undefined ? 0 : cursorInput;
   if (!Number.isSafeInteger(cursor) || (cursor as number) < 0) throw new Error("cursor must be a non-negative integer.");
-  const session = await loadSession(roomId);
-  const body = await roomRequest(session, "hint", {
+  const session = await authorizedSession(roomId, uiToken);
+  const hintBody = await roomRequest(session, "hint", {
     version: 1,
     expectedRevision: expectedRevision(revisionInput),
     cursor,
   }, signal);
-  if (!isRecord(body) || !isRecord(body.hint)) throw new Error("Waitloop returned an invalid Human hint response.");
-  const hint = body.hint;
+  if (!isRecord(hintBody) || !isRecord(hintBody.hint)) throw new Error("Waitloop returned an invalid Human hint response.");
+  const hint = hintBody.hint;
   if (
     hint.version !== 1 ||
     !Number.isSafeInteger(hint.revision) ||
@@ -327,6 +367,9 @@ export async function hintHumanTurn(
     !Number.isSafeInteger(hint.index) ||
     !Number.isSafeInteger(hint.total)
   ) throw new Error("Waitloop returned an invalid Human hint.");
-  const current = await getHumanGame(session.roomId, signal);
+
+  const snapshotBody = await roomRequest(session, "snapshot", undefined, signal);
+  if (!isRecord(snapshotBody)) throw new Error("Waitloop returned an invalid Human Room response.");
+  const current = gamePayload(session, parseSnapshot(snapshotBody.snapshot, session.roomId));
   return { ...current, hint: hint as HumanGameHintPayloadV1["hint"] };
 }
