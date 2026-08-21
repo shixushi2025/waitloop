@@ -1,0 +1,177 @@
+
+===== install frozen =====
+Scope: all 7 workspace projects
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +91
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 91, reused 0, downloaded 90, added 90
+Progress: resolved 91, reused 0, downloaded 91, added 91, done
+
+devDependencies:
++ @cloudflare/workers-types 5.20260818.1
++ @types/node 22.20.1
++ typescript 5.9.3
++ vitest 3.2.7
++ wrangler 4.124.0
+
+. postinstall$ node scripts/cloudflare-ci-gate.mjs
+. postinstall: Done
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: esbuild@0.28.1, esbuild@0.28.2,                     │
+│   workerd@1.20260815.1.                                                      │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Done in 2s using pnpm v10.34.5
+
+exit=0
+
+===== typecheck and tests =====
+
+> waitloop@0.0.0 check /home/runner/work/waitloop/waitloop
+> pnpm typecheck && pnpm test
+
+
+> waitloop@0.0.0 typecheck /home/runner/work/waitloop/waitloop
+> tsc -p tsconfig.json --noEmit && pnpm --filter @waitloop/cli typecheck
+
+
+> @waitloop/cli@0.1.0-alpha.7 typecheck /home/runner/work/waitloop/waitloop/packages/cli
+> tsc -p tsconfig.json --noEmit
+
+
+> waitloop@0.0.0 test /home/runner/work/waitloop/waitloop
+> vitest run --passWithNoTests
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90m/home/runner/work/waitloop/waitloop[39m
+
+ [32m✓[39m packages/protocol/src/protocol.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m packages/cli/test/human-room-client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m packages/cli/test/mcp-bridge.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m packages/game-core/src/room.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m packages/cli/test/room-client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/pattern.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m worker/src/room-control.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m packages/cli/test/pairing.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m packages/cli/test/join.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/move-generator.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m packages/cli/test/lifecycle.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m worker/src/room-actors.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m packages/cli/test/diagnostics.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m packages/doudizhu/src/game.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m worker/src/wait-for-turn.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m worker/src/actor-identity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m worker/src/human-game.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m packages/cli/test/claude-code.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m packages/cli/test/codex.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m packages/cli/test/mcp-install.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m packages/cli/test/cursor.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m packages/cli/test/config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m worker/src/room-code.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m23 passed[39m[22m[90m (23)[39m
+[2m      Tests [22m [1m[32m88 passed[39m[22m[90m (88)[39m
+[2m   Start at [22m 01:18:01
+[2m   Duration [22m 2.00s[2m (transform 540ms, setup 0ms, collect 1.09s, tests 418ms, environment 4ms, prepare 1.39s)[22m
+
+
+exit=0
+
+===== repository contract =====
+
+> waitloop@0.0.0 check:repo-contract /home/runner/work/waitloop/waitloop
+> node scripts/validate-repository-contract.mjs && node scripts/validate-onboarding-contract.mjs
+
+Repository contract passed: 14 canonical docs indexed; CLI/Room/Agent MCP/Human MCP App/wait/recovery surfaces synchronized.
+Onboarding contract passed: discovery fallbacks, CLI diagnostics, Human-vs-Agent entry selection, MCP Apps Host fallback, Join semantics, and continuous-play guidance are synchronized.
+
+exit=0
+
+===== CLI package =====
+
+> waitloop@0.0.0 check:cli-package /home/runner/work/waitloop/waitloop
+> node scripts/validate-cli-package.mjs
+
+npm warn Unknown env config "verify-deps-before-run". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> @waitloop/cli@0.1.0-alpha.7 prepack
+> npm run clean && npm run build
+
+npm warn Unknown env config "verify-deps-before-run". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> @waitloop/cli@0.1.0-alpha.7 clean
+> node -e "require('node:fs').rmSync('dist',{recursive:true,force:true})"
+
+npm warn Unknown env config "verify-deps-before-run". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> @waitloop/cli@0.1.0-alpha.7 build
+> tsc -p tsconfig.json
+
+@waitloop/cli@0.1.0-alpha.7 package validation passed (54 files, MCP App included).
+
+exit=0
+
+===== MCP stdio and App wire =====
+
+> waitloop@0.0.0 check:mcp-stdio /home/runner/work/waitloop/waitloop
+> pnpm build:cli && node scripts/validate-mcp-stdio.mjs
+
+
+> waitloop@0.0.0 build:cli /home/runner/work/waitloop/waitloop
+> pnpm --filter @waitloop/cli build
+
+
+> @waitloop/cli@0.1.0-alpha.7 build /home/runner/work/waitloop/waitloop/packages/cli
+> tsc -p tsconfig.json
+
+MCP stdio validation passed (15 tools, 1 MCP App resource) using /home/runner/work/waitloop/waitloop/packages/cli/dist/index.js.
+
+exit=0
+
+===== browser JavaScript =====
+
+exit=0
+
+===== Agent discovery =====
+
+exit=0
+
+===== published manifest =====
+
+exit=1
+
+===== one-shot cleanup =====
+
+exit=0
+
+===== Worker dry run =====
+
+ ⛅️ wrangler 4.124.0
+────────────────────
+✨ Read 20 files from the assets directory /home/runner/work/waitloop/waitloop/apps/web/public
+Total Upload: 764.46 KiB / gzip: 150.35 KiB
+Your Worker has access to the following bindings:
+Binding                                                    Resource            
+env.AGENT_SESSIONS (AgentSession)                          Durable Object      
+env.DEVICE_AUTH (DeviceRegistry)                           Durable Object      
+env.PAIRINGS (PairingRequest)                              Durable Object      
+env.GAME_ROOMS (GameRoom)                                  Durable Object      
+env.ROOM_CREATE_RATE_LIMITER (30 requests/60s)             Rate Limit          
+env.HOSTED_ROOM_CREATE_RATE_LIMITER (5 requests/60s)       Rate Limit          
+env.ASSETS                                                 Assets              
+
+--dry-run: exiting now.
+
+Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+
+exit=0
