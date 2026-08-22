@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 function read(path) {
   return readFileSync(resolve(root, path), "utf8");
@@ -28,6 +29,11 @@ function requireString(path, value) {
   if (typeof value !== "string" || value.length === 0) fail(`${path} is required`);
 }
 
+function distTagForVersion(version) {
+  const prerelease = String(version).match(/-([0-9A-Za-z-]+)/)?.[1];
+  return prerelease ? prerelease.split(".")[0] : "latest";
+}
+
 const cliPackage = json("packages/cli/package.json");
 const manifest = json("apps/web/public/agent.json");
 const agentGuide = read("apps/web/public/agent.md");
@@ -36,6 +42,7 @@ const skill = read("apps/web/public/skills/waitloop/SKILL.md");
 const rootReadme = read("README.md");
 const agents = read("AGENTS.md");
 const docsIndex = read("docs/README.md");
+const releaseDocs = read("docs/cli-release.md");
 
 if (cliPackage.name !== "@waitloop/cli") fail("unexpected CLI package name");
 if (manifest.cli?.packageName !== cliPackage.name) fail("agent.json CLI package name is out of sync");
@@ -43,17 +50,27 @@ if (manifest.cli?.packageName !== cliPackage.name) fail("agent.json CLI package 
 const packageVersion = cliPackage.version;
 const publishedVersion = manifest.cli?.version;
 const candidateVersion = manifest.cli?.candidateVersion;
-if (publishedVersion !== packageVersion && candidateVersion !== packageVersion) {
-  fail("agent.json must expose package.json version as either the published version or candidateVersion");
-}
-if (candidateVersion === packageVersion && manifest.cli?.candidatePublished !== false) {
-  fail("an unpublished candidate matching package.json must set candidatePublished:false");
+if (typeof packageVersion !== "string" || !VERSION_PATTERN.test(packageVersion)) fail("package.json CLI version is invalid");
+if (typeof publishedVersion !== "string" || !VERSION_PATTERN.test(publishedVersion)) fail("agent.json published CLI version is invalid");
+if (manifest.cli?.published !== true) fail("agent.json cli.version must describe a published version");
+
+if (packageVersion === publishedVersion) {
+  if (candidateVersion !== undefined) fail("published CLI state must not retain candidateVersion");
+  if (manifest.cli?.candidatePublished !== undefined) fail("published CLI state must not retain candidatePublished");
+} else {
+  if (candidateVersion !== packageVersion) {
+    fail("source-ahead CLI state must expose package.json version as candidateVersion");
+  }
+  if (manifest.cli?.candidatePublished !== false) {
+    fail("source-ahead CLI candidate must set candidatePublished:false");
+  }
 }
 
-const prerelease = String(packageVersion).match(/-([0-9A-Za-z-]+)/)?.[1];
-const expectedTag = prerelease ? prerelease.split(".")[0] : "latest";
-if (manifest.cli?.distTag !== expectedTag) fail("agent.json CLI distTag is out of sync");
-if (manifest.cli?.installCommand !== `npm install -g ${cliPackage.name}@${expectedTag}`) fail("agent.json CLI installCommand is out of sync");
+const expectedPublishedTag = distTagForVersion(publishedVersion);
+if (manifest.cli?.distTag !== expectedPublishedTag) fail("agent.json CLI distTag must follow the published version, not the source candidate");
+if (manifest.cli?.installCommand !== `npm install -g ${cliPackage.name}@${expectedPublishedTag}`) {
+  fail("agent.json CLI installCommand must follow the published channel");
+}
 if (manifest.cli?.joinCommand !== "waitloop join <join-code>") fail("agent.json joinCommand is missing or changed unexpectedly");
 if (manifest.cli?.roomCreateCommand !== "waitloop room create") fail("agent.json roomCreateCommand is out of sync");
 if (manifest.cli?.localMcpCommand !== "waitloop mcp") fail("agent.json localMcpCommand is out of sync");
@@ -64,6 +81,15 @@ if (manifest.localMcp?.status !== "available") fail("agent.json local MCP must b
 if (manifest.localMcp?.transport !== "stdio" || manifest.localMcp?.command !== "waitloop mcp") {
   fail("agent.json local MCP transport/command is out of sync");
 }
+
+for (const needle of [
+  "Source/build truth",
+  "Declared published/installable truth",
+  "Registry truth",
+  "candidatePublished:false",
+  "Never infer npm availability",
+  "registry evidence outranks repository inference",
+]) requireText("docs/cli-release.md", releaseDocs, needle);
 
 const remoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];
 for (const tool of remoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
@@ -242,4 +268,4 @@ for (const path of ["docs/mcp.md", "docs/protocol.md", "docs/security.md", "docs
   for (const needle of ["open_game", "MCP App", "ui://waitloop/doudizhu/v1", "wlui_", "_meta"]) requireText(path, content, needle);
 }
 
-console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI/Room/Agent MCP/Human MCP App/wait/recovery surfaces synchronized.`);
+console.log(`Repository contract passed: ${canonicalDocs.length} canonical docs indexed; CLI release state/Room/Agent MCP/Human MCP App/wait/recovery surfaces synchronized.`);
