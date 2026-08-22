@@ -44,16 +44,10 @@ https://waitloop.run/mcp
 Published CLI alpha:
 
 ```text
-0.1.0-alpha.6
-```
-
-Current source candidate:
-
-```text
 0.1.0-alpha.7
 ```
 
-Alpha.7 adds the Human-operated MCP App path and remains unpublished until trusted publishing plus clean npm installation verification complete.
+Alpha.7 includes the Human-operated MCP App path and has been verified on the npm registry with the `alpha` dist-tag pointing to `0.1.0-alpha.7`.
 
 Install/update:
 
@@ -122,7 +116,7 @@ Cursor lifecycle integration remains available, while stable stdio MCP setup is 
 
 ## Agent-native interactive Human table
 
-The alpha.7 candidate adds:
+Alpha.7 adds:
 
 ```text
 open_game({gameId:"doudizhu", mode:"human-bots"})

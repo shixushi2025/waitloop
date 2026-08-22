@@ -13,9 +13,7 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, Human-operated MCP Apps, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
-    "version": "0.1.0-alpha.6",
-    "candidateVersion": "0.1.0-alpha.7",
-    "candidatePublished": false,
+    "version": "0.1.0-alpha.7",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -34,7 +32,7 @@
     "doctorCommand": "waitloop doctor",
     "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml",
-    "publicationVerification": "alpha.6 was verified from a clean npm installation, including CLI help and the packaged MCP stdio wire protocol; alpha.7 is the MCP Apps candidate"
+    "publicationVerification": "alpha.7 was published through npm trusted publishing and verified from the registry; the packaged MCP stdio bridge exposes 15 tools and one MCP App resource"
   },
   "skill": {
     "status": "available",
@@ -94,7 +92,7 @@
     "cancellation": "get_active_room, get_turn, wait_for_turn, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
   },
   "mcpApps": {
-    "status": "candidate-alpha.7",
+    "status": "available",
     "protocolVersion": "2026-01-26",
     "resourceUri": "ui://waitloop/doudizhu/v1",
     "mimeType": "text/html;profile=mcp-app",
