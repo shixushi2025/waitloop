@@ -1,6 +1,7 @@
 export const WAITLOOP_GAME_UI_URI = "ui://waitloop/doudizhu/v1";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_PROTOCOL_VERSION = "2026-01-26";
+export const MCP_APP_RECENT_ACTIVITY_LIMIT = 4;
 
 export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -49,7 +50,8 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
     .player-meta { margin-top: 5px; color: var(--muted); font-size: 11px; }
     .table { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .trick { min-height: 32px; font: 12px/1.45 var(--mono); }
-    .activity { min-height: 32px; max-height: 98px; overflow: auto; display: grid; gap: 4px; color: var(--muted); font: 10px/1.4 var(--mono); }
+    .activity { min-height: 32px; overflow: hidden; display: grid; align-content: start; gap: 4px; color: var(--muted); font: 10px/1.4 var(--mono); }
+    .activity-row { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hand { display: flex; flex-wrap: wrap; gap: 6px; min-height: 42px; }
     .card { min-width: 34px; height: 42px; padding: 0 7px; background: var(--panel2); font: 700 12px var(--mono); transition: transform .12s, border-color .12s; }
     .card:hover:not(:disabled) { transform: translateY(-2px); }
@@ -119,6 +121,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
       "use strict";
 
       var PROTOCOL_VERSION = "2026-01-26";
+      var RECENT_ACTIVITY_LIMIT = ${MCP_APP_RECENT_ACTIVITY_LIMIT};
       var state = {
         connected: false,
         hostCapabilities: {},
@@ -338,12 +341,15 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
 
         var last = snapshot.state ? snapshot.state.lastPlay : null;
         trick.textContent = last ? actionLabel(snapshot, last) : "none";
-        var history = snapshot.state && Array.isArray(snapshot.state.history) ? snapshot.state.history.slice(-8) : [];
+        var history = snapshot.state && Array.isArray(snapshot.state.history) ? snapshot.state.history.slice(-RECENT_ACTIVITY_LIMIT) : [];
         activity.replaceChildren();
         if (history.length === 0) activity.textContent = "no moves yet";
         else history.forEach(function (entry) {
           var line = document.createElement("div");
-          line.textContent = actionLabel(snapshot, entry);
+          var text = actionLabel(snapshot, entry);
+          line.className = "activity-row";
+          line.textContent = text;
+          line.title = text;
           activity.append(line);
         });
 
