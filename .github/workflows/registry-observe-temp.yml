@@ -1,0 +1,46 @@
+name: temporary alpha.7 registry observer
+
+on:
+  push:
+    branches: [fix/alpha7-registry-observe]
+
+permissions:
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Observe npm registry
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          function npm(args) {
+            try { return execFileSync('npm', args, { encoding: 'utf8' }).trim(); }
+            catch { return ''; }
+          }
+          let distTags = {};
+          try { distTags = JSON.parse(npm(['view', '@waitloop/cli', 'dist-tags', '--json']) || '{}'); } catch {}
+          const alpha7 = npm(['view', '@waitloop/cli@0.1.0-alpha.7', 'version', '--json']);
+          let alpha7Version = null;
+          try { alpha7Version = alpha7 ? JSON.parse(alpha7) : null; } catch { alpha7Version = alpha7 || null; }
+          const result = {
+            observedAt: new Date().toISOString(),
+            alphaDistTag: distTags.alpha ?? null,
+            latestDistTag: distTags.latest ?? null,
+            alpha7Version,
+          };
+          fs.writeFileSync('.alpha7-registry.json', JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- .alpha7-registry.json
+          git commit -m "chore: record alpha.7 registry observation"
+          git push origin HEAD:fix/alpha7-registry-observe
