@@ -66,6 +66,7 @@ jobs:
 
   verify-cloudflare-gate:
     name: verify-cloudflare-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -86,7 +87,7 @@ jobs:
 
   ready-to-deploy:
     name: ready-to-deploy
-    if: always()
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - check
       - verify-cloudflare-gate
