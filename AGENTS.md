@@ -313,6 +313,36 @@ Current baseline:
 
 Rate limiting is abuse mitigation, not accounting or game timing. Hosted inference still needs explicit budgets before broad exposure.
 
+## CLI release-state invariant
+
+CLI source state and npm availability are deliberately different concepts. Read [`docs/cli-release.md`](docs/cli-release.md) before changing versions, release metadata, or making installability claims.
+
+```text
+packages/cli/package.json
+  = source/build version
+  = may be an unpublished candidate
+
+apps/web/public/agent.json -> cli.version
+  = declared published version
+
+npm Registry dist-tag
+  = external authority for what @waitloop/cli@alpha actually installs
+```
+
+When source is ahead of npm:
+
+- keep `agent.json.cli.version` on the currently published version;
+- set `candidateVersion` to `package.json.version`;
+- set `candidatePublished:false`;
+- keep `distTag` and `installCommand` aligned with the published version/channel;
+- do not describe candidate-only CLI behavior as already installable through `@alpha`.
+
+After Registry publication is verified, promote `agent.json.cli.version` and remove candidate fields.
+
+**Never answer “users can install version X / feature Y now” from `main`, package.json, Cloudflare deployment, or passing CI alone.** If the claim is about current npm installability, verify the Registry/dist-tag. If Registry evidence is unavailable, distinguish source version from declared published version rather than guessing.
+
+Normal repository CI validates this state machine deterministically; it should not depend on live npm. Trusted publishing/release verification owns the external Registry check.
+
 ## Documentation model
 
 `main` contains durable current documentation, not chronology.
@@ -325,7 +355,7 @@ Do not leave permanent `*-v2.md`, migration scratchpads, drafts, or completed ph
 
 When code/tests and docs disagree, docs are stale and must be fixed in the same change.
 
-Exact CLI version belongs in package JSON + `agent.json`; stable docs use `@waitloop/cli@alpha`.
+Stable user-facing CLI docs use `@waitloop/cli@alpha`. Source/build version belongs in `packages/cli/package.json`; declared published version belongs in `agent.json`; actual installability is verified against npm Registry/dist-tags.
 
 ## Public Agent surface is API
 
@@ -341,13 +371,14 @@ worker/src/mcp.ts
 packages/cli
 ```
 
-Room modes, Join semantics, local/remote MCP tools, MCP App resources/tools, identity/recovery, capabilities, endpoints, installation, or support status changes require whole-surface consistency.
+Room modes, Join semantics, local/remote MCP tools, MCP App resources/tools, identity/recovery, capabilities, endpoints, installation, release status, or support status changes require whole-surface consistency.
 
 ## Change completeness matrix
 
 | Change | Also inspect/update |
 | --- | --- |
-| CLI / package / Join/App cache | CLI readme/tests, `docs/cli.md`, manifest, Agent guide/Skill/llms, release docs |
+| CLI / package / Join/App cache | CLI readme/tests, `docs/cli.md`, manifest, Agent guide/Skill/llms, `docs/cli-release.md` |
+| CLI version / release channel | package metadata, `agent.json` published/candidate state, `docs/cli-release.md`, package/repository validators, Registry verification workflow |
 | Local MCP bridge/install | bridge/client/install tests, CLI help/doctor/package validation, architecture/MCP/protocol/security/status, Agent surfaces |
 | MCP App tool/resource/UI | Human client tests, embedded JS syntax, stdio resource wire test, architecture/MCP/security/status/roadmap, all public Agent surfaces |
 | Room/Join modes/lifetime | Room API + GameRoom tests, architecture/game/protocol/security/status, all Agent surfaces |
@@ -379,7 +410,7 @@ If several rows apply, satisfy all.
 - packaged MCP wire tests prove tools/list, resources/list/read, metadata, visibility, capability schema, and safe errors;
 - Room bridge tests prove create -> Join -> authenticated connect;
 - installer tests prove exact/idempotent harness commands;
-- CLI packaging changes run package validation;
+- CLI package/release changes prove source-candidate versus published state and derive public channel metadata from the published version;
 - browser changes pass JS syntax validation;
 - public Agent changes pass `pnpm check:repo-contract`;
 - Worker/config changes pass Wrangler dry-run.
