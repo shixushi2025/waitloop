@@ -15,6 +15,11 @@ function fail(message) {
   throw new Error(`CLI package validation failed: ${message}`);
 }
 
+function distTagForVersion(version) {
+  const prerelease = String(version).match(/-([0-9A-Za-z-]+)/)?.[1];
+  return prerelease ? prerelease.split(".")[0] : "latest";
+}
+
 if (packageJson.name !== "@waitloop/cli") fail("unexpected package name");
 if (typeof packageJson.version !== "string" || !VERSION_PATTERN.test(packageJson.version)) {
   fail("package version is not a valid release version");
@@ -28,21 +33,32 @@ if (!Array.isArray(packageJson.keywords) || !packageJson.keywords.includes("mcp-
   fail("package keywords must advertise MCP Apps support");
 }
 
-const prerelease = packageJson.version.match(/-([0-9A-Za-z-]+)/)?.[1];
-const expectedDistTag = prerelease ? prerelease.split(".")[0] : "latest";
 if (agentManifest.cli?.packageName !== packageJson.name) fail("agent.json CLI packageName is out of sync");
-if (typeof agentManifest.cli?.version !== "string" || !VERSION_PATTERN.test(agentManifest.cli.version)) {
+const publishedVersion = agentManifest.cli?.version;
+if (typeof publishedVersion !== "string" || !VERSION_PATTERN.test(publishedVersion)) {
   fail("agent.json published CLI version is invalid");
 }
-if (agentManifest.cli?.distTag !== expectedDistTag) fail("agent.json CLI distTag is out of sync");
+if (agentManifest.cli?.published !== true) fail("agent.json cli.version must describe a published version");
+
+const candidateVersion = agentManifest.cli?.candidateVersion;
+if (packageJson.version === publishedVersion) {
+  if (candidateVersion !== undefined) fail("published CLI state must not retain candidateVersion");
+  if (agentManifest.cli?.candidatePublished !== undefined) fail("published CLI state must not retain candidatePublished");
+} else {
+  if (candidateVersion !== packageJson.version) {
+    fail("source-ahead CLI state must expose package.json version as candidateVersion");
+  }
+  if (agentManifest.cli?.candidatePublished !== false) {
+    fail("source-ahead CLI candidate must set candidatePublished:false");
+  }
+}
+
+const expectedDistTag = distTagForVersion(publishedVersion);
+if (agentManifest.cli?.distTag !== expectedDistTag) {
+  fail("agent.json CLI distTag must follow the published version, not the package/source candidate");
+}
 if (agentManifest.cli?.installCommand !== `npm install -g ${packageJson.name}@${expectedDistTag}`) {
-  fail("agent.json CLI installCommand is out of sync");
-}
-if (agentManifest.cli?.published === false && agentManifest.cli.version !== packageJson.version) {
-  fail("an unpublished staged manifest must match the package candidate version");
-}
-if (agentManifest.cli?.candidateVersion !== undefined && agentManifest.cli.candidateVersion !== packageJson.version) {
-  fail("agent.json candidateVersion is out of sync with package.json");
+  fail("agent.json CLI installCommand must follow the published channel");
 }
 if (agentManifest.mcpApps?.resourceUri !== "ui://waitloop/doudizhu/v1") fail("agent.json MCP App resource is missing");
 if (agentManifest.mcpApps?.mimeType !== "text/html;profile=mcp-app") fail("agent.json MCP App MIME type is missing");
@@ -101,7 +117,7 @@ const versionOutput = execFileSync(process.execPath, [builtIndex, "--version"], 
   encoding: "utf8",
 }).trim();
 if (versionOutput !== packageJson.version) {
-  fail(`waitloop --version returned ${versionOutput}; expected ${packageJson.version}`);
+  fail(`waitloop --version returned ${versionOutput}; expected source/package version ${packageJson.version}`);
 }
 
 const helpRoot = mkdtempSync(resolve(tmpdir(), "waitloop-help-"));
@@ -118,4 +134,4 @@ try {
   rmSync(helpRoot, { recursive: true, force: true });
 }
 
-console.log(`@waitloop/cli@${packageJson.version} package validation passed (${files.size} files, MCP App included).`);
+console.log(`@waitloop/cli@${packageJson.version} source package validation passed (${files.size} files, published=${publishedVersion}, MCP App included).`);
