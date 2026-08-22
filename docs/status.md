@@ -47,9 +47,16 @@ Published CLI alpha:
 0.1.0-alpha.7
 ```
 
-Alpha.7 includes the Human-operated MCP App path and has been verified on the npm registry with the `alpha` dist-tag pointing to `0.1.0-alpha.7`.
+Current source/build candidate:
 
-Install/update:
+```text
+0.1.0-alpha.8
+candidatePublished: false
+```
+
+Alpha.7 includes the Human-operated MCP App path and has been verified on the npm registry with the `alpha` dist-tag pointing to `0.1.0-alpha.7`. Alpha.8 is source-only until its release workflow verifies the exact package and moves the npm `alpha` dist-tag; it must not be described as installable yet.
+
+Install/update remains:
 
 ```bash
 npm install -g @waitloop/cli@alpha
@@ -116,7 +123,7 @@ Cursor lifecycle integration remains available, while stable stdio MCP setup is 
 
 ## Agent-native interactive Human table
 
-Alpha.7 adds:
+The published alpha.7 provides:
 
 ```text
 open_game({gameId:"doudizhu", mode:"human-bots"})
@@ -150,6 +157,8 @@ refresh
 inline/fullscreen where the Host permits it
 ```
 
+The alpha.8 source candidate changes only compact history presentation in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative.
+
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
 This is intentionally different from:
@@ -170,7 +179,9 @@ Inline operation requires an MCP Apps-capable Host that:
 - forwards the initial tool result including result `_meta`;
 - proxies App server-tool calls.
 
-Waitloop does not claim every Codex/Claude/Cursor/terminal/desktop surface currently implements all of these behaviors. Unsupported Hosts receive safe text/structured results and fallback guidance.
+A real Codex desktop client session has manually rendered and operated the published alpha.7 App. In that session the transcript showed the safe JSON/structured tool result while the Human-facing App rendered simultaneously. Agents must not treat visible JSON as proof of render failure or automatically create a separate browser game.
+
+This observation is manual and surface-specific. Waitloop still does not claim every Codex/Claude/Cursor/terminal/desktop surface implements all required behaviors. Unsupported Hosts receive safe text/structured results and fallback guidance.
 
 The fallback web URL starts a separate browser-controlled game. It does not resume the private inline Room.
 
@@ -297,6 +308,8 @@ take_control()
 
 Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback. MCP client cancellation stops the in-flight wait promptly without a game mutation.
 
+For Advisors, `wait_for_turn` is not a general Room-revision subscription. In the manually tested `companion-agent` flow, an Advisor bound to a Human-controlled Seat received `controller_changed` immediately rather than waiting for the next Human move. Binding/connected state therefore does not mean the Agent is continuously listening.
+
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
 In fully headless `agent-bots`, yielding `seat-1` leaves all three Seats under Bot control. The automated players may finish the game before the owner reconnects; yield is an explicit handoff rather than a pause primitive.
@@ -315,6 +328,8 @@ Standalone Web can:
 - preserve Seat/hand/role/history through takeover.
 
 The first MCP App release intentionally exposes only Human-vs-bots play/pass/hint. Companion/connected-agent control UI remains in the standalone Web surface until an explicit MCP App design is added.
+
+The currently tested companion flow is fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. There is no one-step local `open_companion_game` entry and no companion-specific Room-update wait primitive yet.
 
 ## Security currently implemented
 
@@ -340,7 +355,7 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 88 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, and Human MCP App custody;
+- 89 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, and Human MCP App custody/presentation;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
@@ -348,6 +363,7 @@ Rate limiting remains abuse protection, not accounting.
 - Human play/pass/hint proxying through private cookies;
 - local bridge tool/instruction/resource metadata and error redaction;
 - embedded MCP App JavaScript syntax;
+- fixed four-row, non-scrolling recent activity contract;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
 - packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;
 - 15 tools with correct model/app visibility and one MCP App resource;
@@ -361,9 +377,12 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Known gaps
 
-- real-host smoke verification of inline rendering/action forwarding for each Codex/Claude/other Host surface;
+- automated real-host smoke coverage for Codex desktop and manual verification of additional Codex/Claude/other Host surfaces;
 - same-Room transfer from local MCP App to standalone browser without exposing long-lived credentials;
 - Human connected-agent/companion controls inside the MCP App;
+- one-step companion creation/binding from the local MCP surface;
+- Advisor Room-update waiting distinct from Controller-oriented `wait_for_turn`;
+- truthful separation of bound, authenticated/connected, actively listening, and ended Agent-run state;
 - proactive cleanup/list/revoke commands for local interactive Human Rooms;
 - full Dou Dizhu bidding / rob-landlord / scoring;
 - transport-level disconnect detection richer than explicit yield/reconnect;
