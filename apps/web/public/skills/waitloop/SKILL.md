@@ -76,7 +76,9 @@ ui_hint
 
 Do not call them as the model. They require a private `wlui_` capability delivered only in tool-result `_meta` to the embedded App. It is absent from model-visible text and structured content.
 
-If the active Host does not render or operate MCP Apps, say so. The returned fallback can open `https://waitloop.run/game.html` to start a **separate** browser-controlled game. Do not claim it resumes the private inline Room. `create_room()` remains the alternative when the Agent should play.
+A Host may display the safe JSON/structured tool result to the model while rendering the linked App for the Human at the same time. The Codex desktop client has been manually observed doing this with alpha.7. Do not infer render failure from visible JSON and do not automatically open the separate browser table after `open_game()`.
+
+If the active Host actually does not render or operate MCP Apps, or the Human reports that inline controls are absent, say so. The returned fallback can open `https://waitloop.run/game.html` to start a **separate** browser-controlled game. Do not claim it resumes the private inline Room. `create_room()` remains the alternative when the Agent should play.
 
 To reopen a still-valid inline Room in a new tool result:
 
@@ -158,6 +160,8 @@ The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`
 
 Human-operated `open_game()` is different: once the App renders, the Human drives moves by clicking. Do not run the Agent gameplay loop on the Human's behalf unless the user explicitly changes intent.
 
+An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented, not a generic Room-update subscription. A Human-controlled companion Seat may cause an Advisor wait to return `controller_changed` immediately. Do not claim continuous monitoring or background advice after the current Agent response ends.
+
 ## Gameplay rules
 
 1. Read `actorId`, `viewerSeatId`, relation, capabilities, Controller, revision, and legal moves.
@@ -165,7 +169,8 @@ Human-operated `open_game()` is different: once the App renders, the Human drive
 3. Use the exact current revision and a server-generated move ID.
 4. On stale state, call `get_turn()` or `wait_for_turn()` again.
 5. Advisors may inspect/comment on their explicitly bound Seat but cannot play until delegated.
-6. Never use app-only Human tools without the Host-provided App capability.
+6. Do not use `wait_for_turn()` as an Advisor Room-revision stream; no such companion-specific wait tool exists yet.
+7. Never use app-only Human tools without the Host-provided App capability.
 
 ## Yield and reconnect
 

@@ -60,7 +60,9 @@ On an MCP Apps-capable Host, the embedded Human table supports card selection, p
 
 Human Room cookies stay in private `~/.waitloop/app-rooms` state. A high-entropy `wlui_` capability is delivered only in tool-result `_meta` to the embedded App, is required by every app-only tool, and is absent from model-visible text and structuredContent. The App is self-contained and performs no direct credentialed network requests.
 
-Do not claim that every Codex, Claude, Cursor, terminal, or desktop surface renders MCP Apps. The active Host must read the linked `ui://` resource, render the MCP App MIME type, forward result `_meta`, and proxy App `tools/call` requests. If it cannot, say so. The returned web link starts a separate browser-controlled game; it does not resume the private inline Room.
+Do not claim that every Codex, Claude, Cursor, terminal, or desktop surface renders MCP Apps. The active Host must read the linked `ui://` resource, render the MCP App MIME type, forward result `_meta`, and proxy App `tools/call` requests. The Codex desktop client has been manually observed rendering and operating alpha.7, but other surfaces remain host-dependent.
+
+A Host may show the JSON/structured `open_game()` result to the model while rendering the App for the Human simultaneously. Visible JSON is not proof of render failure. Do not open the separate browser fallback unless the Host actually fails, reports an App error, or the Human says inline controls are absent. The returned web link starts a separate browser-controlled game; it does not resume the private inline Room.
 
 Model-visible local tools:
 
@@ -85,6 +87,8 @@ Join success is not MCP connection for raw clients. The local `join_room()` tool
 Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control(). Remote Room MCP does not host the Human MCP App; the local bridge owns that private session.
 
 `wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. The MCP host may cancel get_active_room/get_turn/wait_for_turn safely; cancellation stops the read/wait request and never mutates game state.
+
+For an Advisor, `wait_for_turn()` is not a general Room-revision stream and may return `controller_changed` immediately while the Human remains Controller. Do not claim continuous companion monitoring or background advice after the current Agent response ends.
 
 MCP does not wake an Agent after it returns a final response. If the user asks the Agent to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition. Human-operated `open_game()` is driven by clicks instead of that Agent loop.
 

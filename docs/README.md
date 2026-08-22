@@ -53,7 +53,7 @@ ui://waitloop/doudizhu/v1
 text/html;profile=mcp-app
 ```
 
-Its canonical contract is documented in `mcp.md`, `protocol.md`, `security.md`, and `architecture.md`.
+Its canonical contract is documented in `mcp.md`, `protocol.md`, `security.md`, and `architecture.md`; compact presentation rules, including the bounded non-scrolling activity list, are documented in `design.md`.
 
 ## Documentation lifecycle
 
@@ -141,7 +141,7 @@ CI also runs:
 
 ```text
 TypeScript
-88 unit/regression tests
+89 unit/regression tests
 CLI npm package validation
 embedded MCP App JavaScript syntax validation
 packaged stdio tools/resources wire validation

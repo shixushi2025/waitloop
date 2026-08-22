@@ -124,6 +124,8 @@ tools/call
 
 The App supports card selection, play, pass, hint, clear, refresh, inline rendering, and fullscreen when the Host advertises it.
 
+The compact activity region shows the latest four authoritative history rows in chronological order. It has no internal scrollbar; long rows remain single-line with visual truncation. The authoritative current trick is displayed separately, so the move to beat remains visible even when older history is omitted from the compact view.
+
 The App contains no external script/style dependency and performs no credentialed direct network request. Game traffic is:
 
 ```text
@@ -144,7 +146,9 @@ A useful inline experience requires the active Host to:
 4. forward the initial tool result, including result `_meta`, to the App;
 5. proxy App `tools/call` requests to the MCP server.
 
-Waitloop does not assume that every Codex, Claude, Cursor, terminal, or desktop surface currently provides all five behaviors.
+Waitloop does not assume that every Codex, Claude, Cursor, terminal, or desktop surface currently provides all five behaviors. The Codex desktop client has been manually observed rendering and operating the published alpha.7 App, but this does not establish compatibility for every Codex version or surface.
+
+A Host can expose the safe JSON/structured tool result to the model and render the linked App for the Human simultaneously. Model-visible snapshot output is not evidence that the App failed. Agents must not automatically launch the standalone browser fallback merely because the tool result is visible; fallback is appropriate only after an actual render/action failure, an App error, or explicit Human confirmation that inline controls are absent.
 
 When a Host cannot render or operate the App, `open_game()` still returns a safe textual/structured snapshot plus fallback guidance. The external fallback:
 
@@ -336,6 +340,8 @@ poll interval about 750 ms
 ```
 
 Timeout or cancellation does not auto-pass, auto-play, replace a slow Agent, change Controller, or create a competitive clock.
+
+`wait_for_turn` is a Controller/turn primitive, not a general Room-revision subscription. In a `companion-agent` Room where the Human remains active Controller, an Advisor may receive `controller_changed` immediately rather than waiting for the next Human move. Binding/connection therefore must not be presented as continuous listening. A dedicated Room-update wait/event primitive is still required for a truly long-lived companion loop.
 
 ### `play_move(expectedRevision, moveId)`
 
