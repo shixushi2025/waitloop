@@ -27,7 +27,7 @@ Repository-editing agents must also follow [`../AGENTS.md`](../AGENTS.md).
 | Device/browser pairing | [`pairing.md`](pairing.md) |
 | Hosted model players | [`hosted-agents.md`](hosted-agents.md) |
 | Visual and interaction language | [`design.md`](design.md) |
-| CLI release procedure | [`cli-release.md`](cli-release.md) |
+| CLI release state, candidate staging, npm publishing | [`cli-release.md`](cli-release.md) |
 | Current implemented state and known gaps | [`status.md`](status.md) |
 | Forward-looking priorities only | [`roadmap.md`](roadmap.md) |
 
@@ -88,11 +88,16 @@ Prefer links to the canonical source rather than repeating the same changing val
 
 Examples:
 
-- exact CLI version: `packages/cli/package.json` + `apps/web/public/agent.json`;
+- CLI source/build version: `packages/cli/package.json`;
+- declared published CLI version: `apps/web/public/agent.json` -> `cli.version`;
+- what `npm install -g @waitloop/cli@alpha` actually installs: npm Registry `alpha` dist-tag;
+- full candidate/published release-state semantics: `cli-release.md`;
 - current public Agent/MCP App capabilities: `agent.json`;
 - Dou Dizhu legality: rules implementation/tests + `doudizhu-rules.md`;
 - runtime endpoints: Worker implementation + `protocol.md`;
 - Human App privacy: `security.md`.
+
+Do not collapse the first three CLI facts into one “exact current version”. During candidate staging, `package.json` may legitimately be ahead of the Registry and `agent.json.cli.version`.
 
 Human-facing installation docs should normally use:
 
@@ -100,7 +105,7 @@ Human-facing installation docs should normally use:
 npm install -g @waitloop/cli@alpha
 ```
 
-rather than hard-coding an alpha patch version.
+rather than hard-coding an alpha patch version. When answering what an external user will install **now**, verify the npm dist-tag instead of inferring it from repository source.
 
 ## What belongs in `status.md`
 
@@ -121,12 +126,16 @@ It is **not** a changelog. Completed historical phases and obsolete setup steps 
 
 `pnpm check:repo-contract` verifies synchronization invariants including:
 
-- CLI package/Agent manifest candidate or published-version consistency;
+- CLI source candidate versus declared published-version state;
+- public dist-tag/install command following the published version rather than an unpublished source candidate;
+- release-state guidance being present in `cli-release.md`;
 - required Agent discovery/install/join/local+remote MCP references;
 - Human `open_game` versus Agent `create_room` distinction;
 - MCP App resource URI/MIME/protocol, app-only tools, private capability, and fallback guidance;
 - all canonical Markdown files being discoverable from this index;
 - absence of exact CLI release numbers in stable user-facing docs.
+
+Normal repository CI intentionally does not query npm; deterministic CI validates the declared state, while the trusted release workflow verifies actual Registry publication and dist-tags.
 
 CI also runs:
 
