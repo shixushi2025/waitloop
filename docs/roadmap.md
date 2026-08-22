@@ -2,7 +2,7 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current product priority is **stabilization before feature expansion**. Stable local MCP, `wait_for_turn`, dual-era stdio handling, cancellation, and the first Human-operated MCP App are implemented and published. The next work is proving these paths in real Hosts and hardening lifecycle/cleanup rather than adding more game modes.
+The current product priority is **stabilization before feature expansion**. Stable local MCP, `wait_for_turn`, dual-era stdio handling, cancellation, and the first Human-operated MCP App are implemented and published. A real Codex desktop session has now rendered and operated the alpha.7 App; the next work is converting that manual observation into repeatable compatibility coverage, fixing companion continuity, and hardening lifecycle/cleanup rather than adding more game modes.
 
 ## 1. MCP App real-host stabilization
 
@@ -16,10 +16,19 @@ open_game
 -> existing Human Room APIs
 ```
 
+Observed manually in Codex desktop:
+
+- the transcript may show the safe JSON/structured tool result while the linked App renders at the same time;
+- inline card rendering and Human actions work after the client reloads the updated MCP configuration;
+- visible JSON must not be treated as proof that App rendering failed;
+- automatically opening the standalone browser fallback can create an unwanted second game.
+
 Near-term work:
 
-- test inline render, initial result forwarding, result `_meta`, App `tools/call`, resize, host theme, fullscreen, and teardown in each actual supported Host surface;
+- turn the Codex desktop observation into a repeatable smoke procedure and record the exact client surface/version tested;
+- test inline render, initial result forwarding, result `_meta`, App `tools/call`, resize, host theme, fullscreen, and teardown in each additional supported Host surface;
 - record a compatibility matrix for Codex Desktop/CLI, Claude Web/Desktop/Code, ChatGPT/plugin surfaces, Cursor, and other Hosts without assuming equivalent support;
+- verify Agents do not invoke browser fallback merely because model-visible structured output is present;
 - verify unsupported Hosts present the safe text fallback and do not misleadingly imply the private inline Room can be opened in a standalone browser;
 - test `open_game(roomId)` across Host conversation/session restarts while the local bridge and Room remain valid;
 - verify Windows/macOS/Linux permissions and path behavior for `~/.waitloop/app-rooms`;
@@ -28,7 +37,7 @@ Near-term work:
 - test multiple simultaneously open App views for the same Room and document the intended stale-revision behavior;
 - add an automated synthetic Host harness for `ui/initialize -> tool-result -> tools/call -> teardown` beyond the current stdio/resource contract validation.
 
-Acceptance: on each declared compatible Host, a Human can ask “open a game for me,” receive an inline table, play to completion with clicks, reopen the table safely, and receive a precise fallback on an incompatible Host.
+Acceptance: on each declared compatible Host, a Human can ask “open a game for me,” receive an inline table, play to completion with clicks, reopen the table safely, and receive a precise fallback on an incompatible Host without accidentally creating a second Room.
 
 ## 2. Existing Agent flow stabilization
 
@@ -91,17 +100,32 @@ A Codex Plugin may still be evaluated as packaging/distribution improvement afte
 
 ## 5. Richer Human/Agent App relationships
 
+The real companion trial confirmed that the data model works but the product flow is fragmented:
+
+```text
+standalone Web creates companion-agent Room
+-> Human copies Join code
+-> Agent calls join_room
+-> Agent becomes Advisor of the Human Seat
+```
+
+It also confirmed that `wait_for_turn()` is Controller/turn-oriented: while the Human remains Controller, the Advisor can receive `controller_changed` immediately rather than waiting for the next Human move. Binding and connection therefore do not equal continuous listening, and an ended Agent response cannot provide background advice.
+
 Do not immediately copy the whole standalone Web UI into the App. Add only after the Human-vs-bots App is stable:
 
+- one-step local `open_companion_game()` or equivalent flow that creates the Human Room and binds the current Agent as Advisor without browser automation or manual Join-code relay;
+- a bounded `wait_for_room_update(afterRevision, timeoutMs)` or equivalent revision/event primitive for Advisors that does not imply play authority;
+- explicit UI distinctions among bound, authenticated/connected, current Agent run listening, and ended/offline;
 - Human + connected Agent + Bot inline table;
 - companion/advisor comments in the App;
+- optional structured move suggestion/highlight that never plays until the Human confirms;
 - explicit Human `me / agent` Controller delegation;
 - temporary Bot fallback/restore controls;
 - connected Agent presence/elapsed-turn display;
 - linked coding-session attention pause/resume inside the App;
 - clear model-versus-App responsibility when Agent gives advice but Human clicks.
 
-Acceptance: every App action maps to an existing server capability and never lets UI metadata substitute for Room authorization.
+Acceptance: a Human can start companion play in one supported flow, the Advisor can efficiently observe Room revisions during the same active Agent run, UI never claims background listening after the run ends, and every App action maps to an existing server capability without letting UI metadata substitute for Room authorization.
 
 ## 6. Additional harness support
 
