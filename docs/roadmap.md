@@ -2,7 +2,7 @@
 
 This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current product priority is **stabilization before feature expansion**. Stable local MCP, `wait_for_turn`, dual-era stdio handling, cancellation, and the first Human-operated MCP App are implemented in source. The next work is proving these paths in real Hosts, publishing the candidate CLI, and hardening lifecycle/cleanup rather than adding more game modes.
+The current product priority is **stabilization before feature expansion**. Stable local MCP, `wait_for_turn`, dual-era stdio handling, cancellation, and the first Human-operated MCP App are implemented and published. The next work is proving these paths in real Hosts and hardening lifecycle/cleanup rather than adding more game modes.
 
 ## 1. MCP App real-host stabilization
 
@@ -18,7 +18,6 @@ open_game
 
 Near-term work:
 
-- publish and clean-install the alpha.7 CLI candidate;
 - test inline render, initial result forwarding, result `_meta`, App `tools/call`, resize, host theme, fullscreen, and teardown in each actual supported Host surface;
 - record a compatibility matrix for Codex Desktop/CLI, Claude Web/Desktop/Code, ChatGPT/plugin surfaces, Cursor, and other Hosts without assuming equivalent support;
 - verify unsupported Hosts present the safe text fallback and do not misleadingly imply the private inline Room can be opened in a standalone browser;
