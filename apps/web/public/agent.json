@@ -14,6 +14,9 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.7",
+    "candidateVersion": "0.1.0-alpha.8",
+    "candidatePublished": false,
+    "candidateSummary": "MCP App recent activity is capped at four single-line entries without an internal scrollbar.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -151,7 +154,7 @@
       "skill": "available",
       "mcp": "stable-local-stdio",
       "mcpInstaller": "waitloop mcp install codex",
-      "mcpApps": "host-dependent; do not claim inline rendering until the active Codex surface advertises MCP Apps support",
+      "mcpApps": "manually verified in the Codex desktop client with alpha.7 for inline rendering and Human App actions; other Codex surfaces remain host-dependent",
       "terminalState": "Stop and SessionEnd finalize the latest lifecycle state before native-session cleanup"
     },
     "dsh": {
