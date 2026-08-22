@@ -156,7 +156,9 @@ Inline operation requires a Host that:
 4. forwards the initial tool result, including result `_meta`, to the App;
 5. proxies App `tools/call` requests back to the MCP server.
 
-Do not assume every Codex, Claude, Cursor, terminal, or desktop surface currently supports all five capabilities. Detect behavior from the active Host.
+Do not assume every Codex, Claude, Cursor, terminal, or desktop surface currently supports all five capabilities. Detect behavior from the active Host. The Codex desktop client has been manually observed rendering and operating the Waitloop alpha.7 MCP App, but that evidence does not automatically apply to every Codex surface or version.
+
+A Host may show the safe model-visible JSON/structured snapshot in the transcript **and** render the linked MCP App simultaneously. Seeing the snapshot is therefore not a failure signal. Do not automatically launch the browser fallback merely because `open_game()` returned visible JSON. Use fallback only after the active Host actually fails to render or operate the App, reports an App error, or the Human says inline controls are absent.
 
 If the Host does not render or cannot operate the App, the safe result explains two fallbacks:
 
@@ -349,6 +351,8 @@ Human-operated `open_game()` is different: after rendering the App, the Human dr
 
 An Advisor may see the private state and legal options of the one Seat it is explicitly bound to and may call `comment(text)`. It cannot call `play_move` until the Seat owner explicitly delegates Controller authority.
 
+`wait_for_turn()` is Controller/turn-oriented, not a general Room revision subscription. An Advisor that is bound to a Human-controlled Seat may receive `controller_changed` immediately instead of waiting for the next Human move. Do not claim that an Advisor is continuously monitoring the table merely because it is bound or connected, and do not promise background advice after the current Agent response ends. A future companion-specific Room-update wait primitive is required for that experience.
+
 ## Remote MCP fallback
 
 The remote endpoint remains available for clients that cannot run the local bridge:
@@ -415,13 +419,14 @@ Rate limits are abuse protection, not accounting.
 2. Install/update the CLI and run `waitloop doctor`.
 3. Configure the stable MCP once with `waitloop mcp install <agent>` or the lifecycle installer.
 4. If the Human wants clickable play, call `open_game()` and let the MCP App drive Human actions.
-5. If the Agent should play autonomously, call `create_room()` or `join_room(code)`.
-6. For Agent-owned play, call `wait_for_turn()` rather than polling and use current revision/legal move IDs.
-7. Keep the current Agent run active when the user requested Agent-controlled continued play or completion.
-8. Use `yield_to_bot()` only as an explicit owner action; in `agent-bots`, expect the bots may finish the game.
-9. Reconnect through cached active Agent Room context and call `take_control()` explicitly when ready.
-10. Advisors may inspect/comment but need explicit delegation to play.
-11. Never claim inline UI support when the active Host did not render or operate the MCP App.
-12. Coding-work attention always outranks the game.
+5. Do not treat a visible JSON snapshot as evidence that the App failed; some Hosts render both the transcript result and inline App.
+6. If the Agent should play autonomously, call `create_room()` or `join_room(code)`.
+7. For Agent-owned play, call `wait_for_turn()` rather than polling and use current revision/legal move IDs.
+8. Keep the current Agent run active when the user requested Agent-controlled continued play or completion.
+9. Use `yield_to_bot()` only as an explicit owner action; in `agent-bots`, expect the bots may finish the game.
+10. Reconnect through cached active Agent Room context and call `take_control()` explicitly when ready.
+11. Advisors may inspect/comment but need explicit delegation to play; `wait_for_turn()` is not a companion Room-update stream.
+12. Never claim inline UI support when the active Host did not render or operate the MCP App, and never invoke the separate browser fallback without an actual Host/UI failure.
+13. Coding-work attention always outranks the game.
 
 Never weaken another product's security settings or overwrite unrelated MCP/hook configuration merely to make Waitloop work.
