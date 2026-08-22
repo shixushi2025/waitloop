@@ -64,6 +64,9 @@ Interaction rules:
 - teardown stops polling;
 - no autoplay audio, confetti, reward animation, or retention prompt;
 - activity is recent authoritative history, not model narration;
+- the compact MCP App shows only the latest four activity rows, in chronological order, without an internal scrollbar;
+- long activity rows stay single-line and truncate visually rather than widening or scrolling the panel;
+- current trick remains separate from recent activity, so limiting the list never hides the authoritative play to beat;
 - error text tells the Human what to do next.
 
 The App is self-contained: no external script, stylesheet, tracking pixel, or direct credentialed fetch.
@@ -71,6 +74,8 @@ The App is self-contained: no external script, stylesheet, tracking pixel, or di
 ## MCP App Host fallback language
 
 Do not say “your game is open” when the Host did not render or operate the App.
+
+A visible model-facing JSON or structured tool result is not proof that rendering failed. Some Hosts show the safe tool result in the transcript and render the linked MCP App at the same time. Do not automatically launch the browser fallback merely because the model can see the snapshot; use fallback only after the active Host actually fails to show or operate the App, or the Human reports that inline controls are absent.
 
 Use explicit wording:
 
