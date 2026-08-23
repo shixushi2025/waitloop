@@ -14,6 +14,9 @@
   "cli": {
     "packageName": "@waitloop/cli",
     "version": "0.1.0-alpha.8",
+    "candidateVersion": "0.1.0-alpha.9",
+    "candidatePublished": false,
+    "candidateSummary": "Human-vs-bots MCP Apps become response-driven: no periodic Worker refresh; mutation responses update immediately, and only explicit/focus/visibility/error recovery performs one-shot single-flight reads. Room event sequencing and multi-Actor subscriptions remain separate future work.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -122,7 +125,9 @@
     "hostFallback": "Hosts without MCP Apps receive a safe textual result and a link to start a separate browser-controlled table; create_room remains available for Agent-owned play",
     "sameRoomFallback": false,
     "privacy": "Human Room cookies stay in ~/.waitloop/app-rooms; a wlui_ capability is delivered only in tool-result _meta to the embedded App, is required by all app-only tools, and is absent from model-visible text and structuredContent",
-    "network": "the App resource is self-contained and performs no direct credentialed network requests; all game actions flow through the local MCP bridge"
+    "network": "the App resource is self-contained and performs no direct credentialed network requests; all game actions flow through the local MCP bridge",
+    "publishedRefreshModel": "alpha.8 uses bounded visible-document polling as an incident mitigation",
+    "candidateRefreshModel": "alpha.9 is response-driven: no periodic Human-vs-bots Worker reads; only mutation responses plus one-shot explicit/focus/visibility/error recovery"
   },
   "mcp": {
     "status": "available",
