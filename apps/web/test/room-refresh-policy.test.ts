@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 
 // Browser-only ESM is shipped without a build step; this test validates its runtime contract.
 // @ts-expect-error JavaScript module intentionally has no TypeScript declaration in public assets.
-import {
+const policy = await import("../public/room-refresh-policy.js");
+const {
   nextRoomRefreshDelay,
   ROOM_REFRESH_MAX_DELAY_MS,
   ROOM_REFRESH_MIN_DELAY_MS,
   roomRefreshSignature,
   shouldRefreshRoom,
-} from "../public/room-refresh-policy.js";
+} = policy;
 
 function snapshot(overrides: Record<string, unknown> = {}) {
   return {
