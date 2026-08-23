@@ -10,14 +10,14 @@ function source(path: string) {
 }
 
 describe("browser request budgets", () => {
-  it("uses visible-only bounded fallback refresh in the Human MCP App", () => {
+  it("keeps the Human-vs-bots MCP App response-driven with no periodic Worker refresh", () => {
     const app = source("packages/cli/src/mcp-app.ts");
-    expect(app).toContain("MCP_APP_REFRESH_MIN_DELAY_MS = 5000");
-    expect(app).toContain("MCP_APP_REFRESH_MAX_DELAY_MS = 30000");
-    expect(app).toContain("scheduleRefresh");
-    expect(app).toContain("stopRefresh");
-    expect(app).toContain('document.visibilityState !== "visible"');
-    expect(app).toContain('window.addEventListener("pagehide", stopRefresh)');
+    expect(app).toContain("refreshWhenVisible");
+    expect(app).toContain("visibilitychange");
+    expect(app).toContain('window.addEventListener("focus", refreshWhenVisible)');
+    expect(app).not.toContain("scheduleRefresh");
+    expect(app).not.toContain("refreshTimer");
+    expect(app).not.toContain("REFRESH_MAX_DELAY_MS");
     expect(app).not.toContain("}, 1200)");
   });
 
