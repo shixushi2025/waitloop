@@ -1,4 +1,18 @@
 import { companionEmptyStateText } from "./companion-status.js";
+import {
+  actorFor,
+  actorLabel,
+  actorStateFor,
+  canManageRoom,
+  companionActor,
+  connectedActors,
+  controllerActorForSeat,
+  phaseOf,
+  seatDescriptor,
+  seatLabel,
+  viewerActorId,
+  viewerSeatId,
+} from "./game-selectors.js";
 import { historyDelta, recentHistory } from "./game-history.js";
 import {
   nextRoomRefreshDelay,
@@ -7,7 +21,6 @@ import {
   shouldRefreshRoom,
 } from "./room-refresh-policy.js";
 
-const LEGACY_VIEWER_ID = "you";
 const params = new URLSearchParams(window.location.search);
 const linkedSessionId = params.get("session");
 
@@ -94,96 +107,6 @@ function isGameSnapshot(value) {
     typeof value.controls === "object" &&
     value.controls !== null
   );
-}
-
-function phaseOf(current) {
-  if (typeof current?.roomPhase === "string") return current.roomPhase;
-  if (current?.status === "finished") return "finished";
-  if (current?.status === "paused") return "paused";
-  return "playing";
-}
-
-function viewerActorId(current = snapshot) {
-  return current?.viewerActorId ?? LEGACY_VIEWER_ID;
-}
-
-function viewerSeatId(current = snapshot) {
-  return current?.viewerSeatId ?? LEGACY_VIEWER_ID;
-}
-
-function actorFor(current, actorId) {
-  if (!actorId) return null;
-  if (Array.isArray(current?.actors)) {
-    const found = current.actors.find((actor) => actor?.id === actorId);
-    if (found) return found;
-  }
-  return Array.isArray(current?.participants)
-    ? current.participants.find((participant) => participant?.id === actorId) ?? null
-    : null;
-}
-
-function seatDescriptor(current, seatId) {
-  return Array.isArray(current?.seats)
-    ? current.seats.find((seat) => seat?.id === seatId) ?? null
-    : null;
-}
-
-function bindingForActor(current, actorId) {
-  return Array.isArray(current?.bindings)
-    ? current.bindings.find((binding) => binding?.actorId === actorId) ?? null
-    : null;
-}
-
-function actorStateFor(current, actorId) {
-  if (Array.isArray(current?.actorStates)) {
-    const found = current.actorStates.find((state) => state?.actorId === actorId);
-    if (found) return found;
-  }
-  if (Array.isArray(current?.seatStates)) {
-    const legacy = current.seatStates.find((state) => state?.playerId === actorId);
-    if (legacy) return legacy;
-  }
-  return null;
-}
-
-function connectedActors(current) {
-  return Array.isArray(current?.actors)
-    ? current.actors.filter((actor) => actor?.kind === "connected-agent")
-    : Array.isArray(current?.participants)
-      ? current.participants.filter((actor) => actor?.kind === "connected-agent")
-      : [];
-}
-
-function companionActor(current) {
-  const seatId = viewerSeatId(current);
-  return connectedActors(current).find((actor) => {
-    const binding = bindingForActor(current, actor.id);
-    return binding?.seatId === seatId && binding?.relation === "advisor";
-  }) ?? null;
-}
-
-function controllerActorForSeat(current, seatId) {
-  const seat = seatDescriptor(current, seatId);
-  if (seat?.activeControllerActorId) return actorFor(current, seat.activeControllerActorId);
-  return actorFor(current, seatId);
-}
-
-function seatLabel(current, seatId) {
-  if (!seatId) return "room";
-  const seat = seatDescriptor(current, seatId);
-  if (seat?.label) return seat.label;
-  if (seatId === viewerSeatId(current)) return "you";
-  return actorFor(current, seatId)?.label ?? seatId;
-}
-
-function actorLabel(current, actorId) {
-  if (!actorId) return "actor";
-  if (actorId === viewerActorId(current)) return "you";
-  return actorFor(current, actorId)?.label ?? actorId;
-}
-
-function canManageRoom(current) {
-  return Array.isArray(current?.capabilities) && current.capabilities.includes("room:manage");
 }
 
 function updateUrl() {
