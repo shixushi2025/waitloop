@@ -157,7 +157,7 @@ refresh
 inline/fullscreen where the Host permits it
 ```
 
-The alpha.8 source candidate changes only compact history presentation in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative.
+The alpha.8 source candidate changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. The 1.2-second idle `ui_get_game` loop is removed; Human-vs-bots state advances from mutation responses, explicit refresh, and one-shot refresh when the App becomes visible or focused.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
@@ -349,13 +349,14 @@ The currently tested companion flow is fragmented: the Human creates `companion-
 - idempotent MCP installer that does not overwrite an existing `waitloop` definition;
 - side-effect-free nested CLI help;
 - fail-closed automatic and explicit production deployment when final GitHub CI is not successful;
-- clean-main invariant preventing manual deployment of uncommitted or feature-branch content.
+- clean-main invariant preventing manual deployment of uncommitted or feature-branch content;
+- browser request budgets that prohibit unbounded idle Worker polling, stop hidden-view refresh, and bound failed socket retries.
 
 Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 89 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, and Human MCP App custody/presentation;
+- 95 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, and browser request budgets;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
@@ -364,6 +365,9 @@ Rate limiting remains abuse protection, not accounting.
 - local bridge tool/instruction/resource metadata and error redaction;
 - embedded MCP App JavaScript syntax;
 - fixed four-row, non-scrolling recent activity contract;
+- no continuous idle polling from the Human MCP App;
+- standalone connected/companion Room refresh stops while hidden and backs unchanged visible state off from 1 to 10 seconds;
+- lifecycle WebSocket failures reconnect with bounded backoff and respect page lifecycle;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
 - packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;
 - 15 tools with correct model/app visibility and one MCP App resource;

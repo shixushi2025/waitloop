@@ -154,6 +154,14 @@ Human clicks
 
 The App also supports host-context changes, size notifications, display-mode requests, external-link requests, and teardown.
 
+### Browser request budget
+
+The Human-vs-bots MCP App is action-driven. Room mutations return the authoritative snapshot after deterministic Bot moves, so an open idle App does not poll the Worker. Explicit refresh, reopen/error recovery, and a one-shot visible/focus refresh use `ui_get_game`.
+
+The standalone connected/companion Web table still needs remote updates while another Actor may act. It polls only while visible, starts at one second after visible state changes, doubles through 2/4/8 seconds, and caps unchanged state at ten seconds. Hidden/pagehide views stop the timer. Heartbeat-only `lastSeenAt` changes do not reset the backoff.
+
+Failed lifecycle WebSocket reconnects use exponential backoff up to 30 seconds and stop while hidden or torn down. This prevents a broken endpoint or abandoned view from becoming an unbounded Worker-invocation source.
+
 ### Human versus Agent ownership
 
 ```text

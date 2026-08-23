@@ -59,7 +59,7 @@ Interaction rules:
 - cards are buttons with visible selected state;
 - unavailable actions are disabled, not silently ignored;
 - Human can always distinguish current turn and own Seat;
-- refresh is explicit in addition to bounded automatic polling;
+- refresh is explicit; Human-vs-bots mutation responses are authoritative and the App performs no idle interval polling;
 - fullscreen is offered only if the Host advertises it;
 - teardown stops polling;
 - no autoplay audio, confetti, reward animation, or retention prompt;
@@ -198,7 +198,7 @@ Codex · TURN · 1m 14s · taking longer than usual
 
 A 25-second MCP transport timeout should not appear as “Agent timed out” or “move expired”. The Agent simply waits again while its run remains active.
 
-The Human MCP App uses bounded state refresh while the iframe remains open. This is not a model loop or turn deadline.
+The Human MCP App does not continuously refresh while idle. Human-vs-bots actions return the authoritative post-Bot snapshot; manual refresh plus a one-shot visible/focus refresh repair stale presentation without generating a permanent Worker request stream. This is not a model loop or turn deadline.
 
 ## Continuous-play expectation
 

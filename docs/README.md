@@ -141,7 +141,7 @@ CI also runs:
 
 ```text
 TypeScript
-89 unit/regression tests
+95 unit/regression tests
 CLI npm package validation
 embedded MCP App JavaScript syntax validation
 packaged stdio tools/resources wire validation
