@@ -77,6 +77,26 @@ Room created
 
 Local `join_room` and `create_room` perform the first authenticated request before reporting connected.
 
+## Game revision versus Room event sequence
+
+Every snapshot exposes two independent monotonic concepts:
+
+```text
+game revision
+  authoritative game mutation version
+  required by expectedRevision for play/pass concurrency
+
+roomSeq
+  semantic Room-event version
+  advances for any client-visible Room change, including comments,
+  Controller/temporary-Bot changes, Room phase, Join claim, and
+  meaningful Actor status transitions
+```
+
+Legacy persisted Rooms normalize to `roomSeq = 1`. All later state writes pass through a centralized commit helper that increments and broadcasts only when the semantic Room signature changes. Heartbeat-only `lastSeenAt` updates and credential-only recovery writes are persisted without advancing `roomSeq` or broadcasting.
+
+Collection ordering is normalized before semantic comparison, so harmless array/map ordering differences do not create false events.
+
 ## Stable local Agent bridge
 
 The stable stdio bridge exposes:

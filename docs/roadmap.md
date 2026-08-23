@@ -52,7 +52,7 @@ Acceptance: on each declared compatible Host, a Human can ask “open a game for
 
 ## 2. Room event sequencing and subscriptions
 
-Before adding a new wait/subscription tool, introduce a semantic Room cursor distinct from game revision:
+The semantic Room cursor foundation is now implemented. Before adding a new wait/subscription tool, preserve the distinction from game revision:
 
 ```text
 game revision
@@ -84,16 +84,19 @@ server origin
 
 Never reuse a private snapshot stream solely by `roomId`.
 
-Implementation order:
+Implemented foundation:
 
-1. add persisted/backward-compatible `roomSeq` to GameRoom and all projections;
-2. centralize semantic state commits so write + sequence increment + broadcast cannot drift;
-3. add tests proving comment/Controller changes advance `roomSeq` without game revision and heartbeat-only writes do not;
-4. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;
-5. define bounded, cancellable `wait_for_room_update(afterRoomSeq, timeoutMs)` semantics for Advisors/local Apps;
-6. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;
-7. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;
-8. use polling only as an explicitly bounded, stoppable fallback when push is unavailable.
+- persisted/backward-compatible `roomSeq` on GameRoom and all Human/Agent projections;
+- centralized semantic commit path for write + sequence increment + conditional broadcast;
+- regression tests proving game/comment/Controller/status events advance, heartbeat-only writes do not, and collection order is irrelevant.
+
+Remaining implementation order:
+
+1. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;
+2. define bounded, cancellable `wait_for_room_update(afterRoomSeq, timeoutMs)` semantics for Advisors/local Apps;
+3. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;
+4. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;
+5. use polling only as an explicitly bounded, stoppable fallback when push is unavailable.
 
 Acceptance: comments, game moves, Controller transitions, Join/connection state, and Room phase changes reach each authorized projection promptly without permanent polling, cursor gaps, or private-state cross-talk.
 

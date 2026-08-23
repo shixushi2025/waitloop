@@ -16,7 +16,7 @@
     "version": "0.1.0-alpha.8",
     "candidateVersion": "0.1.0-alpha.9",
     "candidatePublished": false,
-    "candidateSummary": "Human-vs-bots MCP Apps become response-driven: no periodic Worker refresh; mutation responses update immediately, and only explicit/focus/visibility/error recovery performs one-shot single-flight reads. Room event sequencing and multi-Actor subscriptions remain separate future work.",
+    "candidateSummary": "Human-vs-bots MCP Apps are response-driven with zero periodic reads; snapshots also add a semantic roomSeq cursor with centralized commit/broadcast rules, while subscription transport remains future work.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -65,7 +65,8 @@
     "joinLifetime": "20 minutes; one-time claim",
     "browserIdentity": "anonymous persistent Actor ID plus separate HttpOnly credential; no account required",
     "recovery": "a remembered browser Actor can recover room viewer access; a Seat owner may temporarily yield/replace control with a bot without changing Seat ownership",
-    "headlessYieldBehavior": "in agent-bots mode, yielding seat-1 leaves all Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect"
+    "headlessYieldBehavior": "in agent-bots mode, yielding seat-1 leaves all Seats under Bot control, so the deterministic bots may finish the remaining game before reconnect",
+    "eventCursor": "roomSeq is distinct from game revision; it advances for semantic client-visible Room changes but not heartbeat-only timestamps"
   },
   "localMcp": {
     "status": "available",
