@@ -1,4 +1,10 @@
 import { historyDelta, recentHistory } from "./game-history.js";
+import {
+  nextRoomRefreshDelay,
+  ROOM_REFRESH_MIN_DELAY_MS,
+  roomRefreshSignature,
+  shouldRefreshRoom,
+} from "./room-refresh-policy.js";
 
 const LEGACY_VIEWER_ID = "you";
 const params = new URLSearchParams(window.location.search);
@@ -52,6 +58,7 @@ const mcpClaimStatus = document.querySelector("#mcp-claim-status");
 let roomId = params.get("room");
 let snapshot = null;
 let roomRefreshTimer = null;
+let roomRefreshDelayMs = ROOM_REFRESH_MIN_DELAY_MS;
 let turnClockTimer = null;
 let sessionSocket = null;
 let attentionPauseRequested = false;
@@ -623,6 +630,9 @@ async function playPresentation(entries, current, generation) {
 
 function render(current) {
   const previous = snapshot;
+  if (!previous || roomRefreshSignature(previous) !== roomRefreshSignature(current)) {
+    roomRefreshDelayMs = ROOM_REFRESH_MIN_DELAY_MS;
+  }
   const delta = previous ? historyDelta(previous, current) : [];
   snapshot = current;
   presentationGeneration += 1;
@@ -657,16 +667,23 @@ async function refreshRoom({ quiet = false } = {}) {
   }
 }
 
-function scheduleRoomRefresh(current) {
+function stopRoomRefresh() {
   window.clearTimeout(roomRefreshTimer);
   roomRefreshTimer = null;
-  if (!roomId || !current || current.status === "finished") return;
-  const needsPolling = phaseOf(current) === "waiting_for_players" || connectedActors(current).length > 0;
-  if (!needsPolling) return;
+}
+
+function scheduleRoomRefresh(current) {
+  stopRoomRefresh();
+  if (!roomId || !shouldRefreshRoom(current, !document.hidden)) return;
+  const scheduledSignature = roomRefreshSignature(current);
+  const delayMs = roomRefreshDelayMs;
   roomRefreshTimer = window.setTimeout(async () => {
     const ok = await refreshRoom({ quiet: true });
-    if (!ok && snapshot) scheduleRoomRefresh(snapshot);
-  }, 1000);
+    if (!snapshot) return;
+    const changed = ok && roomRefreshSignature(snapshot) !== scheduledSignature;
+    roomRefreshDelayMs = nextRoomRefreshDelay(roomRefreshDelayMs, changed);
+    scheduleRoomRefresh(snapshot);
+  }, delayMs);
 }
 
 function scheduleTurnClock(current) {
@@ -1042,7 +1059,17 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && roomId) void refreshRoom({ quiet: true });
+  if (document.hidden) {
+    stopRoomRefresh();
+    return;
+  }
+  roomRefreshDelayMs = ROOM_REFRESH_MIN_DELAY_MS;
+  if (roomId) void refreshRoom({ quiet: true });
+});
+
+window.addEventListener("pagehide", () => {
+  stopRoomRefresh();
+  window.clearInterval(turnClockTimer);
 });
 
 if (roomId) void loadRoom();

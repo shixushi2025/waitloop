@@ -173,7 +173,11 @@ Required design:
 - app-only visibility is defense in depth, not authorization;
 - unsupported Hosts get an honest fallback, not fake inline success;
 - standalone Web fallback starts a separate game unless a future explicit transfer protocol exists;
-- `open_game(roomId)` may reopen only a still-valid local interactive Room.
+- `open_game(roomId)` may reopen only a still-valid local interactive Room;
+- Human-vs-bots App state is action-driven: mutation responses are authoritative and an idle mounted App must not continuously call `ui_get_game`;
+- explicit/focus/visibility refresh must be one-shot and guarded against overlap;
+- any Web polling required for connected Actors must stop while hidden and use bounded backoff when visible state is unchanged;
+- failed WebSocket reconnects must use bounded backoff and page-lifecycle cleanup.
 
 Do not claim Codex/Claude/Cursor/other Host UI support without testing the exact active product surface. Tool availability does not prove App render/action support.
 

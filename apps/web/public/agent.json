@@ -16,7 +16,7 @@
     "version": "0.1.0-alpha.7",
     "candidateVersion": "0.1.0-alpha.8",
     "candidatePublished": false,
-    "candidateSummary": "MCP App recent activity is capped at four single-line entries without an internal scrollbar.",
+    "candidateSummary": "MCP App recent activity is capped at four non-scrolling rows; the 1.2-second idle App refresh loop is removed, connected Web tables use visibility-aware 1-10 second backoff, and failed lifecycle WebSockets reconnect with bounded backoff.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
