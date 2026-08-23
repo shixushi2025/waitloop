@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: fix/wait-for-room-update
-          fetch-depth: 20
+          fetch-depth: 30
 
       - name: Recover and apply staged patch
         run: |
@@ -44,24 +44,91 @@ jobs:
           lines = [line[10:] if line.startswith("          ") else line for line in block.splitlines()]
           script = "\n".join(lines) + "\n"
 
-          label = '"AGENTS local source tools"'
-          label_at = script.find(label)
-          if label_at < 0:
-              raise SystemExit("missing AGENTS local tool patch label")
-          block_start = script.rfind("replace_once(", 0, label_at)
-          block_end = script.find("\n)", label_at)
-          if block_start < 0 or block_end < 0:
-              raise SystemExit("could not isolate AGENTS local tool patch")
-          block_end += 2
-          agents_patch = script[block_start:block_end]
-          old_prefix = "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'"
-          new_prefix = "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'"
-          old_result = "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'"
-          new_result = "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'"
-          if agents_patch.count(old_prefix) != 1 or agents_patch.count(old_result) != 1:
-              raise SystemExit("AGENTS local tool patch has unexpected shape")
-          agents_patch = agents_patch.replace(old_prefix, new_prefix, 1).replace(old_result, new_result, 1)
-          script = script[:block_start] + agents_patch + script[block_end:]
+          def rewrite_call(label_text: str, replacements: list[tuple[str, str]]) -> None:
+              global script
+              label = f'"{label_text}"'
+              label_at = script.find(label)
+              if label_at < 0:
+                  raise SystemExit(f"missing staged patch label: {label_text}")
+              start = script.rfind("replace_once(", 0, label_at)
+              end = script.find("\n)", label_at)
+              if start < 0 or end < 0:
+                  raise SystemExit(f"could not isolate staged patch: {label_text}")
+              end += 2
+              call = script[start:end]
+              for old, new in replacements:
+                  if call.count(old) != 1:
+                      raise SystemExit(f"{label_text}: expected one occurrence of {old!r}, found {call.count(old)}")
+                  call = call.replace(old, new, 1)
+              script = script[:start] + call + script[end:]
+
+          def remove_call(label_text: str) -> None:
+              global script
+              label = f'"{label_text}"'
+              label_at = script.find(label)
+              if label_at < 0:
+                  raise SystemExit(f"missing removable staged patch label: {label_text}")
+              start = script.rfind("replace_once(", 0, label_at)
+              end = script.find("\n)", label_at)
+              if start < 0 or end < 0:
+                  raise SystemExit(f"could not isolate removable staged patch: {label_text}")
+              end += 2
+              while end < len(script) and script[end] == "\n":
+                  end += 1
+              script = script[:start] + script[end:]
+
+          rewrite_call("AGENTS local source tools", [
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+          ])
+          rewrite_call("Agent guide remote tools", [
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+                  "'Remote tools are:\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+              ),
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+                  "'Remote tools are:\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+              ),
+          ])
+          rewrite_call("MCP docs local tools", [
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+          ])
+          rewrite_call("Protocol remote tools", [
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'Remote Agent tools:\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+                  "'Remote Agent tools:\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)'",
+              ),
+          ])
+          rewrite_call("Status remote tools", [
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+                  "'## Remote MCP Agent gameplay\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+              ),
+              (
+                  "'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+                  "'## Remote MCP Agent gameplay\\n\\n```text\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)\\ncomment(text)\\nyield_to_bot()\\ntake_control()'",
+              ),
+          ])
+          remove_call("Status published local anchor")
+
           Path("/tmp/waitloop-room-update-patch.py").write_text(script)
           PY
 
@@ -116,7 +183,7 @@ jobs:
         run: pnpm check:mcp-stdio
 
       - name: Validate browser JavaScript
-        run: find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+        run: find apps/web/public -name '*.js' -print0 -n1 node --check
 
       - name: Validate agent discovery files
         run: |
