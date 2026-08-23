@@ -1,0 +1,242 @@
+name: refactor-web-game-selectors
+
+on:
+  push:
+    branches:
+      - refactor/web-game-selectors
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extract pure game snapshot selectors
+        run: |
+          cat > apps/web/public/game-selectors.js <<'EOF'
+          const LEGACY_VIEWER_ID = "you";
+
+          export function phaseOf(current) {
+            if (typeof current?.roomPhase === "string") return current.roomPhase;
+            if (current?.status === "finished") return "finished";
+            if (current?.status === "paused") return "paused";
+            return "playing";
+          }
+
+          export function viewerActorId(current) {
+            return current?.viewerActorId ?? LEGACY_VIEWER_ID;
+          }
+
+          export function viewerSeatId(current) {
+            return current?.viewerSeatId ?? LEGACY_VIEWER_ID;
+          }
+
+          export function actorFor(current, actorId) {
+            if (!actorId) return null;
+            if (Array.isArray(current?.actors)) {
+              const found = current.actors.find((actor) => actor?.id === actorId);
+              if (found) return found;
+            }
+            return Array.isArray(current?.participants)
+              ? current.participants.find((participant) => participant?.id === actorId) ?? null
+              : null;
+          }
+
+          export function seatDescriptor(current, seatId) {
+            return Array.isArray(current?.seats)
+              ? current.seats.find((seat) => seat?.id === seatId) ?? null
+              : null;
+          }
+
+          export function bindingForActor(current, actorId) {
+            return Array.isArray(current?.bindings)
+              ? current.bindings.find((binding) => binding?.actorId === actorId) ?? null
+              : null;
+          }
+
+          export function actorStateFor(current, actorId) {
+            if (Array.isArray(current?.actorStates)) {
+              const found = current.actorStates.find((state) => state?.actorId === actorId);
+              if (found) return found;
+            }
+            if (Array.isArray(current?.seatStates)) {
+              const legacy = current.seatStates.find((state) => state?.playerId === actorId);
+              if (legacy) return legacy;
+            }
+            return null;
+          }
+
+          export function connectedActors(current) {
+            return Array.isArray(current?.actors)
+              ? current.actors.filter((actor) => actor?.kind === "connected-agent")
+              : Array.isArray(current?.participants)
+                ? current.participants.filter((actor) => actor?.kind === "connected-agent")
+                : [];
+          }
+
+          export function companionActor(current) {
+            const seatId = viewerSeatId(current);
+            return connectedActors(current).find((actor) => {
+              const binding = bindingForActor(current, actor.id);
+              return binding?.seatId === seatId && binding?.relation === "advisor";
+            }) ?? null;
+          }
+
+          export function controllerActorForSeat(current, seatId) {
+            const seat = seatDescriptor(current, seatId);
+            if (seat?.activeControllerActorId) return actorFor(current, seat.activeControllerActorId);
+            return actorFor(current, seatId);
+          }
+
+          export function seatLabel(current, seatId) {
+            if (!seatId) return "room";
+            const seat = seatDescriptor(current, seatId);
+            if (seat?.label) return seat.label;
+            if (seatId === viewerSeatId(current)) return "you";
+            return actorFor(current, seatId)?.label ?? seatId;
+          }
+
+          export function actorLabel(current, actorId) {
+            if (!actorId) return "actor";
+            if (actorId === viewerActorId(current)) return "you";
+            return actorFor(current, actorId)?.label ?? actorId;
+          }
+
+          export function canManageRoom(current) {
+            return Array.isArray(current?.capabilities) && current.capabilities.includes("room:manage");
+          }
+          EOF
+
+          cat > apps/web/test/game-selectors.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+
+          // Browser-only ESM ships without a bundling step.
+          // @ts-expect-error JavaScript module intentionally has no TypeScript declaration in public assets.
+          const selectors = await import("../public/game-selectors.js");
+
+          function snapshot(overrides: Record<string, unknown> = {}) {
+            return {
+              status: "playing",
+              roomPhase: "playing",
+              viewerActorId: "human-1",
+              viewerSeatId: "seat-1",
+              actors: [
+                { id: "human-1", kind: "human", label: "Human" },
+                { id: "agent-1", kind: "connected-agent", label: "Codex" },
+                { id: "agent-2", kind: "connected-agent", label: "Other" },
+              ],
+              actorStates: [
+                { actorId: "agent-1", status: "connected" },
+              ],
+              seats: [
+                { id: "seat-1", label: "you", activeControllerActorId: "human-1" },
+                { id: "seat-2", label: "agent seat", activeControllerActorId: "agent-2" },
+              ],
+              bindings: [
+                { actorId: "human-1", seatId: "seat-1", relation: "controller" },
+                { actorId: "agent-1", seatId: "seat-1", relation: "advisor" },
+                { actorId: "agent-2", seatId: "seat-2", relation: "controller" },
+              ],
+              capabilities: ["room:manage"],
+              ...overrides,
+            };
+          }
+
+          describe("standalone game snapshot selectors", () => {
+            it("resolves the viewer, companion Advisor, and active Controller", () => {
+              const current = snapshot();
+              expect(selectors.viewerActorId(current)).toBe("human-1");
+              expect(selectors.viewerSeatId(current)).toBe("seat-1");
+              expect(selectors.companionActor(current)?.id).toBe("agent-1");
+              expect(selectors.controllerActorForSeat(current, "seat-2")?.id).toBe("agent-2");
+              expect(selectors.canManageRoom(current)).toBe(true);
+            });
+
+            it("does not select an Agent bound to another Seat as the companion", () => {
+              const current = snapshot({
+                bindings: [
+                  { actorId: "human-1", seatId: "seat-1", relation: "controller" },
+                  { actorId: "agent-1", seatId: "seat-2", relation: "advisor" },
+                ],
+              });
+              expect(selectors.companionActor(current)).toBeNull();
+            });
+
+            it("keeps legacy participant and seat-state fallbacks", () => {
+              const current = {
+                status: "paused",
+                participants: [{ id: "agent-old", kind: "connected-agent", label: "Legacy Agent" }],
+                seatStates: [{ playerId: "agent-old", status: "disconnected" }],
+              };
+              expect(selectors.phaseOf(current)).toBe("paused");
+              expect(selectors.viewerActorId(current)).toBe("you");
+              expect(selectors.actorFor(current, "agent-old")?.label).toBe("Legacy Agent");
+              expect(selectors.actorStateFor(current, "agent-old")?.status).toBe("disconnected");
+            });
+
+            it("uses stable labels without exposing missing identities", () => {
+              const current = snapshot();
+              expect(selectors.seatLabel(current, "seat-1")).toBe("you");
+              expect(selectors.actorLabel(current, "human-1")).toBe("you");
+              expect(selectors.actorLabel(current, "missing")).toBe("missing");
+              expect(selectors.seatLabel(current, null)).toBe("room");
+            });
+          });
+          EOF
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'apps/web/public/game.js';
+          let source = fs.readFileSync(file, 'utf8');
+          const importAnchor = 'import { companionEmptyStateText } from "./companion-status.js";\n';
+          const selectorImport = `import {\n  actorFor,\n  actorLabel,\n  actorStateFor,\n  canManageRoom,\n  companionActor,\n  connectedActors,\n  controllerActorForSeat,\n  phaseOf,\n  seatDescriptor,\n  seatLabel,\n  viewerActorId,\n  viewerSeatId,\n} from "./game-selectors.js";\n`;
+          if (!source.includes(selectorImport)) {
+            if (!source.includes(importAnchor)) throw new Error('companion import anchor not found');
+            source = source.replace(importAnchor, importAnchor + selectorImport);
+          }
+          source = source.replace('const LEGACY_VIEWER_ID = "you";\n', '');
+          const start = source.indexOf('function phaseOf(current) {');
+          const end = source.indexOf('function updateUrl() {', start);
+          if (start < 0 || end < 0 || end <= start) throw new Error('selector block anchors not found');
+          source = source.slice(0, start) + source.slice(end);
+          fs.writeFileSync(file, source);
+          NODE
+
+      - name: Validate behavior-preserving extraction
+        run: |
+          pnpm check
+          pnpm check:repo-contract
+          pnpm check:cli-package
+          pnpm check:mcp-stdio
+          find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+          pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+
+      - name: Commit clean refactor
+        run: |
+          rm -f .github/workflows/refactor-web-game-selectors.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- apps/web/public/game.js apps/web/public/game-selectors.js apps/web/test/game-selectors.test.ts .github/workflows/refactor-web-game-selectors.yml
+          git commit -m "refactor(web): extract game snapshot selectors"
+          git push origin HEAD:refactor/web-game-selectors
