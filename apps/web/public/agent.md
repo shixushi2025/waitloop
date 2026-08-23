@@ -309,7 +309,7 @@ timeout
 
 A `timeout` only bounds one transport/tool call. It never auto-passes, changes Controller, replaces an Agent, or applies a Casual game timeout. Call it again when continued waiting is still desired.
 
-The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`. Cancellation propagates through the read/wait request, stops remote polling, and never mutates the game. Mutation-capable calls are not abandoned mid-flight; after an uncertain mutation transport failure, refresh state before retrying.
+The MCP host may safely cancel `get_active_room`, `get_turn`, `wait_for_turn`, or `wait_for_room_update`. Cancellation propagates through the read/wait request, stops remote polling, and never mutates the game. Mutation-capable calls are not abandoned mid-flight; after an uncertain mutation transport failure, refresh state before retrying.
 
 `get_turn()` remains available for an immediate snapshot. Do not tightly poll it when `wait_for_turn()` is available.
 

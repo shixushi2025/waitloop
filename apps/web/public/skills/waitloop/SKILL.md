@@ -134,8 +134,6 @@ yield_to_bot()
 take_control()
 ```
 
-The bridge internally reuses Human Room HTTP
-
 The alpha.9 source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; the published alpha.8 local bridge does not. Remote Room MCP exposes it after the corresponding Worker deployment.
 
 The bridge internally reuses Human Room HTTP, Room/Join HTTP, and remote Room MCP. A normal Agent should not manually construct HTTP, read cached credential JSON, initialize remote MCP, or parse SSE.
@@ -160,7 +158,7 @@ loop:
 
 `timeoutMs` bounds one transport wait only. It never auto-passes, changes Controller, or replaces a slow Casual Agent.
 
-The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`; cancellation propagates through the read/wait request and never mutates game state. Mutation-capable calls are not abandoned mid-flight, so refresh state before retrying after an uncertain transport failure.
+The MCP host may safely cancel `get_active_room`, `get_turn`, `wait_for_turn`, or `wait_for_room_update`; cancellation propagates through the read/wait request and never mutates game state. Mutation-capable calls are not abandoned mid-flight, so refresh state before retrying after an uncertain transport failure.
 
 Human-operated `open_game()` is different: once the App renders, the Human drives moves by clicking. Do not run the Agent gameplay loop on the Human's behalf unless the user explicitly changes intent.
 
