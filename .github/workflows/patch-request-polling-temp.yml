@@ -21,6 +21,16 @@ jobs:
 
       - name: Apply request-polling patch
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/patch-request-polling-temp.mjs")
+          text = path.read_text()
+          old = 'source = replaceOnce(source, `\\n          stopPolling();`, ``, "MCP App finished polling stop");'
+          new = 'source = replaceOnce(source, `\\n          stopPolling();\\n        } else if`, `\\n        } else if`, "MCP App finished polling stop");'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one polling-stop patch line, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          PY
           node scripts/patch-request-polling-temp.mjs
           rm scripts/patch-request-polling-temp.mjs
           rm .github/workflows/patch-request-polling-temp.yml
