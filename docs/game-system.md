@@ -108,6 +108,7 @@ get_active_room
 leave_room
 get_turn
 wait_for_turn
+wait_for_room_update
 play_move
 comment
 yield_to_bot
@@ -135,6 +136,8 @@ otherwise re-read after ~750 ms
 Maximum current wait is 25 seconds. Timeout is not a game mutation and never triggers auto-pass/auto-play/fallback.
 
 A user request for continuous play still requires the Agent harness to keep its current run active and call the tool again after transport timeout.
+
+`wait_for_room_update(afterRoomSeq, timeoutMs?)` is the parallel semantic-event primitive. It returns when `roomSeq` advances, the Room finishes, or one bounded wait times out. It uses the same authenticated projection for Controllers and Advisors, never grants play capability, propagates cancellation, and remains a bounded polling step until push subscription transport is implemented.
 
 ## Temporary Bot takeover
 
@@ -240,7 +243,7 @@ Worker/domain logic does not sleep for presentation. Browser replays authoritati
 - fallback: preserve owner/Seat and remove only temporary Actor;
 - recovery: identifier alone never authenticates;
 - advisor: bound private view without play permission;
-- wait: actionable reasons and timeout bounds, no mutation;
+- waits: actionable turn reasons plus roomSeq update reasons, cursor/timeout bounds, cancellation, and no mutation;
 - local bridge: safe tool list, credential non-disclosure, headless create/join/connect;
 - browser projection: hidden-information non-leakage;
 - stale/out-of-turn/non-controller moves rejected;

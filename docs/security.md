@@ -171,7 +171,7 @@ Security properties:
 - validates incoming message shape and tool payload type;
 - card/action controls remain disabled without Host server-tool support and a valid private App capability;
 - unsupported Host shows explicit fallback rather than pretending an action succeeded;
-- teardown stops polling.
+- teardown disables subsequent lifecycle-recovery calls; the Human-vs-bots App has no periodic state timer.
 
 The Host remains responsible for sandboxing according to MCP Apps rules. Waitloop does not request unnecessary network/resource permissions.
 
@@ -273,6 +273,7 @@ Remote tools:
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -295,6 +296,8 @@ poll about 750 ms
 
 It uses authenticated reads under the existing per-Actor MCP-read budget. Timeout cannot auto-pass, play, change Controller, trigger Bot fallback, or create a competitive clock.
 
+`wait_for_room_update` uses the same bounded authenticated reads and exposes only the caller's existing projection. `afterRoomSeq` is a cursor, not authorization; an ahead cursor fails. Advisors can wait for semantic events without receiving `seat:play`, and cancellation has no mutation effect.
+
 ## Mutation cancellation boundary
 
 Cancellation is propagated only through safe read/wait operations:
@@ -303,6 +306,7 @@ Cancellation is propagated only through safe read/wait operations:
 get_active_room
 get_turn
 wait_for_turn
+wait_for_room_update
 ui_get_game
 ui_hint
 ```

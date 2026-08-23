@@ -9,6 +9,10 @@ import {
   WAIT_FOR_TURN_POLL_MS,
   waitForTurnDelay,
 } from "./wait-for-turn";
+import {
+  classifyWaitForRoomUpdate,
+  normalizeAfterRoomSeq,
+} from "./wait-for-room-update";
 
 interface McpEnv {
   GAME_ROOMS: DurableObjectNamespace<GameRoom>;
@@ -131,6 +135,76 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
     );
 
     server.registerTool(
+      "wait_for_room_update",
+      {
+        description:
+          "Wait for a semantic Room change after one roomSeq cursor. Controllers and advisors may use it; it does not grant play authority. timeoutMs bounds only this cancellable tool call and cannot wake an Agent run after it has ended.",
+        inputSchema: z.object({
+          afterRoomSeq: z.number().int().nonnegative(),
+          timeoutMs: z.number().int().min(1_000).max(25_000).optional(),
+        }),
+      },
+      async ({ afterRoomSeq, timeoutMs }, ctx) => {
+        let cursor: number;
+        try {
+          cursor = normalizeAfterRoomSeq(afterRoomSeq);
+        } catch (error) {
+          return errorResult(
+            "invalid_room_seq_cursor",
+            error instanceof Error ? error.message : "Invalid Room event cursor.",
+          );
+        }
+
+        let boundedTimeout: number;
+        try {
+          boundedTimeout = normalizeWaitForTurnTimeout(timeoutMs);
+        } catch (error) {
+          return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");
+        }
+
+        const signal = ctx.mcpReq.signal;
+        const startedAt = Date.now();
+        while (true) {
+          throwIfWaitCancelled(signal);
+          const result = await room.getSnapshotBySeatToken(seatToken);
+          if (!result.ok) return errorResult(result.error.code, result.error.message);
+          const snapshot = rpcValue(result) as GameRoomSnapshotV1;
+          const reason = classifyWaitForRoomUpdate(snapshot, cursor);
+          if (reason === "cursor_ahead") {
+            return errorResult(
+              "room_seq_ahead",
+              `afterRoomSeq ${cursor} is ahead of current roomSeq ${snapshot.roomSeq}. Refresh with get_turn before waiting again.`,
+            );
+          }
+          if (reason) {
+            return textResult({
+              version: 1,
+              reason,
+              waitedMs: Date.now() - startedAt,
+              afterRoomSeq: cursor,
+              roomSeq: snapshot.roomSeq,
+              snapshot,
+            });
+          }
+
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= boundedTimeout) {
+            return textResult({
+              version: 1,
+              reason: "timeout",
+              waitedMs: elapsed,
+              afterRoomSeq: cursor,
+              roomSeq: snapshot.roomSeq,
+              stillWaiting: true,
+              snapshot,
+            });
+          }
+          await waitForTurnDelay(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed), signal);
+        }
+      },
+    );
+
+    server.registerTool(
       "play_move",
       {
         description:
@@ -151,7 +225,7 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
       "comment",
       {
         description:
-          "Post a short room comment as this connected actor. Comments are a side channel: they never mutate game rules, turn order, or room revision.",
+          "Post a short room comment as this connected actor. Comments are a side channel: they never mutate game rules, turn order, or game revision, but they advance roomSeq for Room observers.",
         inputSchema: z.object({
           text: z.string().trim().min(1).max(280),
         }),

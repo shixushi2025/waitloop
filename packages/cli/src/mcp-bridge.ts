@@ -58,7 +58,7 @@ const UI_TOKEN_SCHEMA = {
 } as const;
 
 export const LOCAL_MCP_INSTRUCTIONS =
-  "Waitloop keeps all Room credentials inside the local bridge. When the user wants to click cards and play personally inside the Agent client, call open_game() so an MCP Apps-capable Host can render the Human table. Use create_room() only when the Agent should own seat-1 and play autonomously against bots. Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling. If the user asks the Agent to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout or cancellation never auto-passes, plays, changes Controller, or mutates Casual game state. Hosts without MCP Apps still receive text fallback instructions. Human mutation capability is delivered only to the embedded App through tool-result metadata and is never part of model-visible content.";
+  "Waitloop keeps all Room credentials inside the local bridge. When the user wants to click cards and play personally inside the Agent client, call open_game() so an MCP Apps-capable Host can render the Human table. Use create_room() only when the Agent should own seat-1 and play autonomously against bots. Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling for Controller turns. Advisors and other observers should use wait_for_room_update(afterRoomSeq) for semantic Room changes while the current Agent run remains active. If the user asks the Agent to play continuously or finish a game, keep the current Agent run active until that stopping condition is reached. Transport timeout or cancellation never auto-passes, plays, changes Controller, or mutates Casual game state. Hosts without MCP Apps still receive text fallback instructions. Human mutation capability is delivered only to the embedded App through tool-result metadata and is never part of model-visible content.";
 
 export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
   {
@@ -128,6 +128,24 @@ export const LOCAL_MCP_TOOLS: readonly LocalToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: { timeoutMs: { type: "integer", minimum: 1000, maximum: 25000, default: 25000 } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "wait_for_room_update",
+    description:
+      "Wait for any semantic Room change after the supplied roomSeq. Works for Controllers and Advisors without granting play authority. timeoutMs bounds only this cancellable call; an ended Agent run cannot be woken by MCP.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        afterRoomSeq: {
+          type: "integer",
+          minimum: 0,
+          description: "Last semantic Room cursor already observed; use 0 to request the current snapshot immediately.",
+        },
+        timeoutMs: { type: "integer", minimum: 1000, maximum: 25000, default: 25000 },
+      },
+      required: ["afterRoomSeq"],
       additionalProperties: false,
     },
   },
@@ -280,6 +298,12 @@ function requiredRevision(args: Record<string, unknown>): number {
   return value as number;
 }
 
+function requiredRoomSeq(args: Record<string, unknown>): number {
+  const value = args.afterRoomSeq;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error("afterRoomSeq must be a non-negative integer.");
+  return value as number;
+}
+
 function toolResult(
   value: unknown,
   isError = false,
@@ -367,7 +391,7 @@ function uiMeta(visibility: readonly UiVisibility[]): Record<string, unknown> {
 }
 
 function signalForRemoteRead(name: string, signal: AbortSignal | undefined): AbortSignal | undefined {
-  return name === "get_turn" || name === "wait_for_turn" || name === "ui_get_game" || name === "ui_hint"
+  return name === "get_turn" || name === "wait_for_turn" || name === "wait_for_room_update" || name === "ui_get_game" || name === "ui_hint"
     ? signal
     : undefined;
 }
@@ -401,6 +425,20 @@ async function callLocalTool(name: string, args: Record<string, unknown>, signal
     return callActiveRoomTool(
       "wait_for_turn",
       timeoutMs === undefined ? {} : { timeoutMs },
+      signalForRemoteRead(name, signal),
+    );
+  }
+  if (name === "wait_for_room_update") {
+    const timeoutMs = args.timeoutMs;
+    if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1_000 || (timeoutMs as number) > 25_000)) {
+      throw new Error("timeoutMs must be an integer between 1000 and 25000.");
+    }
+    return callActiveRoomTool(
+      "wait_for_room_update",
+      {
+        afterRoomSeq: requiredRoomSeq(args),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      },
       signalForRemoteRead(name, signal),
     );
   }

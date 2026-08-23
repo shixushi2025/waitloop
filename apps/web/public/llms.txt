@@ -80,15 +80,17 @@ yield_to_bot()
 take_control()
 ```
 
+The alpha.9 local source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; published npm alpha.8 does not.
+
 `create_room()` creates the fully headless `agent-bots` mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
 Join success is not MCP connection for raw clients. The local `join_room()` tool performs the authenticated connection check before reporting connected. Default CLI/JSON output is credential-safe; `--raw-mcp` is an explicit advanced fallback.
 
-Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control(). Remote Room MCP does not host the Human MCP App; the local bridge owns that private session.
+Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), wait_for_room_update(afterRoomSeq, timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control(). Remote Room MCP does not host the Human MCP App; the local bridge owns that private session.
 
-`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. The MCP host may cancel get_active_room/get_turn/wait_for_turn safely; cancellation stops the read/wait request and never mutates game state.
+`wait_for_turn()` returns on your turn, game finish, pause, lobby, Controller change, or bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent. The MCP host may cancel get_active_room/get_turn/wait_for_turn/wait_for_room_update safely; cancellation stops the read/wait request and never mutates game state.
 
-For an Advisor, `wait_for_turn()` is not a general Room-revision stream and may return `controller_changed` immediately while the Human remains Controller. Do not claim continuous companion monitoring or background advice after the current Agent response ends.
+For an Advisor, `wait_for_turn()` remains Controller-oriented and may return `controller_changed` immediately. During the current active Agent run, use `wait_for_room_update(afterRoomSeq)` to observe semantic `roomSeq` changes. It is bounded and cancellable but cannot provide background advice after final response.
 
 MCP does not wake an Agent after it returns a final response. If the user asks the Agent to keep playing or play until finished, keep the current Agent run active and loop `wait_for_turn -> play_move` until the requested stopping condition. Human-operated `open_game()` is driven by clicks instead of that Agent loop.
 

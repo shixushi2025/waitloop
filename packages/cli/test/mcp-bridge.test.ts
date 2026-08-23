@@ -29,6 +29,7 @@ describe("stable local MCP bridge", () => {
       "leave_room",
       "get_turn",
       "wait_for_turn",
+      "wait_for_room_update",
       "play_move",
       "comment",
       "yield_to_bot",
@@ -40,6 +41,10 @@ describe("stable local MCP bridge", () => {
     ]);
     expect(JSON.stringify(LOCAL_MCP_TOOLS)).not.toContain("wlseat_");
     expect(JSON.stringify(LOCAL_MCP_TOOLS)).not.toContain("wlview_");
+
+    const roomWait = LOCAL_MCP_TOOLS.find((tool) => tool.name === "wait_for_room_update");
+    expect(roomWait?.inputSchema.required).toEqual(["afterRoomSeq"]);
+    expect(JSON.stringify(roomWait?.inputSchema)).toContain("afterRoomSeq");
 
     const open = LOCAL_MCP_TOOLS.find((tool) => tool.name === "open_game");
     expect(open?.uiVisibility).toEqual(["model", "app"]);
@@ -61,6 +66,7 @@ describe("stable local MCP bridge", () => {
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("never part of model-visible content");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("keep the current Agent run active");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_turn");
+    expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_room_update");
     expect(LOCAL_MCP_INSTRUCTIONS).toContain("cancellation");
   });
 

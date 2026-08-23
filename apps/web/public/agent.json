@@ -16,7 +16,7 @@
     "version": "0.1.0-alpha.8",
     "candidateVersion": "0.1.0-alpha.9",
     "candidatePublished": false,
-    "candidateSummary": "Human-vs-bots MCP Apps are response-driven with zero periodic reads; snapshots also add a semantic roomSeq cursor with centralized commit/broadcast rules, while subscription transport remains future work.",
+    "candidateSummary": "Human-vs-bots MCP Apps are response-driven with zero periodic reads; snapshots add semantic roomSeq, and alpha.9 adds bounded cancellable wait_for_room_update for Controllers and Advisors. Push subscription transport remains future work.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -102,7 +102,22 @@
     "credentialHandling": "Agent Room credentials, Human Room cookies, and the private MCP App capability remain in private local cache and are never returned in model-visible content; credential-shaped local errors are redacted",
     "activeRoom": "waitloop join or join_room selects one credential-backed Agent room; the bridge can restart and resume it until room expiry",
     "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode",
-    "cancellation": "get_active_room, get_turn, wait_for_turn, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
+    "cancellation": "get_active_room, get_turn, wait_for_turn, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight",
+    "candidateTools": [
+      "open_game",
+      "create_room",
+      "join_room",
+      "get_active_room",
+      "leave_room",
+      "get_turn",
+      "wait_for_turn",
+      "wait_for_room_update",
+      "play_move",
+      "comment",
+      "yield_to_bot",
+      "take_control"
+    ],
+    "candidateCancellation": "alpha.9 additionally propagates caller cancellation through wait_for_room_update; all mutation-capable calls remain non-abortable mid-flight"
   },
   "mcpApps": {
     "status": "available",
@@ -137,6 +152,7 @@
     "tools": [
       "get_turn",
       "wait_for_turn",
+      "wait_for_room_update",
       "play_move",
       "comment",
       "yield_to_bot",
@@ -152,7 +168,8 @@
     "waitBehavior": "wait_for_turn is a bounded cancellable transport wait that returns on turn, finish, pause, lobby, controller change, or timeout; timeout or cancellation never auto-passes or takes over",
     "continuationBehavior": "MCP does not wake an agent after it returns a final response; a request to play continuously must keep the current agent run active until the requested stopping condition",
     "advisorBehavior": "an advisor can inspect its bound seat and comment but play_move is rejected until the seat owner delegates control",
-    "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly"
+    "reconnectBehavior": "the cached room actor credential can reconnect while the room is active; reconnect never silently steals control from a temporary bot, so the owner calls take_control explicitly",
+    "roomUpdateBehavior": "wait_for_room_update(afterRoomSeq, timeoutMs?) waits 1-25 seconds for roomSeq to advance or the Room to finish; it is read-only, cancellable, Advisor-safe, and cannot wake an Agent run after final response"
   },
   "integrations": {
     "claude-code": {

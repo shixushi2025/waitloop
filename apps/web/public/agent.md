@@ -59,6 +59,8 @@ Do not use `create_room()` when the user says “I want to play”, “let me cl
 
 ### Model-visible local tools
 
+The published npm alpha.8 exposes:
+
 ```text
 open_game(gameId?, mode?, roomId?)
 create_room()
@@ -71,6 +73,12 @@ play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
+```
+
+The alpha.9 source candidate additionally exposes:
+
+```text
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 ```
 
 ### MCP App-only tools
@@ -301,9 +309,19 @@ timeout
 
 A `timeout` only bounds one transport/tool call. It never auto-passes, changes Controller, replaces an Agent, or applies a Casual game timeout. Call it again when continued waiting is still desired.
 
-The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`. Cancellation propagates through the read/wait request, stops remote polling, and never mutates the game. Mutation-capable calls are not abandoned mid-flight; after an uncertain mutation transport failure, refresh state before retrying.
+The MCP host may safely cancel `get_active_room`, `get_turn`, `wait_for_turn`, or `wait_for_room_update`. Cancellation propagates through the read/wait request, stops remote polling, and never mutates the game. Mutation-capable calls are not abandoned mid-flight; after an uncertain mutation transport failure, refresh state before retrying.
 
 `get_turn()` remains available for an immediate snapshot. Do not tightly poll it when `wait_for_turn()` is available.
+
+## Semantic Room-update waiting
+
+Remote Room MCP and the alpha.9 local source candidate expose:
+
+```text
+wait_for_room_update({"afterRoomSeq":12,"timeoutMs":25000})
+```
+
+Use the last snapshot `roomSeq`, not game `revision`. It returns `room_updated` when a move, comment, Controller transition, Room phase, Join, or semantic presence event advances the cursor; it returns `game_finished` for a terminal Room and `timeout` when one bounded call expires. A cursor ahead of the authoritative Room fails with `room_seq_ahead`; recover with `get_turn()`. The tool is read-only, cancellable, and Advisor-safe, but it cannot wake an Agent run after the Agent has sent a final reply.
 
 ## Agent gameplay tools
 
@@ -351,7 +369,7 @@ Human-operated `open_game()` is different: after rendering the App, the Human dr
 
 An Advisor may see the private state and legal options of the one Seat it is explicitly bound to and may call `comment(text)`. It cannot call `play_move` until the Seat owner explicitly delegates Controller authority.
 
-`wait_for_turn()` is Controller/turn-oriented, not a general Room revision subscription. An Advisor that is bound to a Human-controlled Seat may receive `controller_changed` immediately instead of waiting for the next Human move. Do not claim that an Advisor is continuously monitoring the table merely because it is bound or connected, and do not promise background advice after the current Agent response ends. A future companion-specific Room-update wait primitive is required for that experience.
+`wait_for_turn()` remains Controller/turn-oriented and may return `controller_changed` immediately for a Human-controlled companion Seat. During the same active Agent run, an Advisor should instead repeat `wait_for_room_update(afterRoomSeq)` and may post `comment(text)` after relevant semantic events. Binding or connection still does not mean an ended Agent run is listening, so never promise background advice after final response.
 
 ## Remote MCP fallback
 
@@ -368,6 +386,7 @@ Remote tools are:
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -425,7 +444,7 @@ Rate limits are abuse protection, not accounting.
 8. Keep the current Agent run active when the user requested Agent-controlled continued play or completion.
 9. Use `yield_to_bot()` only as an explicit owner action; in `agent-bots`, expect the bots may finish the game.
 10. Reconnect through cached active Agent Room context and call `take_control()` explicitly when ready.
-11. Advisors may inspect/comment but need explicit delegation to play; `wait_for_turn()` is not a companion Room-update stream.
+11. Advisors may inspect/comment but need explicit delegation to play; use `wait_for_room_update(afterRoomSeq)` rather than `wait_for_turn()` to observe semantic companion events during the current Agent run.
 12. Never claim inline UI support when the active Host did not render or operate the MCP App, and never invoke the separate browser fallback without an actual Host/UI failure.
 13. Coding-work attention always outranks the game.
 

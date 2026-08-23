@@ -90,7 +90,9 @@ seat-2 Bot
 seat-3 Bot
 ```
 
-### Full model-visible local surface
+### Model-visible local surface
+
+The published npm alpha.8 exposes:
 
 ```text
 open_game()
@@ -104,6 +106,12 @@ play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
+```
+
+The alpha.9 source candidate additionally exposes:
+
+```text
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 ```
 
 The bridge reuses existing Human Room HTTP, Room/Join HTTP, and remote Room MCP. Raw credentials are not returned through model-visible tools.
@@ -160,6 +168,8 @@ agent-bots
 ## Efficient Agent play and recovery
 
 Remote/local Agent MCP provide `wait_for_turn()`. It returns on turn, finish, lobby, pause, Controller change, or a bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.
+
+Remote MCP and the alpha.9 local source candidate also provide `wait_for_room_update(afterRoomSeq, timeoutMs?)`. It waits for semantic `roomSeq` changes such as moves, comments, Controller transitions, and Room phase changes, so Advisors can observe without gaining `seat:play`. It remains a bounded current-run wait, not background wake-up or the final push transport.
 
 MCP cannot wake an Agent after a final reply. A request for the Agent to play until finished must keep the current run active:
 
