@@ -9,6 +9,10 @@ const params = new URLSearchParams(window.location.search);
 const sessionId = params.get("session");
 let currentSnapshot = null;
 let reconnectTimer = null;
+let sessionSocket = null;
+let sessionReconnectDelayMs = 1500;
+let sessionSocketShuttingDown = false;
+const MAX_SESSION_RECONNECT_DELAY_MS = 30000;
 
 const stateClasses = [
   "state-idle",
@@ -143,10 +147,32 @@ async function loadSnapshot(id) {
   return true;
 }
 
+function clearSessionReconnect() {
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function scheduleSessionReconnect(id) {
+  clearSessionReconnect();
+  if (sessionSocketShuttingDown || document.hidden) return;
+  const delayMs = sessionReconnectDelayMs;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    sessionReconnectDelayMs = Math.min(MAX_SESSION_RECONNECT_DELAY_MS, sessionReconnectDelayMs * 2);
+    connectSessionSocket(id);
+  }, delayMs);
+}
+
 function connectSessionSocket(id) {
+  if (sessionSocketShuttingDown || document.hidden) return;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${protocol}//${window.location.host}/api/v1/sessions/${encodeURIComponent(id)}/ws`;
   const socket = new WebSocket(url);
+  sessionSocket = socket;
+
+  socket.addEventListener("open", () => {
+    sessionReconnectDelayMs = 1500;
+  });
 
   socket.addEventListener("message", (event) => {
     if (typeof event.data !== "string") return;
@@ -162,8 +188,8 @@ function connectSessionSocket(id) {
   });
 
   socket.addEventListener("close", () => {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = window.setTimeout(() => connectSessionSocket(id), 1500);
+    if (sessionSocket === socket) sessionSocket = null;
+    scheduleSessionReconnect(id);
   });
 }
 
@@ -180,6 +206,24 @@ async function start() {
   const loaded = await loadSnapshot(sessionId);
   if (loaded) connectSessionSocket(sessionId);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!sessionId) return;
+  if (document.hidden) {
+    clearSessionReconnect();
+    return;
+  }
+  if (!sessionSocket || sessionSocket.readyState === WebSocket.CLOSED) {
+    sessionReconnectDelayMs = 1500;
+    connectSessionSocket(sessionId);
+  }
+});
+
+window.addEventListener("pagehide", () => {
+  sessionSocketShuttingDown = true;
+  clearSessionReconnect();
+  sessionSocket?.close(1000, "page hidden");
+});
 
 window.setInterval(() => {
   if (currentSnapshot && isElement(elapsedValue)) {

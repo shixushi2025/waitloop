@@ -131,8 +131,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         selected: new Set(),
         hintCursor: 0,
         actionBusy: false,
-        pollBusy: false,
-        pollTimer: null,
+        refreshBusy: false,
         fallbackUrl: "https://waitloop.run/game.html"
       };
       var pending = new Map();
@@ -361,10 +360,8 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         if (snapshot.status === "finished") {
           var winner = snapshot.state && snapshot.state.winnerId ? seatLabel(snapshot, snapshot.state.winnerId) : "unknown";
           setMessage(winner === "you" ? "You won." : winner + " won.");
-          stopPolling();
         } else if (canAct(snapshot)) setMessage("Your turn.");
         else setMessage("Waiting for " + seatLabel(snapshot, snapshot.currentPlayerId) + ".");
-        schedulePolling();
       }
 
       async function callTool(name, args, quiet) {
@@ -401,11 +398,16 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
       }
 
       async function refresh(quiet) {
-        if (!state.payload || state.pollBusy) return;
-        state.pollBusy = true;
+        if (!state.payload || state.refreshBusy) return;
+        state.refreshBusy = true;
         try { await callTool("ui_get_game", { roomId: state.payload.roomId }, Boolean(quiet)); }
         catch (error) { if (!quiet) setMessage(error instanceof Error ? error.message : String(error), "error"); }
-        finally { state.pollBusy = false; }
+        finally { state.refreshBusy = false; }
+      }
+
+      function refreshWhenVisible() {
+        if (document.visibilityState !== "visible" || !state.payload || !canUseTools() || state.actionBusy) return;
+        void refresh(true);
       }
 
       async function playSelected() {
@@ -445,20 +447,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
           setMessage(error instanceof Error ? error.message : String(error), "error");
           await refresh(true);
         }
-      }
-
-      function stopPolling() {
-        if (state.pollTimer !== null) window.clearTimeout(state.pollTimer);
-        state.pollTimer = null;
-      }
-
-      function schedulePolling() {
-        stopPolling();
-        if (!state.payload || state.payload.snapshot.status === "finished" || !canUseTools()) return;
-        state.pollTimer = window.setTimeout(async function () {
-          await refresh(true);
-          schedulePolling();
-        }, 1200);
       }
 
       function applyHostContext(context) {
@@ -519,7 +507,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
           return;
         }
         if (incoming.method === "ui/resource-teardown" && Object.prototype.hasOwnProperty.call(incoming, "id")) {
-          stopPolling();
+          state.connected = false;
           send({ jsonrpc: "2.0", id: incoming.id, result: {} });
         }
       });
@@ -537,6 +525,11 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         try { await request("ui/open-link", { url: state.fallbackUrl }, 10000); }
         catch (_error) { fallbackUrl.textContent = state.fallbackUrl; }
       });
+
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") refreshWhenVisible();
+      });
+      window.addEventListener("focus", refreshWhenVisible);
 
       if (typeof ResizeObserver === "function") {
         var resizePending = false;
