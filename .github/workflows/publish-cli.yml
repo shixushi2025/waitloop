@@ -1,28 +1,27 @@
 name: publish-cli
 
 on:
-  push:
-    branches:
-      - release/cli-alpha8-one-shot
+  release:
+    types: [published]
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
-  group: npm-cli-alpha8-one-shot
+  group: npm-cli-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.actor != 'github-actions[bot]'
+    if: startsWith(github.event.release.tag_name, 'cli-v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout one-shot release branch
+      - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: release/cli-alpha8-one-shot
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -56,19 +55,24 @@ jobs:
       - name: Validate packaged MCP stdio bridge
         run: pnpm check:mcp-stdio
 
-      - name: Validate alpha.8 candidate
+      - name: Validate release tag
         id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const pkg = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
-          const manifest = JSON.parse(fs.readFileSync('apps/web/public/agent.json', 'utf8'));
-          if (pkg.version !== '0.1.0-alpha.8') throw new Error(`Expected alpha.8 package, found ${pkg.version}`);
-          if (manifest.cli.version !== '0.1.0-alpha.7') throw new Error(`Expected alpha.7 published declaration before release, found ${manifest.cli.version}`);
-          if (manifest.cli.candidateVersion !== pkg.version || manifest.cli.candidatePublished !== false) {
-            throw new Error('agent.json must declare alpha.8 as an unpublished candidate before publication.');
+          const expected = `cli-v${pkg.version}`;
+          if (process.env.RELEASE_TAG !== expected) {
+            console.error(`Release tag ${process.env.RELEASE_TAG} must equal ${expected}.`);
+            process.exit(1);
           }
+          const prerelease = pkg.version.match(/-([0-9A-Za-z-]+)/)?.[1];
+          const distTag = prerelease ? prerelease.split('.')[0] : 'latest';
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${distTag}\n`);
+          console.log(`Publishing @waitloop/cli@${pkg.version} with dist-tag ${distTag}.`);
           NODE
 
       - name: Check npm registry
@@ -83,45 +87,33 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish @waitloop/cli alpha.8
+      - name: Publish @waitloop/cli
         if: steps.registry.outputs.exists != 'true'
         working-directory: packages/cli
-        run: npm publish --access public --provenance --tag alpha
+        run: npm publish --access public --provenance --tag "${{ steps.release.outputs.dist_tag }}"
 
-      - name: Verify npm version and alpha dist-tag
+      - name: Verify npm publication
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          for attempt in 1 2 3 4 5 6 7 8; do
-            exact="$(npm view "@waitloop/cli@${VERSION}" version 2>/dev/null || true)"
-            alpha="$(npm view "@waitloop/cli@alpha" version 2>/dev/null || true)"
-            if [ "$exact" = "$VERSION" ] && [ "$alpha" = "$VERSION" ]; then
-              echo "Verified @waitloop/cli@${VERSION} and alpha dist-tag on npm."
+          for attempt in 1 2 3 4 5 6; do
+            actual="$(npm view "@waitloop/cli@${VERSION}" version 2>/dev/null || true)"
+            if [ "$actual" = "$VERSION" ]; then
+              echo "Verified @waitloop/cli@${VERSION} on npm."
               exit 0
             fi
             sleep 5
           done
-          echo "npm registry/dist-tag did not converge to ${VERSION}." >&2
+          echo "npm registry did not expose @waitloop/cli@${VERSION} after publication." >&2
           exit 1
 
-      - name: Validate clean alpha installation
+      - name: Validate clean npm installation
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           PREFIX="$RUNNER_TEMP/waitloop-release"
-          npm install --global --prefix "$PREFIX" "@waitloop/cli@alpha"
+          npm install --global --prefix "$PREFIX" "@waitloop/cli@${VERSION}"
           test "$("$PREFIX/bin/waitloop" --version)" = "$VERSION"
           "$PREFIX/bin/waitloop" --help | grep -F "waitloop mcp"
           "$PREFIX/bin/waitloop" --help | grep -F "waitloop room create"
           WAITLOOP_CLI_ENTRY="$PREFIX/lib/node_modules/@waitloop/cli/dist/index.js" node scripts/validate-mcp-stdio.mjs
-
-      - name: Record successful publication
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          printf '%s\n' "$VERSION" > .alpha8-published
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .alpha8-published
-          git commit -m "chore: record alpha.8 publication"
-          git push origin HEAD:release/cli-alpha8-one-shot
