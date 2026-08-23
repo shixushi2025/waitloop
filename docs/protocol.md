@@ -176,6 +176,7 @@ Remote Agent tools:
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -209,6 +210,16 @@ Result text decodes to:
 ```
 
 `stillWaiting` appears for transport timeout. Actionable Room states return immediately. Timeout never mutates game state or authorizes fallback.
+
+### `wait_for_room_update`
+
+Input requires the last observed semantic cursor and accepts the same optional bounded timeout:
+
+```json
+{"afterRoomSeq": 12, "timeoutMs": 25000}
+```
+
+Result reasons are `room_updated`, `game_finished`, or `timeout`; the result includes `afterRoomSeq`, current `roomSeq`, `waitedMs`, and the authenticated snapshot. `afterRoomSeq = 0` returns the current snapshot immediately. A cursor greater than the authoritative Room returns `room_seq_ahead`; malformed cursors return `invalid_room_seq_cursor`. This read-only wait never grants Controller authority or wakes an ended Agent run.
 
 ### Agent mutations
 
@@ -246,6 +257,7 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -436,6 +448,7 @@ Safe cancellation-propagating operations:
 get_active_room
 get_turn
 wait_for_turn
+wait_for_room_update
 ui_get_game
 ui_hint
 ```
@@ -468,6 +481,8 @@ controller_not_ready
 room_manage_forbidden
 invalid_actor_credential
 invalid_wait_timeout
+invalid_room_seq_cursor
+room_seq_ahead
 rate_limited
 join_expired
 join_already_claimed

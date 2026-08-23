@@ -46,6 +46,7 @@ for (const needle of [
   "MCP Apps-capable Host",
   "separate game",
   "result `_meta`",
+  "wait_for_room_update",
 ]) requireText("apps/web/public/agent.md", needle);
 
 for (const needle of [
@@ -58,6 +59,7 @@ for (const needle of [
   "MCP Apps-capable Host",
   "separate",
   "tool-result `_meta`",
+  "wait_for_room_update",
 ]) requireText("apps/web/public/skills/waitloop/SKILL.md", needle);
 
 for (const needle of [
@@ -70,6 +72,7 @@ for (const needle of [
   "MCP Apps-capable Host",
   "separate",
   "tool-result `_meta`",
+  "wait_for_room_update",
 ]) requireText("apps/web/public/llms.txt", needle);
 
 for (const [path, needles] of [
@@ -91,12 +94,14 @@ for (const [path, needles] of [
     "Host support boundary",
     "separate browser-controlled game",
     "tool result _meta",
+    "wait_for_room_update",
   ]],
   ["docs/roadmap.md", [
     "stabilization before feature expansion",
     "MCP App real-host stabilization",
     "Existing Agent flow stabilization",
     "compatibility matrix",
+    "wait_for_room_update",
   ]],
 ]) {
   for (const needle of needles) requireText(path, needle);

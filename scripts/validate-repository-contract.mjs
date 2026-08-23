@@ -91,11 +91,19 @@ for (const needle of [
   "registry evidence outranks repository inference",
 ]) requireText("docs/cli-release.md", releaseDocs, needle);
 
-const remoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];
-for (const tool of remoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
+const publishedRemoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];
+const sourceRemoteTools = ["get_turn", "wait_for_turn", "wait_for_room_update", "play_move", "comment", "yield_to_bot", "take_control"];
+for (const tool of sourceRemoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);
 
-const localTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...remoteTools];
-for (const tool of localTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);
+const publishedLocalTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...publishedRemoteTools];
+const sourceLocalTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...sourceRemoteTools];
+if (packageVersion === publishedVersion) {
+  for (const tool of sourceLocalTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);
+  if (manifest.localMcp?.candidateTools !== undefined) fail("published CLI state must not retain localMcp.candidateTools");
+} else {
+  for (const tool of publishedLocalTools) requireIncludes("agent.json published localMcp.tools", manifest.localMcp?.tools, tool);
+  for (const tool of sourceLocalTools) requireIncludes("agent.json source localMcp.candidateTools", manifest.localMcp?.candidateTools, tool);
+}
 
 const appTools = ["ui_get_game", "ui_play_cards", "ui_pass", "ui_hint"];
 for (const tool of appTools) requireIncludes("agent.json localMcp.appTools", manifest.localMcp?.appTools, tool);
@@ -132,6 +140,7 @@ for (const needle of [
   "leave_room()",
   "get_turn()",
   "wait_for_turn",
+  "wait_for_room_update",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
   "yield_to_bot()",
@@ -164,6 +173,7 @@ for (const needle of [
   "leave_room()",
   "get_turn()",
   "wait_for_turn",
+  "wait_for_room_update",
   "play_move(expectedRevision, moveId)",
   "comment(text)",
   "yield_to_bot()",
@@ -192,6 +202,7 @@ for (const needle of [
   "create_room()",
   "join_room",
   "wait_for_turn",
+  "wait_for_room_update",
   "yield_to_bot()",
   "take_control()",
   "ui://waitloop/doudizhu/v1",
@@ -208,6 +219,7 @@ for (const needle of [
   "seat-1",
   "waitloop mcp",
   "wait_for_turn",
+  "wait_for_room_update",
   "yield_to_bot()",
   "take_control()",
   "credential",

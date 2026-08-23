@@ -52,7 +52,7 @@ Acceptance: on each declared compatible Host, a Human can ask “open a game for
 
 ## 2. Room event sequencing and subscriptions
 
-The semantic Room cursor foundation is now implemented. Before adding a new wait/subscription tool, preserve the distinction from game revision:
+The semantic Room cursor and bounded update wait are now implemented. Preserve the distinction from game revision while building the push transport:
 
 ```text
 game revision
@@ -89,14 +89,14 @@ Implemented foundation:
 - persisted/backward-compatible `roomSeq` on GameRoom and all Human/Agent projections;
 - centralized semantic commit path for write + sequence increment + conditional broadcast;
 - regression tests proving game/comment/Controller/status events advance, heartbeat-only writes do not, and collection order is irrelevant.
+- bounded cancellable `wait_for_room_update(afterRoomSeq, timeoutMs?)` for Controllers and Advisors, including ahead-cursor recovery and terminal Room return.
 
 Remaining implementation order:
 
 1. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;
-2. define bounded, cancellable `wait_for_room_update(afterRoomSeq, timeoutMs)` semantics for Advisors/local Apps;
-3. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;
-4. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;
-5. use polling only as an explicitly bounded, stoppable fallback when push is unavailable.
+2. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;
+3. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;
+4. use the implemented bounded wait only as the stoppable fallback when push is unavailable.
 
 Acceptance: comments, game moves, Controller transitions, Join/connection state, and Room phase changes reach each authorized projection promptly without permanent polling, cursor gaps, or private-state cross-talk.
 
@@ -175,7 +175,7 @@ It also confirmed that `wait_for_turn()` is Controller/turn-oriented: while the 
 Do not immediately copy the whole standalone Web UI into the App. Add only after the Human-vs-bots App and Room subscription foundation are stable:
 
 - one-step local `open_companion_game()` or equivalent flow that creates the Human Room and binds the current Agent as Advisor without browser automation or manual Join-code relay;
-- a bounded `wait_for_room_update(afterRoomSeq, timeoutMs)` primitive for Advisors that does not imply play authority;
+- integrate the existing bounded `wait_for_room_update(afterRoomSeq, timeoutMs)` into the one-step companion flow and future push subscription without implying play authority;
 - explicit UI distinctions among bound, authenticated/connected, current Agent run listening, and ended/offline;
 - Human + connected Agent + Bot inline table;
 - companion/advisor comments in the App;

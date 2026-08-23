@@ -98,6 +98,7 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -144,6 +145,8 @@ Expired Agent Room credentials are ignored/removed. The active pointer contains 
 ## Efficient continuous Agent play
 
 Use `wait_for_turn()` instead of polling `get_turn()`. It returns on turn, finish, pause, lobby, Controller change, or a bounded transport timeout.
+
+Use `wait_for_room_update(afterRoomSeq, timeoutMs?)` when a Controller or Advisor needs any semantic Room change rather than only an actionable turn. It returns when `roomSeq` advances, the Room finishes, or the bounded call times out. It is cancellable and read-only, but it cannot restart an Agent after final response.
 
 A timeout never auto-passes or takes over a Casual Seat. MCP also cannot restart an Agent after a final answer, so a request for the Agent to “play until finished” must keep the current run active through `wait_for_turn -> play_move`.
 

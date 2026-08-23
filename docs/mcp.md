@@ -45,6 +45,7 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -222,15 +223,9 @@ The bridge does not duplicate Room/game business logic:
 
 ## Future Room event subscription boundary
 
-Multi-Actor Rooms cannot use game `revision` as the sole subscription cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence changes can be visible without changing game revision.
+Multi-Actor Rooms cannot use game `revision` as the update cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence can change independently. The implemented monotonic `roomSeq` advances for those semantic changes but not heartbeat-only timestamp writes.
 
-A future subscription protocol therefore needs a separate monotonic cursor such as:
-
-```text
-roomSeq
-```
-
-It advances for semantic client-visible Room changes, but not for heartbeat-only timestamp writes such as an unchanged `lastSeenAt` refresh.
+Remote MCP and the alpha.9 local source candidate now expose bounded `wait_for_room_update(afterRoomSeq, timeoutMs?)`. This makes Advisor/current-run observation correct without granting play authority, but it is still a polling-based transport primitive rather than the final push subscription.
 
 Remote connection reuse must also preserve private projection identity. The key is at least:
 
@@ -250,7 +245,7 @@ The current browser viewer `/ws` route remains intentionally disabled because th
 Cancellation is limited to operations where abandoning the response cannot create an ambiguous mutation result.
 
 ```text
-get_active_room / get_turn / wait_for_turn
+get_active_room / get_turn / wait_for_turn / wait_for_room_update
 ui_get_game / ui_hint
   -> MCP handler AbortSignal
   -> local fetch
@@ -336,6 +331,7 @@ Every authenticated remote MCP request refreshes presence. Reconnection never si
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -371,6 +367,10 @@ poll interval about 750 ms
 Timeout or cancellation does not auto-pass, auto-play, replace a slow Agent, change Controller, or create a competitive clock.
 
 `wait_for_turn` is a Controller/turn primitive, not a general Room-revision subscription. In a `companion-agent` Room where the Human remains active Controller, an Advisor may receive `controller_changed` immediately rather than waiting for the next Human move. Binding/connection therefore must not be presented as continuous listening. A dedicated Room-update wait/event primitive is still required for a truly long-lived companion loop.
+
+### `wait_for_room_update(afterRoomSeq, timeoutMs?)`
+
+Waits for the authenticated projection `roomSeq` to advance, or for the Room to finish, with the same 1–25 second transport bound and cancellation behavior. It is valid for Controllers and Advisors and does not grant `seat:play`. `afterRoomSeq = 0` returns the current snapshot immediately; a cursor ahead of the Room returns `room_seq_ahead` and requires `get_turn()` recovery. Repeating this tool can support advice only while the Agent run remains active. It is not a WebSocket subscription and cannot wake a completed run.
 
 ### `play_move(expectedRevision, moveId)`
 

@@ -104,6 +104,7 @@ get_active_room
 leave_room
 get_turn
 wait_for_turn
+wait_for_room_update
 play_move
 comment
 yield_to_bot
@@ -218,7 +219,9 @@ Maximum transport wait is 25 seconds. Timeout never auto-passes, changes Control
 
 MCP is not a background scheduler: if an Agent returns its final response, no MCP server can spontaneously restart that run.
 
-Human MCP App refresh is different: the App periodically calls app-only `ui_get_game` through the Host while its iframe remains open. This does not wake an ended Agent run or create a game clock.
+For companion and observation flows, `wait_for_room_update(afterRoomSeq, timeoutMs?)` waits for the semantic `roomSeq` cursor to advance or the Room to finish. It works for Advisors without granting Controller authority, propagates cancellation, and remains bounded to 25 seconds per call.
+
+Human MCP App refresh is different: the alpha.9 App is response-driven and performs no periodic `ui_get_game` calls. It refreshes only for explicit, one-shot lifecycle, stale-state, or uncertain-result recovery, and this still does not wake an ended Agent run.
 
 ## Cancellation boundary
 
@@ -228,6 +231,7 @@ Read/wait operations may propagate cancellation:
 get_active_room
 get_turn
 wait_for_turn
+wait_for_room_update
 ui_get_game
 ui_hint
 ```

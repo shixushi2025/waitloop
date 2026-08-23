@@ -134,6 +134,10 @@ yield_to_bot()
 take_control()
 ```
 
+The bridge internally reuses Human Room HTTP
+
+The alpha.9 source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; the published alpha.8 local bridge does not. Remote Room MCP exposes it after the corresponding Worker deployment.
+
 The bridge internally reuses Human Room HTTP, Room/Join HTTP, and remote Room MCP. A normal Agent should not manually construct HTTP, read cached credential JSON, initialize remote MCP, or parse SSE.
 
 ## Continuous Agent play
@@ -160,7 +164,7 @@ The MCP host may safely cancel `get_active_room`, `get_turn`, or `wait_for_turn`
 
 Human-operated `open_game()` is different: once the App renders, the Human drives moves by clicking. Do not run the Agent gameplay loop on the Human's behalf unless the user explicitly changes intent.
 
-An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented, not a generic Room-update subscription. A Human-controlled companion Seat may cause an Advisor wait to return `controller_changed` immediately. Do not claim continuous monitoring or background advice after the current Agent response ends.
+An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented and may return `controller_changed` immediately. While the current Agent run remains active, use `wait_for_room_update(afterRoomSeq)` to observe moves, comments, Controller changes, Room phase, and other semantic events. It still cannot provide background advice after final response.
 
 ## Gameplay rules
 
@@ -169,7 +173,7 @@ An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented, not
 3. Use the exact current revision and a server-generated move ID.
 4. On stale state, call `get_turn()` or `wait_for_turn()` again.
 5. Advisors may inspect/comment on their explicitly bound Seat but cannot play until delegated.
-6. Do not use `wait_for_turn()` as an Advisor Room-revision stream; no such companion-specific wait tool exists yet.
+6. Advisors use `wait_for_room_update(afterRoomSeq)` for semantic Room events and reserve `wait_for_turn()` for Controller/actionable-turn behavior.
 7. Never use app-only Human tools without the Host-provided App capability.
 
 ## Yield and reconnect
@@ -203,7 +207,7 @@ POST https://waitloop.run/api/v1/join/<code>/claim
 https://waitloop.run/mcp
 ```
 
-Remote Room MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield_to_bot`, and `take_control`. The Human MCP App is local-bridge functionality and is not exposed by remote Room MCP.
+Remote Room MCP tools are `get_turn`, `wait_for_turn`, `wait_for_room_update`, `play_move`, `comment`, `yield_to_bot`, and `take_control`. The Human MCP App is local-bridge functionality and is not exposed by remote Room MCP.
 
 ## Security and privacy
 

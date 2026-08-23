@@ -121,6 +121,7 @@ try {
     "join_room",
     "get_active_room",
     "wait_for_turn",
+    "wait_for_room_update",
     "play_move",
     "take_control",
     "ui_get_game",

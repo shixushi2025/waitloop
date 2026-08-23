@@ -100,6 +100,14 @@ take_control()
 
 ### MCP App-only tools
 
+The alpha.9 source candidate additionally exposes:
+
+```text
+wait_for_room_update(afterRoomSeq, timeoutMs?)
+```
+
+### MCP App-only tools
+
 ```text
 ui_get_game(roomId, uiToken)
 ui_play_cards(roomId, uiToken, expectedRevision, cardIds)
@@ -161,7 +169,7 @@ Alpha.8 capped `recent activity` at the latest four chronological single-line ro
 
 The alpha.9 source candidate keeps the compact history but removes periodic Human-vs-bots refresh entirely. Human play/pass responses already include the authoritative state after synchronous Bot automation and render immediately; hint is read-only. `ui_get_game` is used only for explicit refresh, reopen, stale or uncertain-result recovery, and one-shot focus/visibility recovery. These reads are single-flight, so an idle mounted App produces zero recurring Worker and Durable Object reads.
 
-Alpha.9 also adds the Room-event foundation: every Agent and Human snapshot includes `roomSeq`, legacy Rooms normalize to sequence 1, and all GameRoom state writes flow through one semantic commit path. Comments, Controller changes, Room phase, Join claim, meaningful Actor status, and game revision changes advance `roomSeq`; heartbeat-only `lastSeenAt` and credential-only writes do not. Multi-Actor subscription transport is still future work and must reuse streams by Room plus authorized principal/projection, never by Room ID alone.
+Alpha.9 also adds the Room-event foundation and bounded observation primitive: every Agent and Human snapshot includes `roomSeq`; semantic writes advance it; heartbeat-only and credential-only writes do not; and `wait_for_room_update(afterRoomSeq, timeoutMs?)` lets Controllers or Advisors wait 1–25 seconds for the cursor to advance or the Room to finish. This is cancellable current-run polling, not the final push subscription, and future connection reuse must still key by Room plus authorized principal/projection.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
@@ -302,6 +310,7 @@ Current modes still gate one joined connected Agent Actor. Generalized multiple 
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -312,7 +321,7 @@ take_control()
 
 Transport timeout never auto-passes, auto-plays, changes Controller, or triggers Casual fallback. MCP client cancellation stops the in-flight wait promptly without a game mutation.
 
-For Advisors, `wait_for_turn` is not a general Room-revision subscription. In the manually tested `companion-agent` flow, an Advisor bound to a Human-controlled Seat received `controller_changed` immediately rather than waiting for the next Human move. Binding/connected state therefore does not mean the Agent is continuously listening.
+For Advisors, `wait_for_turn` remains Controller-oriented and can return `controller_changed` immediately. `wait_for_room_update(afterRoomSeq)` now provides the bounded semantic-event wait needed during the same active Agent run. Binding/connected state still does not mean an ended Agent response is continuously listening.
 
 `yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. Reconnect updates presence only and never silently reclaims Controller.
 
@@ -333,7 +342,7 @@ Standalone Web can:
 
 The first MCP App release intentionally exposes only Human-vs-bots play/pass/hint. Companion/connected-agent control UI remains in the standalone Web surface until an explicit MCP App design is added.
 
-The currently tested companion flow is fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. There is no one-step local `open_companion_game` entry and no companion-specific Room-update wait primitive yet.
+The currently tested companion flow remains fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. The bounded `wait_for_room_update` primitive now exists, but there is still no one-step local `open_companion_game` entry or push subscription transport.
 
 ## Security currently implemented
 
@@ -360,7 +369,7 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 106 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, and Room event sequencing;
+- more than 110 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, Room event sequencing, and bounded Room-update waiting;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
@@ -372,11 +381,12 @@ Rate limiting remains abuse protection, not accounting.
 - executable embedded-App runtime tests proving 24-hour idle produces zero reads, repeated focus/visibility events remain single-flight, and hidden/busy/torn-down states do not refresh;
 - source-contract checks prohibiting a periodic Human MCP App refresh timer;
 - Room sequence tests proving game/comment/Controller/status changes advance, heartbeat-only writes do not, and centralized commits own all write/broadcast decisions;
+- Room-update wait tests proving cursor advance/finish/timeout semantics, ahead-cursor recovery, Advisor-safe projection reuse, and cancellability;
 - standalone connected/companion Room refresh stops while hidden and backs unchanged visible state off from 1 to 10 seconds;
 - lifecycle WebSocket failures reconnect with bounded backoff and respect page lifecycle;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
 - packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;
-- 15 tools with correct model/app visibility and one MCP App resource;
+- published alpha.8 remains a 15-tool bridge; the alpha.9 source candidate validates 16 tools with correct model/app visibility and one MCP App resource;
 - headless Agent create -> Join claim -> authenticated MCP connect;
 - active Agent Room pointer and expired cache handling;
 - Codex/Claude MCP installer command/idempotency;
@@ -387,14 +397,13 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Known gaps
 
-- subscription transport using the implemented `roomSeq` cursor is not yet available;
+- push subscription transport using the implemented `roomSeq` cursor is not yet available; the bounded `wait_for_room_update` polling primitive is available;
 - subscription reuse must still be implemented by Room plus authorized principal/projection, not Room ID alone;
 - a Human snapshot subscription protocol is not implemented; the current browser viewer WebSocket route remains intentionally disabled;
 - automated real-host smoke coverage for Codex desktop and manual verification of additional Codex/Claude/other Host surfaces;
 - same-Room transfer from local MCP App to standalone browser without exposing long-lived credentials;
 - Human connected-agent/companion controls inside the MCP App;
 - one-step companion creation/binding from the local MCP surface;
-- Advisor Room-update waiting distinct from Controller-oriented `wait_for_turn`;
 - truthful separation of bound, authenticated/connected, actively listening, and ended Agent-run state;
 - proactive cleanup/list/revoke commands for local interactive Human Rooms;
 - full Dou Dizhu bidding / rob-landlord / scoring;

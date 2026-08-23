@@ -107,6 +107,7 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -196,6 +197,7 @@ Remote tools:
 ```text
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
@@ -224,6 +226,10 @@ Required behavior:
 
 Continuous Agent play keeps the current run active through repeated `wait_for_turn -> play_move` until the requested condition. Human `open_game` play is driven by App clicks instead.
 
+## Wait-for-Room-update invariant
+
+`wait_for_room_update(afterRoomSeq, timeoutMs?)` is a bounded semantic-event wait for Controllers and Advisors. It uses authenticated private projection and `roomSeq`, returns on cursor advance, Room finish, or timeout, propagates cancellation, never grants `seat:play`, and cannot wake an Agent run after final response. A cursor ahead of the authoritative Room must fail and require `get_turn()` recovery. This bounded polling primitive is not the final WebSocket/subscription transport.
+
 ## Cancellation invariant
 
 Propagate cancellation only for safe read/wait operations:
@@ -232,6 +238,7 @@ Propagate cancellation only for safe read/wait operations:
 get_active_room
 get_turn
 wait_for_turn
+wait_for_room_update
 ui_get_game
 ui_hint
 ```
