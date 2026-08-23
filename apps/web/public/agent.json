@@ -13,10 +13,7 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, Human-operated MCP Apps, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
-    "version": "0.1.0-alpha.8",
-    "candidateVersion": "0.1.0-alpha.9",
-    "candidatePublished": false,
-    "candidateSummary": "Human-vs-bots MCP Apps are response-driven with zero periodic reads; snapshots add semantic roomSeq, and alpha.9 adds bounded cancellable wait_for_room_update for Controllers and Advisors. Push subscription transport remains future work.",
+    "version": "0.1.0-alpha.9",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -35,7 +32,7 @@
     "doctorCommand": "waitloop doctor",
     "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml",
-    "publicationVerification": "alpha.8 was published through npm trusted publishing; the exact version and alpha dist-tag were verified, a clean @alpha installation passed, and the packaged MCP stdio/MCP Apps bridge was validated"
+    "publicationVerification": "alpha.9 was published through npm trusted publishing; the exact version and alpha dist-tag were verified, a clean installation and packaged MCP stdio/MCP Apps validation passed, and tag cli-v0.1.0-alpha.9 records the verified source commit"
   },
   "skill": {
     "status": "available",
@@ -85,6 +82,7 @@
       "leave_room",
       "get_turn",
       "wait_for_turn",
+      "wait_for_room_update",
       "play_move",
       "comment",
       "yield_to_bot",
@@ -102,22 +100,7 @@
     "credentialHandling": "Agent Room credentials, Human Room cookies, and the private MCP App capability remain in private local cache and are never returned in model-visible content; credential-shaped local errors are redacted",
     "activeRoom": "waitloop join or join_room selects one credential-backed Agent room; the bridge can restart and resume it until room expiry",
     "createRoomScope": "create_room currently creates the existing headless agent-bots Dou Dizhu mode",
-    "cancellation": "get_active_room, get_turn, wait_for_turn, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight",
-    "candidateTools": [
-      "open_game",
-      "create_room",
-      "join_room",
-      "get_active_room",
-      "leave_room",
-      "get_turn",
-      "wait_for_turn",
-      "wait_for_room_update",
-      "play_move",
-      "comment",
-      "yield_to_bot",
-      "take_control"
-    ],
-    "candidateCancellation": "alpha.9 additionally propagates caller cancellation through wait_for_room_update; all mutation-capable calls remain non-abortable mid-flight"
+    "cancellation": "get_active_room, get_turn, wait_for_turn, wait_for_room_update, ui_get_game, and ui_hint propagate caller cancellation safely; mutation-capable calls are not abandoned mid-flight"
   },
   "mcpApps": {
     "status": "available",
@@ -142,8 +125,7 @@
     "sameRoomFallback": false,
     "privacy": "Human Room cookies stay in ~/.waitloop/app-rooms; a wlui_ capability is delivered only in tool-result _meta to the embedded App, is required by all app-only tools, and is absent from model-visible text and structuredContent",
     "network": "the App resource is self-contained and performs no direct credentialed network requests; all game actions flow through the local MCP bridge",
-    "publishedRefreshModel": "alpha.8 uses bounded visible-document polling as an incident mitigation",
-    "candidateRefreshModel": "alpha.9 is response-driven: no periodic Human-vs-bots Worker reads; only mutation responses plus one-shot explicit/focus/visibility/error recovery"
+    "publishedRefreshModel": "alpha.9 is response-driven: no periodic Human-vs-bots Worker reads; only mutation responses plus one-shot explicit/focus/visibility/error recovery"
   },
   "mcp": {
     "status": "available",
