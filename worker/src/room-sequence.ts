@@ -51,7 +51,7 @@ function compareFirst(left: readonly unknown[], right: readonly unknown[]): numb
 }
 
 export function normalizeRoomSeq(value: unknown): number {
-  return Number.isSafeInteger(value) && (value as number) >= 1 ? value as number : 1;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : 1;
 }
 
 export function roomEventSignature(state: RoomSequenceComparableV1): string {
