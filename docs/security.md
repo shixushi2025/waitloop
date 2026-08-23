@@ -378,4 +378,4 @@ CLI nested help is side-effect free and cannot install hooks/MCP.
 - revocation semantics for individual Room Actor credentials;
 - account/cross-device identity only when product requirements justify it.
 
-CI validates strict typing, 88 tests, repository/onboarding contracts, CLI package behavior, MCP/MCP Apps wire behavior, embedded/browser JavaScript, Agent discovery, and Worker dry-run.
+CI validates strict typing, the full regression suite, repository/onboarding/documentation/public-asset contracts, CLI package behavior, MCP/MCP Apps wire behavior, embedded/browser JavaScript, Agent discovery, and Worker dry-run.
