@@ -126,7 +126,9 @@ The App supports card selection, play, pass, hint, clear, refresh, inline render
 
 The compact activity region shows the latest four authoritative history rows in chronological order. It has no internal scrollbar; long rows remain single-line with visual truncation. The authoritative current trick is displayed separately, so the move to beat remains visible even when older history is omitted from the compact view.
 
-The Human-vs-bots App is action-driven: play/pass/hint responses already contain the authoritative post-automation snapshot, so normal interaction never waits for polling. A low-frequency safety refresh remains for stale or multiply opened views: while the App is visible it starts at 5 seconds and exponentially backs off to a maximum 30-second interval when state is unchanged. It resets after visible state changes or Human actions and stops while hidden, on pagehide, after teardown, or when the game finishes. Explicit refresh and focus/visibility recovery remain immediate and overlap-guarded.
+The Human-vs-bots App is response-driven. `ui_play_cards` and `ui_pass` return the authoritative snapshot after the Worker has applied the Human action and completed synchronous Bot automation; `ui_hint` is read-only. The App therefore has no periodic state-refresh timer. `ui_get_game` is used only for explicit refresh, reopen, one-shot focus/visibility recovery, stale-revision recovery, and uncertain mutation-result recovery. The `refreshBusy` guard keeps those reads single-flight. An idle mounted App generates zero recurring Worker and Durable Object reads.
+
+Multiple local views are not kept coherent through permanent polling. The acting view renders its mutation response immediately; another view refreshes when it becomes active or later participates. A future Room subscription layer may distribute semantic Room events to all authorized views.
 
 The App contains no external script/style dependency and performs no credentialed direct network request. Game traffic is:
 
@@ -217,6 +219,31 @@ The bridge does not duplicate Room/game business logic:
 - `join_room` calls the existing Join endpoint;
 - Agent gameplay/control tools proxy to existing remote Room MCP;
 - authorization, revision, hidden-information projection, and move legality remain server-side.
+
+## Future Room event subscription boundary
+
+Multi-Actor Rooms cannot use game `revision` as the sole subscription cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence changes can be visible without changing game revision.
+
+A future subscription protocol therefore needs a separate monotonic cursor such as:
+
+```text
+roomSeq
+```
+
+It advances for semantic client-visible Room changes, but not for heartbeat-only timestamp writes such as an unchanged `lastSeenAt` refresh.
+
+Remote connection reuse must also preserve private projection identity. The key is at least:
+
+```text
+server origin
++ Room ID
++ authorized principal / credential scope
++ projection type and version
+```
+
+It must never be only `roomId`, because Human, Controller, Advisor, Agent, and future spectator projections can contain different private data.
+
+The current browser viewer `/ws` route remains intentionally disabled because the existing GameRoom WebSocket emits full actor-specific Agent snapshots, not the reduced Human snapshot protocol. Human subscription requires explicit viewer authentication, Human projection, reconnect-to-full-snapshot behavior, cursor recovery, cancellation, and lifecycle cleanup. Polling remains a bounded fallback only after that push path is unavailable; it is not the primary design.
 
 ## Cancellation semantics
 
