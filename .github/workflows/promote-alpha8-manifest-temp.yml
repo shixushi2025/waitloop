@@ -1,0 +1,34 @@
+name: temporary alpha.8 manifest promotion
+
+on:
+  push:
+    branches:
+      - release/cli-alpha8-manifest
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout promotion branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/cli-alpha8-manifest
+
+      - name: Promote publication manifest
+        run: |
+          python3 scripts/promote-alpha8-manifest.py
+          rm scripts/promote-alpha8-manifest.py
+          rm .github/workflows/promote-alpha8-manifest-temp.yml
+
+      - name: Commit publication truth
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "release: declare CLI alpha.8 published"
+          git push origin HEAD:release/cli-alpha8-manifest
