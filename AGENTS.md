@@ -174,11 +174,16 @@ Required design:
 - unsupported Hosts get an honest fallback, not fake inline success;
 - standalone Web fallback starts a separate game unless a future explicit transfer protocol exists;
 - `open_game(roomId)` may reopen only a still-valid local interactive Room;
-- Human-vs-bots App state is action-driven: mutation responses are authoritative, so normal Human actions must update immediately without waiting for polling;
-- safety refresh may run only while visible, must start no faster than 5 seconds, back off to a maximum 30-second interval when unchanged, and stop on hidden/pagehide/teardown/finish;
-- explicit/focus/visibility refresh must be immediate, one-shot, and guarded against overlap;
-- any Web polling required for connected Actors must stop while hidden and use bounded backoff when visible state is unchanged;
+- Human-vs-bots App state is response-driven: mutation responses are authoritative, so normal Human actions update immediately without waiting for polling;
+- a Human-vs-bots App must not run a periodic state-refresh timer; an idle mounted App generates zero recurring Worker/DO reads;
+- explicit/focus/visibility/error-recovery refresh is one-shot, single-flight, and must never turn into a retry loop;
+- multi-view and multi-Actor coherence belongs to an explicit Room event subscription rather than permanent polling;
+- any temporary Web polling required for connected Actors must stop while hidden and use bounded backoff when visible state is unchanged;
 - failed WebSocket reconnects must use bounded backoff and page-lifecycle cleanup.
+
+Future Room event subscriptions must not use game revision as the only cursor. Add a separate semantic `roomSeq`/event sequence for client-visible changes such as comments, Controller transitions, Room phase, Join/connection transitions, and semantic presence changes. Heartbeat-only timestamp refreshes must not advance that cursor.
+
+Subscription reuse must be scoped by origin + Room + authorized principal/credential scope + projection type/version. Never share one private snapshot stream solely by Room ID.
 
 Do not claim Codex/Claude/Cursor/other Host UI support without testing the exact active product surface. Tool availability does not prove App render/action support.
 
@@ -314,7 +319,8 @@ Current baseline:
 - Join/Room expiry;
 - capability checks + game revision;
 - bounded `wait_for_turn` transport loop;
-- App refresh reuses existing authenticated Human reads.
+- no periodic Human-vs-bots MCP App read loop;
+- App refresh reuses existing authenticated Human reads only for explicit/lifecycle/error recovery.
 
 Rate limiting is abuse mitigation, not accounting or game timing. Hosted inference still needs explicit budgets before broad exposure.
 
@@ -411,6 +417,7 @@ If several rows apply, satisfy all.
 - wait tests prove reasons/bounds/no implicit mutation contract;
 - local bridge tests prove tool list/instructions/credential non-disclosure;
 - Human App tests prove cookie custody, hashed file naming, UI capability separation, invalid-capability rejection, and Human action proxying;
+- Human App request-budget tests execute the embedded refresh functions with fake timers and prove idle 24-hour zero reads, single-flight lifecycle recovery, and no hidden/busy/torn-down reads;
 - embedded App JavaScript must pass syntax validation;
 - packaged MCP wire tests prove tools/list, resources/list/read, metadata, visibility, capability schema, and safe errors;
 - Room bridge tests prove create -> Join -> authenticated connect;

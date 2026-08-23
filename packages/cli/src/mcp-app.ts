@@ -2,8 +2,6 @@ export const WAITLOOP_GAME_UI_URI = "ui://waitloop/doudizhu/v1";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_PROTOCOL_VERSION = "2026-01-26";
 export const MCP_APP_RECENT_ACTIVITY_LIMIT = 4;
-export const MCP_APP_REFRESH_MIN_DELAY_MS = 5000;
-export const MCP_APP_REFRESH_MAX_DELAY_MS = 30000;
 
 export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -124,8 +122,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
 
       var PROTOCOL_VERSION = "2026-01-26";
       var RECENT_ACTIVITY_LIMIT = ${MCP_APP_RECENT_ACTIVITY_LIMIT};
-      var REFRESH_MIN_DELAY_MS = ${MCP_APP_REFRESH_MIN_DELAY_MS};
-      var REFRESH_MAX_DELAY_MS = ${MCP_APP_REFRESH_MAX_DELAY_MS};
       var state = {
         connected: false,
         hostCapabilities: {},
@@ -136,8 +132,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         hintCursor: 0,
         actionBusy: false,
         refreshBusy: false,
-        refreshTimer: null,
-        refreshDelayMs: REFRESH_MIN_DELAY_MS,
         fallbackUrl: "https://waitloop.run/game.html"
       };
       var pending = new Map();
@@ -250,39 +244,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         var cards = Array.isArray(entry.cards) ? entry.cards.map(function (card) { return rankLabel(card.rank); }).join(" ") : "";
         var pattern = entry.pattern && typeof entry.pattern.kind === "string" ? entry.pattern.kind : "play";
         return who + " · " + pattern + (cards ? " · " + cards : "");
-      }
-
-      function refreshSignature(payload) {
-        var snapshot = payload && payload.snapshot;
-        if (!snapshot) return "";
-        var history = snapshot.state && Array.isArray(snapshot.state.history) ? snapshot.state.history : [];
-        return [
-          snapshot.revision,
-          snapshot.status,
-          snapshot.roomPhase || "",
-          snapshot.currentPlayerId || "",
-          history.length
-        ].join("|");
-      }
-
-      function stopRefresh() {
-        if (state.refreshTimer !== null) window.clearTimeout(state.refreshTimer);
-        state.refreshTimer = null;
-      }
-
-      function scheduleRefresh() {
-        stopRefresh();
-        if (
-          !state.connected ||
-          !state.payload ||
-          state.payload.snapshot.status === "finished" ||
-          !canUseTools() ||
-          document.visibilityState !== "visible"
-        ) return;
-        state.refreshTimer = window.setTimeout(function () {
-          state.refreshTimer = null;
-          void refresh(true);
-        }, state.refreshDelayMs);
       }
 
       function canUseTools() {
@@ -399,7 +360,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         if (snapshot.status === "finished") {
           var winner = snapshot.state && snapshot.state.winnerId ? seatLabel(snapshot, snapshot.state.winnerId) : "unknown";
           setMessage(winner === "you" ? "You won." : winner + " won.");
-          stopRefresh();
         } else if (canAct(snapshot)) setMessage("Your turn.");
         else setMessage("Waiting for " + seatLabel(snapshot, snapshot.currentPlayerId) + ".");
       }
@@ -410,9 +370,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
           throw new Error("Inline Human controls are unavailable in this Host.");
         }
         var callArgs = Object.assign({}, args || {}, { uiToken: state.uiToken });
-        var previousSignature = refreshSignature(state.payload);
         if (!quiet) {
-          stopRefresh();
           state.actionBusy = true;
           if (state.payload) renderActions(state.payload.snapshot);
         }
@@ -422,16 +380,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
           if (result && result.isError) throw new Error(errorFromResult(result));
           var payload = payloadFromResult(result);
           if (!payload) throw new Error("Waitloop returned an invalid game payload.");
-          var nextSignature = refreshSignature(payload);
-          if (name === "ui_get_game") {
-            state.refreshDelayMs = nextSignature !== previousSignature
-              ? REFRESH_MIN_DELAY_MS
-              : Math.min(REFRESH_MAX_DELAY_MS, Math.max(REFRESH_MIN_DELAY_MS, state.refreshDelayMs * 2));
-          } else {
-            state.refreshDelayMs = REFRESH_MIN_DELAY_MS;
-          }
           render(payload);
-          scheduleRefresh();
           return payload;
         } finally {
           if (!quiet) {
@@ -450,26 +399,14 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
 
       async function refresh(quiet) {
         if (!state.payload || state.refreshBusy) return;
-        if (state.actionBusy) { scheduleRefresh(); return; }
         state.refreshBusy = true;
-        try {
-          await callTool("ui_get_game", { roomId: state.payload.roomId }, Boolean(quiet));
-        } catch (error) {
-          state.refreshDelayMs = Math.min(
-            REFRESH_MAX_DELAY_MS,
-            Math.max(REFRESH_MIN_DELAY_MS, state.refreshDelayMs * 2)
-          );
-          if (!quiet) setMessage(error instanceof Error ? error.message : String(error), "error");
-          scheduleRefresh();
-        } finally {
-          state.refreshBusy = false;
-        }
+        try { await callTool("ui_get_game", { roomId: state.payload.roomId }, Boolean(quiet)); }
+        catch (error) { if (!quiet) setMessage(error instanceof Error ? error.message : String(error), "error"); }
+        finally { state.refreshBusy = false; }
       }
 
       function refreshWhenVisible() {
         if (document.visibilityState !== "visible" || !state.payload || !canUseTools() || state.actionBusy) return;
-        stopRefresh();
-        state.refreshDelayMs = REFRESH_MIN_DELAY_MS;
         void refresh(true);
       }
 
@@ -538,10 +475,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
           state.connected = true;
           notify("ui/notifications/initialized", {});
           sendSize();
-          if (state.payload) {
-            render(state.payload);
-            scheduleRefresh();
-          }
+          if (state.payload) render(state.payload);
         } catch (error) {
           setMessage(error instanceof Error ? error.message : String(error), "error");
           showFallback(state.payload, "The MCP App handshake failed. Use the web table for Human play, or create_room() for Agent-owned play.");
@@ -565,11 +499,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         if (incoming.method === "ui/notifications/tool-result") {
           captureUiCapability(incoming.params || {});
           var payload = payloadFromResult(incoming.params || {});
-          if (payload) {
-            state.refreshDelayMs = REFRESH_MIN_DELAY_MS;
-            render(payload);
-            scheduleRefresh();
-          } else setMessage("The Host did not forward a readable Waitloop tool result.", "error");
+          if (payload) render(payload); else setMessage("The Host did not forward a readable Waitloop tool result.", "error");
           return;
         }
         if (incoming.method === "ui/notifications/host-context-changed") {
@@ -578,7 +508,6 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
         }
         if (incoming.method === "ui/resource-teardown" && Object.prototype.hasOwnProperty.call(incoming, "id")) {
           state.connected = false;
-          stopRefresh();
           send({ jsonrpc: "2.0", id: incoming.id, result: {} });
         }
       });
@@ -587,10 +516,7 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
       passButton.addEventListener("click", function () { void passTurn(); });
       hintButton.addEventListener("click", function () { void hint(); });
       clearButton.addEventListener("click", function () { state.selected.clear(); if (state.payload) render(state.payload); });
-      refreshButton.addEventListener("click", function () {
-        state.refreshDelayMs = REFRESH_MIN_DELAY_MS;
-        void refresh(false);
-      });
+      refreshButton.addEventListener("click", function () { void refresh(false); });
       expandButton.addEventListener("click", async function () {
         try { await request("ui/request-display-mode", { mode: "fullscreen" }, 10000); }
         catch (error) { setMessage(error instanceof Error ? error.message : String(error), "warning"); }
@@ -601,14 +527,9 @@ export const WAITLOOP_GAME_APP_HTML = String.raw`<!doctype html>
       });
 
       document.addEventListener("visibilitychange", function () {
-        if (document.visibilityState !== "visible") {
-          stopRefresh();
-          return;
-        }
-        refreshWhenVisible();
+        if (document.visibilityState === "visible") refreshWhenVisible();
       });
       window.addEventListener("focus", refreshWhenVisible);
-      window.addEventListener("pagehide", stopRefresh);
 
       if (typeof ResizeObserver === "function") {
         var resizePending = false;
