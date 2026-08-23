@@ -4,19 +4,21 @@ Waitloop has three MCP-facing layers with distinct responsibilities:
 
 ```text
 local stdio MCP (`waitloop mcp`)
-  = stable Agent-facing bridge
-  = control-plane convenience + gameplay proxy + Human MCP App host
+  stable Agent-facing bridge
+  control-plane convenience
+  Agent gameplay proxy
+  Human MCP App host
 
 MCP App (`ui://waitloop/doudizhu/v1`)
-  = Human-operated sandbox UI delivered by the local bridge
-  = app-only calls back into the local bridge
+  Human-operated sandbox UI
+  App-only calls back into the local bridge
 
 remote HTTP MCP (`https://waitloop.run/mcp`)
-  = one already-authorized Room Actor binding
-  = Agent gameplay only
+  one already-authorized Room Actor binding
+  Agent gameplay and Room observation only
 ```
 
-None of these performs coding-agent lifecycle detection. Lifecycle hooks remain a separate integration and credential scope.
+Lifecycle detection is separate from all three layers and uses separate credentials.
 
 ## Stable local bridge
 
@@ -27,13 +29,13 @@ waitloop mcp install codex
 waitloop mcp install claude-code
 ```
 
-The stable command is always:
+Stable runtime command:
 
 ```text
 waitloop mcp
 ```
 
-The bridge uses the official MCP v2 stdio server entry and serves both legacy 2025-era clients and 2026-07-28 clients from that command. Protocol negotiation, concurrent dispatch, and MCP cancellation are transport concerns rather than hand-written Waitloop JSON-RPC behavior.
+The bridge uses the official MCP v2 stdio server and supports legacy 2025-era clients and 2026-07-28 clients through the same command.
 
 ### Model-visible tools
 
@@ -52,7 +54,7 @@ yield_to_bot()
 take_control()
 ```
 
-### App-only tools
+### MCP App-only tools
 
 ```text
 ui_get_game(roomId, uiToken)
@@ -61,40 +63,29 @@ ui_pass(roomId, uiToken, expectedRevision)
 ui_hint(roomId, uiToken, expectedRevision, cursor?)
 ```
 
-The `ui_*` tools are marked with:
-
-```json
-{
-  "ui": {
-    "resourceUri": "ui://waitloop/doudizhu/v1",
-    "visibility": ["app"]
-  }
-}
-```
-
-They are not part of the normal model tool surface and still require an independent private capability. Host visibility is defense in depth, not authorization.
+The `ui_*` tools are marked App-only in MCP metadata but still require the independent private `uiToken`. Host visibility is defense in depth, not authorization.
 
 ## Human UI versus Agent-owned play
 
-The two entry tools intentionally create different Actor/Seat ownership:
+The entry tools intentionally create different ownership:
 
 ```text
 open_game()
-  -> existing Human `bots` Room
-  -> Human owns/controllers seat-1
-  -> Human clicks the MCP App
+  existing Human `bots` Room
+  Human owns and controls seat-1
+  Human clicks the MCP App
 
 create_room()
-  -> existing `agent-bots` Room
-  -> connected Agent owns/controllers seat-1
-  -> Agent calls get_turn/wait_for_turn/play_move
+  existing `agent-bots` Room
+  connected Agent owns and controls seat-1
+  Agent uses get_turn / wait_for_turn / play_move
 ```
 
-`open_game()` must be used when the Human wants to operate the game. `create_room()` must remain Agent-owned and headless. The local bridge must never make the embedded UI impersonate an Agent Actor or expose Agent bearer credentials to the UI.
+The embedded UI must never impersonate an Agent Actor or receive an Agent bearer credential. The model must not call Human App-only tools without the Host-delivered App capability.
 
 ## MCP App resource
 
-`open_game()` links its tool result to:
+`open_game()` links its result to:
 
 ```text
 URI       ui://waitloop/doudizhu/v1
@@ -102,36 +93,61 @@ MIME      text/html;profile=mcp-app
 protocol  2026-01-26
 ```
 
-The tool publishes both current and compatibility metadata:
+Tool metadata includes both:
 
 ```text
 _meta.ui.resourceUri
 _meta["ui/resourceUri"]
 ```
 
-The resource is one self-contained HTML document. It uses the MCP Apps postMessage protocol for:
+The self-contained resource uses MCP Apps messages for initialization, tool-result delivery, Host-context changes, size reporting, display-mode requests, external-link requests, teardown, and `tools/call`.
+
+The App supports card selection, play, pass, hint, clear, refresh, inline rendering, and fullscreen where the Host advertises it. Compact activity shows the latest four authoritative history rows without an internal scrollbar; `current trick` remains separate.
+
+## Host capability boundary
+
+A compatible Host must:
+
+1. preserve MCP Apps tool metadata;
+2. read the linked `ui://` resource;
+3. render `text/html;profile=mcp-app` in a sandbox;
+4. forward the initial result, including result `_meta`, to the App;
+5. proxy App `tools/call` requests to the MCP server.
+
+A Host can show safe JSON to the model and render the App to the Human simultaneously. Visible structured output is not evidence that rendering failed. Browser fallback is appropriate only after an actual App render/action failure, an App error, or explicit Human confirmation that inline controls are absent.
+
+The fallback URL starts a separate standalone game. Waitloop does not put private Human credentials in a transferable URL, so it does not resume the inline Room.
+
+## Private Human session custody
+
+`open_game()` reuses the existing Human `bots` Room endpoint. The Worker returns the normal HttpOnly Human credentials:
 
 ```text
-ui/initialize
-ui/notifications/initialized
-ui/notifications/tool-result
-ui/notifications/host-context-changed
-ui/notifications/size-changed
-ui/request-display-mode
-ui/open-link
-ui/resource-teardown
-tools/call
+wl_actor
+wl_room_<room>
 ```
 
-The App supports card selection, play, pass, hint, clear, refresh, inline rendering, and fullscreen when the Host advertises it.
+The local bridge stores them under:
 
-The compact activity region shows the latest four authoritative history rows in chronological order. It has no internal scrollbar; long rows remain single-line with visual truncation. The authoritative current trick is displayed separately, so the move to beat remains visible even when older history is omitted from the compact view.
+```text
+~/.waitloop/app-rooms/<sha256(room-id)>.json
+```
 
-The Human-vs-bots App is response-driven. `ui_play_cards` and `ui_pass` return the authoritative snapshot after the Worker has applied the Human action and completed synchronous Bot automation; `ui_hint` is read-only. The App therefore has no periodic state-refresh timer. `ui_get_game` is used only for explicit refresh, reopen, one-shot focus/visibility recovery, stale-revision recovery, and uncertain mutation-result recovery. The `refreshBusy` guard keeps those reads single-flight. An idle mounted App generates zero recurring Worker and Durable Object reads.
+Each record also contains a high-entropy:
 
-Multiple local views are not kept coherent through permanent polling. The acting view renders its mutation response immediately; another view refreshes when it becomes active or later participates. A future Room subscription layer may distribute semantic Room events to all authorized views.
+```text
+wlui_<64 hex characters>
+```
 
-The App contains no external script/style dependency and performs no credentialed direct network request. Game traffic is:
+The App capability is delivered only through:
+
+```text
+tool result _meta["waitloop/uiToken"]
+```
+
+It is absent from model-visible text, `structuredContent`, tool descriptions, resource source, and model-visible errors. Every App-only call supplies the Room ID and capability; the bridge performs constant-time verification before accessing Human credentials.
+
+The App contains no concrete credential and makes no direct credentialed fetch, XHR, or WebSocket request. Traffic remains:
 
 ```text
 MCP App
@@ -141,123 +157,124 @@ MCP App
   -> GameRoom Durable Object
 ```
 
-## Host capability boundary
+## Human MCP App request budget
 
-A useful inline experience requires the active Host to:
-
-1. preserve MCP Apps tool metadata;
-2. read the `ui://` resource;
-3. render `text/html;profile=mcp-app` in a sandbox;
-4. forward the initial tool result, including result `_meta`, to the App;
-5. proxy App `tools/call` requests to the MCP server.
-
-Waitloop does not assume that every Codex, Claude, Cursor, terminal, or desktop surface currently provides all five behaviors. The Codex desktop client has been manually observed rendering and operating the published alpha.7 App, but this does not establish compatibility for every Codex version or surface.
-
-A Host can expose the safe JSON/structured tool result to the model and render the linked App for the Human simultaneously. Model-visible snapshot output is not evidence that the App failed. Agents must not automatically launch the standalone browser fallback merely because the tool result is visible; fallback is appropriate only after an actual render/action failure, an App error, or explicit Human confirmation that inline controls are absent.
-
-When a Host cannot render or operate the App, `open_game()` still returns a safe textual/structured snapshot plus fallback guidance. The external fallback:
+The Human-vs-bots App is response-driven:
 
 ```text
-https://waitloop.run/game.html
+open_game result
+  initial authoritative snapshot
+
+ui_play_cards / ui_pass result
+  authoritative snapshot after Human action and synchronous Bot automation
+
+ui_hint result
+  read-only suggestion
 ```
 
-starts a **separate** browser-controlled game. It does not resume the private inline Room because Waitloop does not place Human Room credentials in a transferable URL.
+There is no periodic state-refresh timer. `ui_get_game` is used only for explicit refresh, reopen, one-shot focus/visibility recovery, stale-revision recovery, and uncertain mutation-result recovery. Reads are single-flight. An idle mounted App generates zero recurring Worker and Durable Object reads.
 
-`create_room()` remains the fallback when the Agent, rather than the Human, should play.
+Multiple local views are not kept coherent through permanent polling. The acting view renders its mutation result immediately; another view refreshes when it becomes active or participates. A future authorized Room subscription may distribute semantic updates to all related views.
 
-## Private Human session custody
+## Existing service reuse
 
-`open_game()` reuses the existing Human `bots` Room endpoint. The Worker returns two HttpOnly credentials:
+The local bridge does not duplicate Room/game business logic:
 
-```text
-wl_actor   anonymous Human Actor credential
-wl_room_*  private Room viewer credential
-```
-
-The local bridge captures those cookies from `Set-Cookie` and stores them privately under:
-
-```text
-~/.waitloop/app-rooms/<sha256(room-id)>.json
-```
-
-The directory/file modes are created as private local state. The safe tool result contains the Human snapshot, Room ID, and fallback description, but never contains either cookie.
-
-For each interactive Room, the bridge also creates:
-
-```text
-wlui_<64 hex characters>
-```
-
-This App capability is stored with the private session and delivered to the embedded App only through:
-
-```text
-tool result _meta["waitloop/uiToken"]
-```
-
-It is absent from:
-
-```text
-content[].text
-structuredContent
-model-visible errors
-tool descriptions
-ui:// resource source
-```
-
-Every `ui_*` call must supply both `roomId` and the exact `uiToken`. The bridge verifies the token with a constant-time comparison before accessing the Human Room cookies. Therefore, even a Host that mistakenly exposes app-only tool names to the model does not give the model Human mutation authority.
-
-`open_game({roomId})` reopens a still-valid local interactive session and emits a fresh tool result carrying the existing private App capability in result metadata.
-
-Interactive Human Room state is separate from the Agent active-Room pointer under `~/.waitloop/joins`.
-
-## Local bridge reuse of existing services
-
-The bridge does not duplicate Room/game business logic:
-
-- `open_game` calls the existing Human Room HTTP endpoint and stores the returned Human credentials locally;
-- `ui_get_game`, `ui_play_cards`, `ui_pass`, and `ui_hint` proxy to the existing Human snapshot/mutation endpoints;
-- `create_room` calls the existing headless Room endpoint, then claims Join;
+- `open_game` calls existing Human Room creation and stores Human credentials locally;
+- `ui_*` tools proxy existing Human snapshot/play/pass/hint endpoints;
+- `create_room` calls the existing headless Room endpoint and claims Join;
 - `join_room` calls the existing Join endpoint;
-- Agent gameplay/control tools proxy to existing remote Room MCP;
-- authorization, revision, hidden-information projection, and move legality remain server-side.
+- Agent gameplay and observation tools proxy existing remote Room MCP;
+- authorization, private projection, revision checks, and move legality remain server-side.
 
-## Future Room event subscription boundary
+## Game revision versus Room event sequence
 
-Multi-Actor Rooms cannot use game `revision` as the update cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence can change independently. The implemented monotonic `roomSeq` advances for those semantic changes but not heartbeat-only timestamp writes.
+```text
+revision
+  game mutation concurrency
+  used by play/pass expectedRevision
 
-Remote MCP and the alpha.9 local source candidate now expose bounded `wait_for_room_update(afterRoomSeq, timeoutMs?)`. This makes Advisor/current-run observation correct without granting play authority, but it is still a polling-based transport primitive rather than the final push subscription.
+roomSeq
+  monotonic semantic Room event cursor
+  used by observers
+```
 
-Remote connection reuse must also preserve private projection identity. The key is at least:
+`roomSeq` advances for client-visible semantic changes such as game actions, comments, Controller transitions, Room phase changes, Join/connection transitions, and meaningful Actor status changes. Heartbeat-only timestamps and credential-only writes do not advance it.
+
+## Efficient Agent waiting
+
+### `wait_for_turn(timeoutMs?)`
+
+This is a Controller/actionable-turn primitive. It returns on:
+
+```text
+your_turn
+game_finished
+waiting_for_players
+room_paused
+controller_changed
+timeout
+```
+
+The transport bound is 1–25 seconds and the current implementation re-reads the authenticated snapshot at a bounded interval. Timeout or cancellation never auto-passes, auto-plays, changes Controller, or creates a competitive clock.
+
+An Advisor bound to a Human-controlled Seat may receive `controller_changed` immediately. That is expected; it is not a generic Room update subscription.
+
+### `wait_for_room_update(afterRoomSeq, timeoutMs?)`
+
+This read-only tool waits for the authenticated projection `roomSeq` to advance or for the Room to finish. It is valid for Controllers and Advisors and does not grant `seat:play`.
+
+```text
+afterRoomSeq = 0
+  return current snapshot immediately
+
+cursor behind current roomSeq
+  return room_updated
+
+Room finished
+  return game_finished
+
+bounded wait expires
+  return timeout
+
+cursor ahead of current roomSeq
+  return room_seq_ahead; recover with get_turn
+```
+
+Repeating the tool supports observation only while the current Agent run remains active. It is not a background scheduler and cannot wake an Agent after final response.
+
+## Future push subscription boundary
+
+A future push connection must preserve private projection identity. Reuse keys must include at least:
 
 ```text
 server origin
 + Room ID
-+ authorized principal / credential scope
++ authorized principal or credential scope
 + projection type and version
 ```
 
-It must never be only `roomId`, because Human, Controller, Advisor, Agent, and future spectator projections can contain different private data.
+A connection must never be keyed only by Room ID because Human, Controller, Advisor, Agent, and future spectator projections can contain different private data.
 
-The current browser viewer `/ws` route remains intentionally disabled because the existing GameRoom WebSocket emits full actor-specific Agent snapshots, not the reduced Human snapshot protocol. Human subscription requires explicit viewer authentication, Human projection, reconnect-to-full-snapshot behavior, cursor recovery, cancellation, and lifecycle cleanup. Polling remains a bounded fallback only after that push path is unavailable; it is not the primary design.
+The existing browser viewer WebSocket route remains intentionally disabled. Current GameRoom WebSocket output is actor-specific Agent projection, not the reduced Human snapshot protocol. Human subscription requires explicit viewer authentication, Human projection, reconnect-to-full-snapshot behavior, `roomSeq` cursor recovery, cancellation, and lifecycle cleanup.
 
 ## Cancellation semantics
 
-Cancellation is limited to operations where abandoning the response cannot create an ambiguous mutation result.
+Cancellation propagates only through operations where abandoning the response cannot create an ambiguous mutation result:
 
 ```text
-get_active_room / get_turn / wait_for_turn / wait_for_room_update
-ui_get_game / ui_hint
-  -> MCP handler AbortSignal
-  -> local fetch
-  -> remote request cancellation
+get_active_room
+get_turn
+wait_for_turn
+wait_for_room_update
+ui_get_game
+ui_hint
 ```
-
-`wait_for_turn` additionally stops its server-side polling delay as soon as the request is cancelled.
 
 Mutation-capable operations are not network-aborted mid-flight:
 
 ```text
-open_game room creation
+open_game create
 create_room
 join_room
 leave_room
@@ -269,34 +286,27 @@ ui_play_cards
 ui_pass
 ```
 
-This avoids the unsafe case where the server committed a mutation while the Agent/App believes cancellation guaranteed non-execution. After an uncertain mutation transport failure, refresh current state before retrying.
+After an uncertain mutation transport failure, clients refresh authoritative state before retrying.
 
 ## Active Agent Room context
 
-`waitloop join`, `join_room`, and `create_room` select one active credential-backed Agent Room. The active pointer contains Join code/server context, not a second secret copy.
+`waitloop join`, `join_room`, and `create_room` select one active credential-backed Agent Room. The active pointer contains Join/server context, not a second secret copy.
 
 ```text
 get_active_room()
-```
+  load cached credential
+  authenticate remote Actor
+  return safe metadata and snapshot
 
-loads the cached Agent credential, authenticates the remote Room Actor, and returns safe metadata/snapshot.
-
-```text
 leave_room()
+  clear local active selection only
+  do not revoke credential
+  do not mutate Room
 ```
 
-clears only local Agent active selection. It does not revoke the remote credential or mutate the Room, preserving explicit reconnect until Room expiry.
-
-Human MCP App Rooms are reopened through `open_game(roomId)` and do not change this Agent pointer.
+Human MCP App sessions are separate and reopen through `open_game(roomId)`.
 
 ## Remote authentication and identity
-
-```text
-Room ID    routing context
-Seat ID    stable room-scoped game position (`seat-1`, `seat-2`, `seat-3`)
-Actor ID   runtime identity
-credential authorization secret
-```
 
 Remote MCP requests carry:
 
@@ -305,28 +315,27 @@ Authorization: Bearer <wlseat_...>
 X-Waitloop-Room: <room-id>
 ```
 
-IDs never substitute for credentials. The `wlseat_` credential authorizes one Room Actor binding. Waitloop stores only its digest in Room state.
+Room ID, Seat ID, and Actor ID are identifiers, not credentials. The bearer credential authorizes one Room Actor binding and only its digest is stored in Room state.
 
-The remote HTTP MCP does not expose `open_game` or the Human `ui_*` tools. Those require local cookie custody and belong only to the local stdio bridge.
+The remote endpoint does not expose `open_game` or Human `ui_*` tools because it cannot safely own local Human cookies and App capability.
 
-## Join / connect / reconnect
-
-A Join code currently lasts about 20 minutes and is one-time. The claimed Agent credential remains reconnectable while the Room is active, currently about 24 hours.
+## Join, connect, and reconnect
 
 ```text
-raw Join claim
-  -> credential exists
-  -> Actor connecting
+Join capability
+  one-time
+  about 20 minutes
 
-first authenticated remote MCP request
-  -> Actor connected
+Room Actor credential
+  reconnectable while Room is active
+  Room currently lasts about 24 hours
 ```
 
-The local `join_room` and `create_room` tools perform that first authenticated request before returning `connected: true`. Raw clients must preserve the distinction themselves.
+Join claim means a credential exists. The first authenticated remote MCP request establishes connected runtime presence. Local `join_room` and `create_room` perform that request before returning `connected: true`.
 
-Every authenticated remote MCP request refreshes presence. Reconnection never silently changes `activeControllerActorId`.
+Reconnect updates presence only. It never silently changes `activeControllerActorId` or steals control from a temporary Bot.
 
-## Remote Agent tool surface
+## Remote Agent tools
 
 ```text
 get_turn()
@@ -338,95 +347,54 @@ yield_to_bot()
 take_control()
 ```
 
-### `get_turn()`
+`play_move` succeeds only when the Actor has `seat:play`, is active Controller, owns the authoritative turn, supplies the current revision, and chooses a server-generated legal move ID.
 
-Returns the private projection of the explicitly bound Seat plus public Room state, Actor/Seat/binding metadata, capabilities, Controller, revision, and server-generated legal moves. An Advisor may see only the private Seat it was explicitly bound to.
+`comment` is a bounded side channel. It advances `roomSeq` but never changes game revision, turn order, or legality.
 
-### `wait_for_turn(timeoutMs?)`
-
-The server re-reads the authenticated Agent snapshot at a bounded interval and returns on:
-
-```text
-your_turn
-game_finished
-waiting_for_players
-room_paused
-controller_changed
-timeout
-```
-
-Bounds:
-
-```text
-default timeout 25 seconds
-maximum timeout 25 seconds
-minimum timeout 1 second
-poll interval about 750 ms
-```
-
-Timeout or cancellation does not auto-pass, auto-play, replace a slow Agent, change Controller, or create a competitive clock.
-
-`wait_for_turn` is a Controller/turn primitive, not a general Room-revision subscription. In a `companion-agent` Room where the Human remains active Controller, an Advisor may receive `controller_changed` immediately rather than waiting for the next Human move. Binding/connection therefore must not be presented as continuous listening. A dedicated Room-update wait/event primitive is still required for a truly long-lived companion loop.
-
-### `wait_for_room_update(afterRoomSeq, timeoutMs?)`
-
-Waits for the authenticated projection `roomSeq` to advance, or for the Room to finish, with the same 1–25 second transport bound and cancellation behavior. It is valid for Controllers and Advisors and does not grant `seat:play`. `afterRoomSeq = 0` returns the current snapshot immediately; a cursor ahead of the Room returns `room_seq_ahead` and requires `get_turn()` recovery. Repeating this tool can support advice only while the Agent run remains active. It is not a WebSocket subscription and cannot wake a completed run.
-
-### `play_move(expectedRevision, moveId)`
-
-Succeeds only when the Actor has `seat:play`, is active Controller, owns the authoritative turn, supplies the current revision, and selects a server-generated legal move ID.
-
-### `comment(text)`
-
-Bounded side channel. It never changes game state, revision, turn, or legal moves.
-
-### `yield_to_bot()` / `take_control()`
-
-A connected Seat owner may explicitly replace itself as Controller with a temporary deterministic Bot, then later reconnect and explicitly reclaim control. Seat ID, owner, hand, role, and history are preserved.
-
-In a fully headless `agent-bots` Room, yielding `seat-1` leaves all three Seats under Bot control. The bots may finish the remaining game before reconnect. Yield is an explicit handoff, not a pause primitive.
+`yield_to_bot` and `take_control` preserve Seat ID, owner, hand, role, and history. In fully headless `agent-bots`, yielding `seat-1` can leave all Seats under Bot control and allow the game to finish before reconnect.
 
 ## Agent-run continuation
 
-MCP is request/response participation. It cannot wake an Agent after the Agent returned a final reply.
+MCP is request/response participation. It cannot wake an Agent after final response.
 
 ```text
-connect/check
-  -> join_room/get_turn
-  -> report
+connect or verify
+  join_room / get_turn
+  report
 
 Agent plays until finished
-  -> keep current Agent run alive
-  -> wait_for_turn
-  -> play_move when your_turn
-  -> repeat timeout waits
-  -> stop at game_finished or user-requested condition
+  keep current run active
+  wait_for_turn
+  play_move when actionable
+  repeat bounded waits
+  stop at requested condition
+
+Advisor observes during current run
+  remember roomSeq
+  wait_for_room_update
+  comment when useful
+  repeat while run remains active
 
 Human plays inline
-  -> open_game
-  -> Host renders MCP App
-  -> Human clicks App controls
+  open_game
+  Host renders App
+  Human clicks controls
 ```
-
-The local bridge solves stable configuration, credential custody, and UI delivery. `wait_for_turn` solves efficient Agent waiting. Neither is a background scheduler for ended Agent runs.
 
 ## Security invariants
 
-- model-visible local results never contain Agent bearer credentials, Human cookies, or the `wlui_` App capability;
-- tool-result `_meta` carries the App capability only to the embedded UI;
-- app-only Human mutation tools require the capability independently of Host visibility;
-- local tool errors redact `wlseat_`, `wlview_`, `wla_`, `wldev_`, and `wlui_` shaped values;
-- the MCP App is self-contained and does not make direct credentialed network requests;
+- model-visible results never contain Agent bearer credentials, Human cookies, or the `wlui_` capability;
+- result `_meta` carries App-private capability only to the embedded UI;
+- App-only Human tools independently require the capability;
+- local errors redact credential-shaped values;
+- the App performs no direct credentialed network request;
 - remote Actor authentication occurs before Agent tool execution;
 - Human cookie authorization occurs before Human mutation execution;
-- Room/Actor/Seat identity never substitutes for a credential;
-- stale/non-controller/illegal moves are rejected server-side;
-- Advisors see private state only for their bound Seat;
-- lifecycle, Agent Room, Human Room, and UI capabilities are separate scopes;
-- Join and Room expiry are separate;
-- rate limits are abuse controls, not automatic game timing or accounting;
+- IDs never substitute for credentials;
+- stale, illegal, or non-controller moves are rejected server-side;
+- Advisors receive private state only for their explicitly bound Seat;
+- lifecycle, Agent Room, Human Room, and App capabilities remain separate scopes;
 - cancellation of read/wait operations never mutates game state;
-- mutation-capable tools are not abandoned mid-flight through propagated network cancellation;
-- `yield_to_bot` and `take_control` are explicit owner-control transitions.
+- mutation-capable tools are not abandoned under a false non-execution assumption.
 
 See [`security.md`](security.md), [`protocol.md`](protocol.md), [`architecture.md`](architecture.md), and [`game-system.md`](game-system.md).
