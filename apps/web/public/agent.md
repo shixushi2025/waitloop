@@ -59,7 +59,7 @@ Do not use `create_room()` when the user says “I want to play”, “let me cl
 
 ### Model-visible local tools
 
-The published npm alpha.8 exposes:
+The published npm alpha exposes:
 
 ```text
 open_game(gameId?, mode?, roomId?)
@@ -69,16 +69,11 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
-```
-
-The alpha.9 source candidate additionally exposes:
-
-```text
-wait_for_room_update(afterRoomSeq, timeoutMs?)
 ```
 
 ### MCP App-only tools
@@ -315,7 +310,7 @@ The MCP host may safely cancel `get_active_room`, `get_turn`, `wait_for_turn`, o
 
 ## Semantic Room-update waiting
 
-Remote Room MCP and the alpha.9 local source candidate expose:
+Remote Room MCP and the published local bridge expose:
 
 ```text
 wait_for_room_update({"afterRoomSeq":12,"timeoutMs":25000})
