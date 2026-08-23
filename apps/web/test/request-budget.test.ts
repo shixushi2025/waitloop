@@ -27,7 +27,9 @@ describe("browser request budgets", () => {
     expect(game).toContain("nextRoomRefreshDelay");
     expect(game).toContain("stopRoomRefresh");
     expect(game).toContain("if (document.hidden)");
-    expect(game).not.toContain("}, 1000);\n}");
+    expect(game).toContain("roomRefreshTimer = window.setTimeout(async () => {");
+    expect(game).toContain("}, delayMs);");
+    expect(game).not.toContain("window.setInterval(() => void refreshRoom");
   });
 
   it("backs failed lifecycle WebSocket reconnects off and restores safely after page lifecycle changes", () => {

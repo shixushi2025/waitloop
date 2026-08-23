@@ -55,7 +55,7 @@ GitHub Actions runs on `main`, pull requests, and `fix/**` branches.
 
 ```text
 check
-  -> typecheck / 88 tests
+  -> strict typecheck + full regression suite
   -> repository + onboarding contracts
   -> CLI package validation
   -> packaged MCP stdio + MCP App resource validation
@@ -106,7 +106,7 @@ Agent control entry
   -> existing Room/Join HTTP endpoints
 
 Agent gameplay
-  get_turn / wait_for_turn / play_move / comment / yield / take_control
+  get_turn / wait_for_turn / wait_for_room_update / play_move / comment / yield / take_control
   -> existing remote Room MCP
 ```
 
@@ -285,20 +285,26 @@ Local `join_room` and `create_room` include the first authenticated request. Rec
 
 Human `open_game` does not use Join; the Human Room is immediately playable and authenticated through local cookie custody.
 
-## Efficient waiting and polling
+## Efficient waiting and synchronization
 
-Remote Agent `wait_for_turn`:
+Remote Agent waits use the authenticated private snapshot:
 
 ```text
-remote MCP handler
-  -> GameRoom.getSnapshotBySeatToken
-  -> classify actionable state
-  -> bounded wait/poll (about 750 ms, max 25 s)
+wait_for_turn
+  -> classify Controller/actionable-turn state
+
+wait_for_room_update(afterRoomSeq)
+  -> classify semantic roomSeq advance or Room finish
+
+both
+  -> bounded cancellable read loop (about 750 ms, max 25 s)
 ```
 
-This avoids model-driven tight polling without adding a Casual clock.
+These waits prevent model-driven tight polling without adding a Casual clock or background Agent scheduler.
 
-The Human MCP App refreshes through app-only `ui_get_game` at about 1.2 seconds while active. This is UI state refresh, not a model loop and not a game timer.
+The Human-vs-bots MCP App is response-driven. Initial and mutation results carry authoritative snapshots, and `ui_get_game` is used only for explicit refresh, reopen/error recovery, and one-shot focus/visibility recovery. An idle mounted App performs no periodic Worker read.
+
+The standalone connected/companion Web table still uses bounded visible-document polling as a compatibility fallback while another Actor may change the Room. A future authorized push subscription will replace that fallback.
 
 ## Anonymous Human identity
 

@@ -141,12 +141,13 @@ CI also runs:
 
 ```text
 TypeScript
-95 unit/regression tests
+full unit/regression suite, including Web request-budget coverage
 CLI npm package validation
 embedded MCP App JavaScript syntax validation
 packaged stdio tools/resources wire validation
 standalone browser JavaScript validation
 Agent discovery validation
+documentation and public-asset hygiene validation
 Cloudflare gate self-test
 Wrangler dry-run
 ```

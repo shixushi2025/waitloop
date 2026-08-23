@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import {
+// Browser-only ESM is shipped without a build step; this test validates its runtime contract.
+// @ts-expect-error JavaScript module intentionally has no TypeScript declaration in public assets.
+const policy = await import("../public/room-refresh-policy.js");
+const {
   nextRoomRefreshDelay,
   ROOM_REFRESH_MAX_DELAY_MS,
   ROOM_REFRESH_MIN_DELAY_MS,
   roomRefreshSignature,
   shouldRefreshRoom,
-} from "./room-refresh-policy.js";
+} = policy;
 
 function snapshot(overrides: Record<string, unknown> = {}) {
   return {
@@ -54,7 +57,13 @@ describe("standalone Room refresh budget", () => {
     expect(nextRoomRefreshDelay(delay, true)).toBe(ROOM_REFRESH_MIN_DELAY_MS);
   });
 
-  it("ignores heartbeat and array-order noise but notices user-visible state changes", () => {
+  it("uses roomSeq as the authoritative semantic refresh signature when available", () => {
+    expect(roomRefreshSignature(snapshot({ roomSeq: 9, revision: 4 }))).toBe("roomSeq:9");
+    expect(roomRefreshSignature(snapshot({ roomSeq: 9, revision: 99 }))).toBe("roomSeq:9");
+    expect(roomRefreshSignature(snapshot({ roomSeq: 10, revision: 4 }))).toBe("roomSeq:10");
+  });
+
+  it("falls back for legacy snapshots while ignoring heartbeat and array-order noise", () => {
     const base = snapshot();
     expect(roomRefreshSignature(snapshot({
       actorStates: [

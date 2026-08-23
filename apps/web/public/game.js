@@ -1,3 +1,4 @@
+import { companionEmptyStateText } from "./companion-status.js";
 import { historyDelta, recentHistory } from "./game-history.js";
 import {
   nextRoomRefreshDelay,
@@ -407,14 +408,18 @@ function renderActivity(current) {
 
 function renderComments(current) {
   if (!isElement(companionSection) || !isElement(commentsElement)) return;
-  const hasCompanion = Boolean(companionActor(current));
+  const companion = companionActor(current);
+  const hasCompanion = Boolean(companion);
   const comments = Array.isArray(current.comments) ? current.comments.slice(-6) : [];
   companionSection.hidden = !hasCompanion && comments.length === 0;
   commentsElement.replaceChildren();
   if (comments.length === 0) {
     const empty = document.createElement("div");
     empty.className = "comment-empty";
-    empty.textContent = hasCompanion ? "agent connected · no comments yet" : "no comments";
+    const companionState = companion ? actorStateFor(current, companion.id) : null;
+    empty.textContent = companion
+      ? companionEmptyStateText(companionState?.status)
+      : "no comments";
     commentsElement.append(empty);
     return;
   }
@@ -844,6 +849,7 @@ function updateConnectedSetup(current) {
   if (isElement(mcpClaimStatus) && state?.status === "connected") mcpClaimStatus.textContent = "agent connected";
   else if (isElement(mcpClaimStatus) && state?.status === "disconnected") mcpClaimStatus.textContent = "agent away · temporary control may continue";
   else if (isElement(mcpClaimStatus) && state?.status === "connecting") mcpClaimStatus.textContent = "credential claimed · waiting for MCP client";
+  else if (isElement(mcpClaimStatus)) mcpClaimStatus.textContent = "waiting for agent";
 }
 
 async function claimRawMcp() {
