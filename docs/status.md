@@ -98,7 +98,7 @@ yield_to_bot()
 take_control()
 ```
 
-### MCP App-only tools
+### Alpha.9 candidate model-visible addition
 
 The alpha.9 source candidate additionally exposes:
 
@@ -342,7 +342,7 @@ Standalone Web can:
 
 The first MCP App release intentionally exposes only Human-vs-bots play/pass/hint. Companion/connected-agent control UI remains in the standalone Web surface until an explicit MCP App design is added.
 
-The currently tested companion flow remains fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. The bounded `wait_for_room_update` primitive now exists, but there is still no one-step local `open_companion_game` entry or push subscription transport.
+The currently tested companion flow remains fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. The bounded `wait_for_room_update` primitive now exists, but there is still no one-step local `open_companion_game` entry or push subscription transport. Companion empty-state copy now follows the authoritative Actor status, so waiting, connecting, connected, and disconnected states are not mislabeled.
 
 ## Security currently implemented
 
@@ -369,7 +369,7 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- more than 110 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, Room event sequencing, and bounded Room-update waiting;
+The full regression suite covers:
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
