@@ -1,268 +1,186 @@
 # Roadmap
 
-This document contains only future work that is still relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
+This document contains only future work that remains relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current product priority is **stabilization before feature expansion**. Stable local MCP, `wait_for_turn`, dual-era stdio handling, cancellation, and the first Human-operated MCP App are implemented and published. A real Codex desktop session rendered and operated the App. The alpha.9 source candidate removes periodic Human-vs-bots reads; the next architectural work is semantic Room event sequencing and authorization-safe subscriptions rather than another polling interval adjustment.
+The current priority is **stabilization and behavior-preserving refactoring before feature expansion**. The stable local MCP bridge, Human-operated MCP App, `wait_for_turn`, `wait_for_room_update`, `revision`, and `roomSeq` foundations are published. New game modes and broad product expansion remain paused.
 
-## 1. MCP App real-host stabilization
+## 1. Behavior-preserving structural refactoring
 
-The first App contract now exists:
+Refactor in small, independently validated stages. Do not combine file extraction with protocol, stored-schema, or product-behavior changes.
 
-```text
-open_game
--> ui://waitloop/doudizhu/v1
--> Human selects cards / play / pass / hint
--> app-only tools
--> existing Human Room APIs
-```
-
-Observed manually in Codex desktop:
-
-- the transcript may show the safe JSON/structured tool result while the linked App renders at the same time;
-- inline card rendering and Human actions work after the client reloads the updated MCP configuration;
-- visible JSON must not be treated as proof that App rendering failed;
-- automatically opening the standalone browser fallback can create an unwanted second game.
-
-The Human-vs-bots request model is now explicit:
+Recommended order:
 
 ```text
-open_game result              -> initial state
-ui_play_cards / ui_pass       -> authoritative post-Bot state
-ui_hint                       -> read-only suggestion
-manual/focus/visibility       -> one-shot recovery read
-stale/uncertain result        -> one-shot recovery read
-idle mounted App              -> zero recurring Worker reads
+remote MCP wait orchestration
+-> GameRoom responsibilities
+-> Room HTTP API responsibilities
+-> standalone Web modules
+-> CLI command dispatch
+-> MCP App source assembly
+-> duplicated public/documentation facts
 ```
 
-Near-term work:
+Required invariants:
 
-- turn the Codex desktop observation into a repeatable smoke procedure and record the exact client surface/version tested;
-- test inline render, initial result forwarding, result `_meta`, App `tools/call`, resize, host theme, fullscreen, and teardown in each additional supported Host surface;
-- record a compatibility matrix for Codex Desktop/CLI, Claude Web/Desktop/Code, ChatGPT/plugin surfaces, Cursor, and other Hosts without assuming equivalent support;
-- verify Agents do not invoke browser fallback merely because model-visible structured output is present;
-- verify unsupported Hosts present the safe text fallback and do not misleadingly imply the private inline Room can be opened in a standalone browser;
-- test `open_game(roomId)` across Host conversation/session restarts while the local bridge and Room remain valid;
-- verify Windows/macOS/Linux permissions and path behavior for `~/.waitloop/app-rooms`;
-- test expired, deleted, unauthorized, stale-revision, invalid-card, pass-not-legal, and network-interruption behavior;
-- ensure private `wlui_`, `wla_`, and `wlview_` values never enter model-visible content, logs, diagnostics, or error text;
-- test multiple simultaneously open App views for the same Room and document the intended stale-revision behavior;
-- add an automated synthetic Host harness for `ui/initialize -> tool-result -> tools/call -> teardown` beyond the current stdio/resource contract validation.
+- keep Durable Object RPC method names stable;
+- keep persisted Room data backward compatible;
+- keep public HTTP, local MCP, remote MCP, and MCP App schemas stable;
+- preserve `Seat / Actor / Controller / Advisor` semantics;
+- preserve the separation between game `revision` and semantic `roomSeq`;
+- preserve private projection and credential boundaries;
+- run the full regression, package, wire, browser, documentation, asset, and Worker validation after every stage.
 
-Acceptance: on each declared compatible Host, a Human can ask “open a game for me,” receive an inline table, play to completion with clicks, reopen the table safely, and receive a precise fallback on an incompatible Host without accidentally creating a second Room or generating idle periodic traffic.
+Acceptance: large modules become easier to reason about without changing externally observable behavior or stored Room compatibility.
 
-## 2. Room event sequencing and subscriptions
+## 2. MCP App real-host stabilization
 
-The semantic Room cursor and bounded update wait are now implemented. Preserve the distinction from game revision while building the push transport:
+The Human-vs-bots App is response-driven:
 
 ```text
-game revision
-  -> play/pass concurrency and stale-move rejection
-
-roomSeq / eventSeq
-  -> every semantic client-visible Room change
+open_game result              initial authoritative snapshot
+ui_play_cards / ui_pass       authoritative post-Bot snapshot
+ui_hint                       read-only suggestion
+manual/focus/visibility       one-shot recovery read
+stale/uncertain result        one-shot recovery read
+idle mounted App              zero recurring Worker reads
 ```
 
-`roomSeq` should advance for:
+Remaining work:
 
-- game state/revision changes;
-- comments;
-- Controller changes and temporary Bot takeover/restore;
-- Room phase changes;
-- Join claim and meaningful connection-status transitions;
-- semantic presence transitions such as connecting -> connected or connected -> disconnected.
+- turn the successful Codex Desktop observation into a repeatable smoke procedure;
+- record exact Host surfaces and versions rather than generalizing across a product family;
+- verify initial result forwarding, result `_meta`, App `tools/call`, resize, theme, fullscreen, and teardown;
+- verify visible structured output never triggers an unnecessary standalone-browser fallback;
+- test reopen, expiry, unauthorized access, stale revision, invalid move, pass legality, and uncertain network results;
+- verify Windows, macOS, and Linux private local-session paths and permissions;
+- test multiple local App views and document their stale-view recovery behavior;
+- add a synthetic Host harness for the MCP Apps lifecycle.
 
-It should **not** advance for heartbeat-only timestamp updates where the visible semantic status is unchanged.
+Acceptance: every declared-compatible Host supports a complete Human game or returns precise fallback guidance without creating a second Room or idle request stream.
 
-Subscription connections must be keyed by at least:
+## 3. Authorized Room subscriptions
+
+The semantic event cursor is already implemented:
+
+```text
+revision
+  game mutation concurrency
+
+roomSeq
+  client-visible semantic Room changes
+```
+
+A future push transport must preserve private projection identity. Connection reuse requires at least:
 
 ```text
 server origin
 + Room ID
-+ authorized principal / credential scope
-+ projection type/version
++ authorized principal or credential scope
++ projection type and version
 ```
 
-Never reuse a private snapshot stream solely by `roomId`.
+Never reuse a private stream by Room ID alone.
 
-Implemented foundation:
+Implementation order:
 
-- persisted/backward-compatible `roomSeq` on GameRoom and all Human/Agent projections;
-- centralized semantic commit path for write + sequence increment + conditional broadcast;
-- regression tests proving game/comment/Controller/status events advance, heartbeat-only writes do not, and collection order is irrelevant.
-- bounded cancellable `wait_for_room_update(afterRoomSeq, timeoutMs?)` for Controllers and Advisors, including ahead-cursor recovery and terminal Room return.
+1. define explicit Human viewer authentication and Human snapshot subscription projection;
+2. reconnect with a full snapshot and continue from `roomSeq`;
+3. let the local bridge reuse one remote connection for waiters with the same authorization/projection key;
+4. add one in-flight waiter per App, waiter leases, last-waiter grace, maximum idle TTL, reconnect backoff with jitter, and Room-finished cleanup;
+5. retain bounded polling only as a stoppable compatibility fallback.
 
-Remaining implementation order:
+The current browser viewer WebSocket remains intentionally disabled until the Human projection protocol exists. Existing actor-specific Agent WebSocket output must not be exposed as though it were a Human snapshot stream.
 
-1. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;
-2. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;
-3. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;
-4. use the implemented bounded wait only as the stoppable fallback when push is unavailable.
+Acceptance: moves, comments, Controller transitions, Room phase, and meaningful connection events reach each authorized projection promptly without permanent polling, cursor gaps, or private-state cross-talk.
 
-Acceptance: comments, game moves, Controller transitions, Join/connection state, and Room phase changes reach each authorized projection promptly without permanent polling, cursor gaps, or private-state cross-talk.
+## 4. Existing Agent and companion flow stabilization
 
-## 3. Existing Agent flow stabilization
-
-Treat the existing Agent-controlled path as product regression testing:
+Treat the current flow as a product regression path:
 
 ```text
-Agent discovery
--> CLI install/update
+install/update
 -> doctor
--> lifecycle adapter install/trust (optional)
 -> stable MCP install
--> create_room / join_room
--> wait_for_turn / play / advice
--> yield / bridge restart / reconnect / take_control
+-> create_room or join_room
+-> get_turn / wait_for_turn / wait_for_room_update
+-> play or advise
+-> yield / restart / reconnect / take_control
 -> finish / leave / expire cleanly
 ```
 
-Near-term work:
+Remaining work:
 
-- run this path repeatedly in real Codex Desktop/CLI and Claude Code environments;
-- verify stdio MCP configuration survives harness restarts and existing definitions are never overwritten;
-- verify legacy 2025-era and 2026-07-28 MCP clients against `waitloop mcp` in real harnesses;
-- test Join/raw fallback against expired, already-claimed, and missing cache scenarios;
-- test continuous Agent play over slow Human turns, repeated 25-second waits, and user/tool-call cancellation;
-- make every common failure return the next corrective action;
-- keep discovery mirrors, `doctor`, Skill, llms, package docs, and machine manifest synchronized;
-- add deployed-test-Worker smoke tests without exposing credentials.
+- repeat the flow in real Codex Desktop/CLI and Claude Code environments;
+- verify MCP configuration survives harness restarts and existing definitions are not overwritten;
+- exercise legacy and current MCP protocol clients against the same bridge;
+- test expired, already-claimed, missing-cache, stale-state, timeout, and cancellation recovery;
+- ensure common failures include the next corrective action;
+- add deployed-test-Worker smoke coverage without exposing credentials;
+- distinguish bound, authenticated/connected, currently listening, and ended Agent-run states in companion UI;
+- eventually provide a one-step companion entry without browser automation or manual Join-code relay.
 
-Acceptance: a new Agent can install once, create/join, remain active through the requested Agent game loop, cancel a read/wait safely, restart/reconnect, and recover control without manual HTTP, credential-file parsing, or remote MCP JSON-RPC construction.
+`wait_for_turn` remains Controller/actionable-turn oriented. Advisors use `wait_for_room_update(afterRoomSeq)` during the same active Agent run. Neither tool implies background listening after final response.
 
-## 4. Interactive Human Room lifecycle
+Acceptance: a new Agent can install once, connect, play or advise through the requested stopping condition, cancel safely, restart, reconnect, and recover control without manual HTTP or credential-file parsing.
 
-Current Human MCP App sessions are private local files with lazy expiry validation. Remaining:
+## 5. Session lifecycle, cleanup, and revocation
 
-- `list/open/close` semantics for local interactive Rooms without exposing cookies or `wlui_` values;
-- proactive removal of expired/finished local sessions;
-- explicit revoke/close server semantics if a Human wants to destroy recovery capability;
-- safe rotation of a local App capability without recreating the Room;
-- observability for create/open/refresh/play/pass/hint/expiry without logging hand contents or credentials;
-- decide whether a short-lived, one-time browser transfer capability is worth implementing;
-- never put long-lived Human cookies or `wlui_` in a URL;
-- decide whether opening the same Room in multiple Apps is supported, rejected, or subscription-coordinated.
+Human MCP App sessions and Agent Join cache are currently private local files with lazy validation.
 
-Acceptance: Human App session lifetime is explicit, recoverable, auditable, and clean without weakening credential boundaries.
+Remaining work:
 
-## 5. Presence, Agent cleanup, and revocation
+- list/open/close semantics for local Human sessions without exposing cookies or `wlui_` values;
+- proactive removal of expired or finished local sessions;
+- explicit server revoke/close semantics distinct from local-only cleanup;
+- safe capability and Actor-credential rotation;
+- explicit connected Actor leave/revoke semantics;
+- transport-level disconnect detection and clearer presence state;
+- observability for create, connect, wait, timeout, cancel, play, comment, yield, reconnect, restore, and expiry without logging credentials or private hands.
 
-Stable bridge/waiting/cancellation are implemented. Remaining Agent runtime work:
+Acceptance: session and credential lifetimes are explicit, recoverable, auditable, and independently revocable.
 
-- transport-level disconnect detection and richer presence state without timer-forced Casual moves;
-- explicit connected Actor leave/revoke endpoint distinct from local-only `leave_room`;
-- proactive cleanup/retention for expired Agent Join cache and finished/expired Room state;
-- safe rotation/revocation of one Room Actor credential;
-- clearer MCP `clientInfo` labeling when the harness exposes it;
-- observability for connect/wait/timeout/cancel/yield/reconnect/take-control without logging credentials/private hands.
+## 6. Public contract and security hardening
 
-Acceptance: presence and cleanup are explicit, recoverable, and auditable without hidden game mutations.
-
-A Codex Plugin may still be evaluated as packaging/distribution improvement after the current CLI/MCP/App path is reliable. It must not be justified as a way to bypass Codex hook trust.
-
-## 6. Richer Human/Agent App relationships
-
-The real companion trial confirmed that the data model works but the product flow is fragmented:
+Continue reducing duplicated facts across:
 
 ```text
-standalone Web creates companion-agent Room
--> Human copies Join code
--> Agent calls join_room
--> Agent becomes Advisor of the Human Seat
+agent.json
+agent.md
+SKILL.md
+llms.txt
+README files
+canonical docs
 ```
 
-It also confirmed that `wait_for_turn()` is Controller/turn-oriented: while the Human remains Controller, the Advisor can receive `controller_changed` immediately rather than waiting for the next Human move. Binding and connection therefore do not equal continuous listening, and an ended Agent response cannot provide background advice.
+Prefer one typed or machine-readable source for tool lists, release state, install commands, MCP App resource metadata, and protocol version. Generate or validate repeated tables rather than manually maintaining divergent copies.
 
-Do not immediately copy the whole standalone Web UI into the App. Add only after the Human-vs-bots App and Room subscription foundation are stable:
+Remaining hardening:
 
-- one-step local `open_companion_game()` or equivalent flow that creates the Human Room and binds the current Agent as Advisor without browser automation or manual Join-code relay;
-- integrate the existing bounded `wait_for_room_update(afterRoomSeq, timeoutMs)` into the one-step companion flow and future push subscription without implying play authority;
-- explicit UI distinctions among bound, authenticated/connected, current Agent run listening, and ended/offline;
-- Human + connected Agent + Bot inline table;
-- companion/advisor comments in the App;
-- optional structured move suggestion/highlight that never plays until the Human confirms;
-- explicit Human `me / agent` Controller delegation;
-- temporary Bot fallback/restore controls;
-- connected Agent presence/elapsed-turn display;
-- linked coding-session attention pause/resume inside the App;
-- clear model-versus-App responsibility when Agent gives advice but Human clicks.
-
-Acceptance: a Human can start companion play in one supported flow, the Advisor can efficiently observe semantic Room events during the same active Agent run, UI never claims background listening after the run ends, and every App action maps to an existing server capability without letting UI metadata substitute for Room authorization.
-
-## 7. Additional harness support
-
-- stable MCP installer/doctor support for Cursor when its stdio configuration contract is clear;
-- DSH lifecycle/MCP adapter after its contract is understood;
-- other coding agents based on real demand;
-- preserve lifecycle privacy, local credential custody, and accurate MCP Apps support claims.
-
-Acceptance: each harness uses its supported configuration surface and does not require users to edit hidden files manually.
-
-## 8. Public hardening
-
-Current Room creation, Hosted Room creation, Join, MCP, comments, recovery, wait, control, and Human App operations have baseline rate/expiry protection. Remaining:
-
-- lifecycle ingest and pairing rate limits;
-- hosted inference budgets/quotas/accounting;
-- stronger CSP/CORS/security-header review for standalone Web and MCP App resource metadata;
+- lifecycle ingest and pairing limits;
+- hosted inference budgets and accounting;
+- stronger CSP, CORS, and security-header review;
 - private vulnerability reporting path;
-- persisted Durable Object migration/recovery tests, including legacy participant -> Actor/Seat normalization;
-- abuse/latency metrics for waits, cancellation, subscriptions, reconnects, and local bridge failures;
-- concurrency review if many long waits/subscribers target one Room.
+- persisted Durable Object migration/recovery tests;
+- latency and abuse metrics for waits, cancellation, subscriptions, reconnects, and bridge failures;
+- concurrency review for many long waits or subscribers on one Room;
+- an explicit retirement plan for legacy `participants[]` and `seatStates[]` projections before stable release.
 
-Acceptance: anonymous traffic cannot create unbounded cost/state and production boundaries match [`security.md`](security.md).
+Acceptance: public documentation and machine surfaces agree with implementation, anonymous traffic cannot create unbounded cost/state, and compatibility layers have explicit ownership and exit criteria.
 
-## 9. Dou Dizhu completeness
+## Deferred product expansion
 
-Only fill rule gaps that materially improve the current product experience:
+Defer these until the stabilization and refactoring work above is complete:
 
-- bidding / rob-landlord;
-- landlord resolution from bidding rather than random pre-game assignment;
-- settlement and multipliers;
-- spring / anti-spring;
-- regression coverage for the selected rule profile;
-- update standalone Web, MCP App, Agent-visible state, and docs together.
+- Human connected-agent and companion controls inside the MCP App;
+- structured move suggestions and UI highlighting;
+- multiple connected Actors, multiple Advisors, public spectators, and per-turn delegation leases;
+- full Dou Dizhu bidding, rob-landlord, settlement, multipliers, spring, and anti-spring;
+- additional harness adapters such as DSH;
+- cross-device accounts and global Room history;
+- Arena and benchmark mode.
 
-Acceptance: rules docs, engine, tests, Web UI, MCP App UI, and Agent-visible state agree exactly.
-
-## 10. Multiple connected Actors and richer relationships
-
-Defer until single-Agent and Human App flows are stable:
-
-- multiple Join capabilities per Room;
-- all-ready gating for multiple connected player Seats;
-- multiple Advisors on one Seat;
-- public-only spectator/commentator Actors;
-- per-turn one-shot delegation leases;
-- independent leave/revoke per Actor.
-
-Do not add these as `participant.kind` special cases.
-
-Acceptance: each Actor has independent identity/credential/scope and hidden-information access is explicit.
-
-## 11. Cross-device identity only when needed
-
-Do not introduce accounts/database solely for one-Room resume or local MCP App reopen.
-
-If cross-Room/cross-device requirements arrive:
-
-- optional attachment/claim of anonymous Actor identity;
-- device list/revoke/rotation;
-- Room/history index across Durable Objects;
-- profile/nickname/avatar semantics;
-- D1/global index only when actual cross-Room queries require it.
-
-## 12. Arena / benchmark
-
-Arena remains separate from Casual waiting and low priority:
-
-- deterministic Agent-vs-Agent runner;
-- reproducible seeds/config;
-- public-decision replay;
-- win/latency/fallback/tool-error metrics;
-- hard turn limits only for benchmark fairness.
-
-Never import Arena timing/engagement behavior into Casual Human/Agent tables or Human MCP Apps.
+Do not introduce accounts, a database, or another front-end framework solely to perform the current maintenance work.
 
 ## Maintenance rule
 
-When an item ships, update canonical docs/status and remove it here. Do not preserve implementation chronology as permanent design files.
+When an item ships, move lasting behavior into the appropriate canonical document, update [`status.md`](status.md), and remove the completed roadmap item. Do not preserve implementation chronology as permanent documentation.
