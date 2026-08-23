@@ -225,6 +225,15 @@ window.addEventListener("pagehide", () => {
   sessionSocket?.close(1000, "page hidden");
 });
 
+window.addEventListener("pageshow", () => {
+  sessionSocketShuttingDown = false;
+  if (!sessionId || document.hidden) return;
+  if (!sessionSocket || sessionSocket.readyState === WebSocket.CLOSED) {
+    sessionReconnectDelayMs = 1500;
+    connectSessionSocket(sessionId);
+  }
+});
+
 window.setInterval(() => {
   if (currentSnapshot && isElement(elapsedValue)) {
     elapsedValue.textContent = elapsedFor(currentSnapshot);
