@@ -126,7 +126,7 @@ The App supports card selection, play, pass, hint, clear, refresh, inline render
 
 The compact activity region shows the latest four authoritative history rows in chronological order. It has no internal scrollbar; long rows remain single-line with visual truncation. The authoritative current trick is displayed separately, so the move to beat remains visible even when older history is omitted from the compact view.
 
-The Human-vs-bots App is action-driven rather than interval-driven: play/pass/hint responses already contain the authoritative post-automation snapshot. `ui_get_game` is used only for explicit refresh, reopen, error recovery, and a one-shot refresh when the App becomes visible or focused. An idle mounted App performs no recurring Worker request.
+The Human-vs-bots App is action-driven: play/pass/hint responses already contain the authoritative post-automation snapshot, so normal interaction never waits for polling. A low-frequency safety refresh remains for stale or multiply opened views: while the App is visible it starts at 5 seconds and exponentially backs off to a maximum 30-second interval when state is unchanged. It resets after visible state changes or Human actions and stops while hidden, on pagehide, after teardown, or when the game finishes. Explicit refresh and focus/visibility recovery remain immediate and overlap-guarded.
 
 The App contains no external script/style dependency and performs no credentialed direct network request. Game traffic is:
 

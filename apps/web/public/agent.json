@@ -16,7 +16,7 @@
     "version": "0.1.0-alpha.7",
     "candidateVersion": "0.1.0-alpha.8",
     "candidatePublished": false,
-    "candidateSummary": "MCP App recent activity is capped at four non-scrolling rows; the 1.2-second idle App refresh loop is removed, connected Web tables use visibility-aware 1-10 second backoff, and failed lifecycle WebSockets reconnect with bounded backoff.",
+    "candidateSummary": "MCP App recent activity is capped at four non-scrolling rows; Human actions update immediately from mutation responses, while a visible-only safety refresh backs off from 5 to 30 seconds and stops when hidden or torn down. Connected Web tables retain visibility-aware 1-10 second backoff, and failed lifecycle WebSockets reconnect with bounded backoff.",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -45,12 +45,21 @@
   "rooms": {
     "createEndpoint": "https://waitloop.run/api/v1/rooms",
     "gameId": "doudizhu",
-    "modes": ["bots", "hosted-agent", "connected-agent", "companion-agent", "agent-bots"],
+    "modes": [
+      "bots",
+      "hosted-agent",
+      "connected-agent",
+      "companion-agent",
+      "agent-bots"
+    ],
     "headlessAgentMode": "agent-bots",
     "inlineHumanMode": "bots via open_game Human MCP App facade",
     "companionMode": "companion-agent",
     "seatIds": "stable room-scoped seat-1/seat-2/seat-3 identifiers for the current three-seat game",
-    "actorRelations": ["controller", "advisor"],
+    "actorRelations": [
+      "controller",
+      "advisor"
+    ],
     "controlModel": "a Seat is the game player position; Actors bind to seats and only the active controller may play",
     "roomLifetime": "24 hours",
     "joinLifetime": "20 minutes; one-time claim",
@@ -100,8 +109,18 @@
     "resourceUri": "ui://waitloop/doudizhu/v1",
     "mimeType": "text/html;profile=mcp-app",
     "triggerTool": "open_game",
-    "displayModes": ["inline", "fullscreen"],
-    "interaction": ["select cards", "play", "pass", "hint", "clear", "refresh"],
+    "displayModes": [
+      "inline",
+      "fullscreen"
+    ],
+    "interaction": [
+      "select cards",
+      "play",
+      "pass",
+      "hint",
+      "clear",
+      "refresh"
+    ],
     "hostRequirement": "an MCP Apps-capable Host that renders the linked ui:// resource and proxies App server-tool calls",
     "hostFallback": "Hosts without MCP Apps receive a safe textual result and a link to start a separate browser-controlled table; create_room remains available for Agent-owned play",
     "sameRoomFallback": false,
@@ -112,8 +131,18 @@
     "status": "available",
     "endpoint": "https://waitloop.run/mcp",
     "scope": "one game room and one connected actor binding",
-    "tools": ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"],
-    "requires": ["Authorization: Bearer <actor-token>", "X-Waitloop-Room: <room-id>"],
+    "tools": [
+      "get_turn",
+      "wait_for_turn",
+      "play_move",
+      "comment",
+      "yield_to_bot",
+      "take_control"
+    ],
+    "requires": [
+      "Authorization: Bearer <actor-token>",
+      "X-Waitloop-Room: <room-id>"
+    ],
     "joinUrlPattern": "https://waitloop.run/join/<join-code>",
     "globalStaticConfiguration": false,
     "joinBehavior": "prefer local MCP join_room or CLI waitloop join; both claim/cache the credential and select an active room, while raw remote MCP remains an advanced fallback",
@@ -174,8 +203,25 @@
     "mcp": "https://waitloop.run/mcp"
   },
   "privacy": {
-    "lifecycleData": ["version", "eventId", "sessionId", "agent", "state", "occurredAt"],
-    "forbiddenLifecycleData": ["prompt", "source code", "repository path", "cwd", "transcript", "tool input", "tool output", "assistant output", "native session id"],
+    "lifecycleData": [
+      "version",
+      "eventId",
+      "sessionId",
+      "agent",
+      "state",
+      "occurredAt"
+    ],
+    "forbiddenLifecycleData": [
+      "prompt",
+      "source code",
+      "repository path",
+      "cwd",
+      "transcript",
+      "tool input",
+      "tool output",
+      "assistant output",
+      "native session id"
+    ],
     "deviceCredentials": "scoped bearer credentials; server stores SHA-256 digest only",
     "gameActorCredentials": "room/actor-scoped; never place in URLs or source control",
     "localMcpCredentials": "stored under private ~/.waitloop state; local MCP returns only safe room metadata and snapshots",
