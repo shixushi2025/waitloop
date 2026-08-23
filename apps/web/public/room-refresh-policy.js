@@ -39,10 +39,12 @@ export function roomRefreshSignature(current) {
         ? current.actorStates.find((state) => state?.actorId === actor.id)
         : null;
       return [actor.id, actor.kind ?? "", runtime?.status ?? ""];
-    });
+    })
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
   const seats = (Array.isArray(current.seats) ? current.seats : [])
     .filter((seat) => seat && typeof seat.id === "string")
-    .map((seat) => [seat.id, seat.activeControllerActorId ?? ""]);
+    .map((seat) => [seat.id, seat.activeControllerActorId ?? ""])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
   const comments = Array.isArray(current.comments) ? current.comments : [];
   const lastComment = comments.at(-1);
   return JSON.stringify({
