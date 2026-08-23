@@ -47,7 +47,14 @@ Published CLI alpha:
 0.1.0-alpha.8
 ```
 
-Alpha.8 was published through npm trusted publishing. The release workflow verified the exact package version, confirmed the npm `alpha` dist-tag points to `0.1.0-alpha.8`, installed `@waitloop/cli@alpha` into a clean prefix, and validated the packaged MCP stdio/MCP Apps bridge before recording publication success.
+Current source/build candidate:
+
+```text
+0.1.0-alpha.9
+candidatePublished: false
+```
+
+Alpha.8 remains the npm `alpha` release and was verified through trusted publishing, exact Registry lookup, dist-tag verification, clean installation, and packaged MCP stdio/MCP Apps validation. Alpha.9 is source-only until the same release checks and a real Codex Desktop smoke test complete; it must not be described as installable yet.
 
 Install/update remains:
 
@@ -150,7 +157,11 @@ refresh
 inline/fullscreen where the Host permits it
 ```
 
-Alpha.8 changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. Human actions still update immediately from their mutation responses. The former 1.2-second loop is replaced by a visible-only safety refresh that backs off through 5, 10, 20, and 30 seconds, resets on visible state changes or Human actions, and stops when hidden, torn down, finished, or unloaded.
+Alpha.8 capped `recent activity` at the latest four chronological single-line rows, kept `current trick` separate, and mitigated the original 1.2-second incident loop with bounded 5–30 second visible-document polling.
+
+The alpha.9 source candidate keeps the compact history but removes periodic Human-vs-bots refresh entirely. Human play/pass responses already include the authoritative state after synchronous Bot automation and render immediately; hint is read-only. `ui_get_game` is used only for explicit refresh, reopen, stale or uncertain-result recovery, and one-shot focus/visibility recovery. These reads are single-flight, so an idle mounted App produces zero recurring Worker and Durable Object reads.
+
+This candidate does not pretend to solve multi-Actor synchronization. Future connected/companion freshness requires a Room event subscription with a semantic event cursor and authorization-specific projection reuse, not permanent polling.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
@@ -172,7 +183,7 @@ Inline operation requires an MCP Apps-capable Host that:
 - forwards the initial tool result including result `_meta`;
 - proxies App server-tool calls.
 
-A real Codex desktop client session first manually rendered and operated the App on alpha.7; alpha.8 preserves that path and adds the bounded refresh/request-budget fixes. In that session the transcript showed the safe JSON/structured tool result while the Human-facing App rendered simultaneously. Agents must not treat visible JSON as proof of render failure or automatically create a separate browser game.
+A real Codex desktop client session first manually rendered and operated the App on alpha.7; alpha.8 preserves that path. In that session the transcript showed the safe JSON/structured tool result while the Human-facing App rendered simultaneously. Agents must not treat visible JSON as proof of render failure or automatically create a separate browser game.
 
 This observation is manual and surface-specific. Waitloop still does not claim every Codex/Claude/Cursor/terminal/desktop surface implements all required behaviors. Unsupported Hosts receive safe text/structured results and fallback guidance.
 
@@ -349,7 +360,7 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 95 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, and browser request budgets;
+- 98 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, and browser request budgets;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
@@ -358,7 +369,8 @@ Rate limiting remains abuse protection, not accounting.
 - local bridge tool/instruction/resource metadata and error redaction;
 - embedded MCP App JavaScript syntax;
 - fixed four-row, non-scrolling recent activity contract;
-- visible-only Human MCP App safety refresh bounded from 5 to 30 seconds, with immediate mutation-driven updates and hidden/teardown cleanup;
+- executable embedded-App runtime tests proving 24-hour idle produces zero reads, repeated focus/visibility events remain single-flight, and hidden/busy/torn-down states do not refresh;
+- source-contract checks prohibiting a periodic Human MCP App refresh timer;
 - standalone connected/companion Room refresh stops while hidden and backs unchanged visible state off from 1 to 10 seconds;
 - lifecycle WebSocket failures reconnect with bounded backoff and respect page lifecycle;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
@@ -374,6 +386,9 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Known gaps
 
+- Room event sequencing separate from game revision; comments, Controller changes, and semantic presence changes need a subscription cursor such as `roomSeq`;
+- subscription reuse must be keyed by Room plus authorized principal/projection, not Room ID alone;
+- a Human snapshot subscription protocol is not implemented; the current browser viewer WebSocket route remains intentionally disabled;
 - automated real-host smoke coverage for Codex desktop and manual verification of additional Codex/Claude/other Host surfaces;
 - same-Room transfer from local MCP App to standalone browser without exposing long-lived credentials;
 - Human connected-agent/companion controls inside the MCP App;
