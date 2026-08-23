@@ -1,0 +1,555 @@
+name: temporary wait_for_room_update patch
+
+on:
+  push:
+    branches: [fix/wait-for-room-update]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/wait-for-room-update
+
+      - name: Apply bounded Room-update wait
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import json
+
+          def replace_once(path: str, old: str, new: str, label: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match in {path}, found {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          def insert_after(path: str, marker: str, addition: str, label: str) -> None:
+              replace_once(path, marker, marker + addition, label)
+
+          Path("worker/src/wait-for-room-update.ts").write_text('''export type WaitForRoomUpdateReasonV1 = "room_updated" | "game_finished";\n\nexport type WaitForRoomUpdateClassificationV1 =\n  | WaitForRoomUpdateReasonV1\n  | "cursor_ahead"\n  | null;\n\nexport interface WaitForRoomUpdateSnapshotV1 {\n  roomSeq: number;\n  status: string;\n  roomPhase: string;\n}\n\nexport function normalizeAfterRoomSeq(value: number): number {\n  if (!Number.isSafeInteger(value) || value < 0) {\n    throw new Error("afterRoomSeq must be a non-negative integer.");\n  }\n  return value;\n}\n\nexport function classifyWaitForRoomUpdate(\n  snapshot: WaitForRoomUpdateSnapshotV1,\n  afterRoomSeq: number,\n): WaitForRoomUpdateClassificationV1 {\n  const cursor = normalizeAfterRoomSeq(afterRoomSeq);\n  if (!Number.isSafeInteger(snapshot.roomSeq) || snapshot.roomSeq < 1) {\n    throw new Error("Room snapshot has an invalid roomSeq.");\n  }\n  if (cursor > snapshot.roomSeq) return "cursor_ahead";\n  if (snapshot.roomPhase === "finished" || snapshot.status === "finished") return "game_finished";\n  if (snapshot.roomSeq > cursor) return "room_updated";\n  return null;\n}\n''')
+
+          Path("worker/src/wait-for-room-update.test.ts").write_text('''import { readFileSync } from "node:fs";\n\nimport { describe, expect, it } from "vitest";\n\nimport {\n  classifyWaitForRoomUpdate,\n  normalizeAfterRoomSeq,\n  type WaitForRoomUpdateSnapshotV1,\n} from "./wait-for-room-update";\n\nfunction snapshot(overrides: Partial<WaitForRoomUpdateSnapshotV1> = {}): WaitForRoomUpdateSnapshotV1 {\n  return { roomSeq: 7, status: "playing", roomPhase: "playing", ...overrides };\n}\n\ndescribe("wait_for_room_update cursor classification", () => {\n  it("returns when a newer semantic Room event exists", () => {\n    expect(classifyWaitForRoomUpdate(snapshot({ roomSeq: 8 }), 7)).toBe("room_updated");\n  });\n\n  it("keeps waiting while the semantic cursor is unchanged", () => {\n    expect(classifyWaitForRoomUpdate(snapshot(), 7)).toBeNull();\n  });\n\n  it("returns a terminal Room even when the cursor is already current", () => {\n    expect(classifyWaitForRoomUpdate(snapshot({ status: "finished", roomPhase: "finished" }), 7)).toBe("game_finished");\n  });\n\n  it("rejects a client cursor that is ahead of the authoritative Room", () => {\n    expect(classifyWaitForRoomUpdate(snapshot(), 8)).toBe("cursor_ahead");\n  });\n\n  it("accepts zero for an initial full snapshot and rejects invalid cursors", () => {\n    expect(normalizeAfterRoomSeq(0)).toBe(0);\n    expect(classifyWaitForRoomUpdate(snapshot(), 0)).toBe("room_updated");\n    expect(() => normalizeAfterRoomSeq(-1)).toThrow(/non-negative/);\n    expect(() => normalizeAfterRoomSeq(1.5)).toThrow(/integer/);\n  });\n\n  it("rejects malformed Room snapshots", () => {\n    expect(() => classifyWaitForRoomUpdate(snapshot({ roomSeq: 0 }), 0)).toThrow(/invalid roomSeq/);\n  });\n\n  it("is registered as a bounded remote MCP tool using the semantic cursor", () => {\n    const source = readFileSync(new URL("./mcp.ts", import.meta.url), "utf8");\n    expect(source).toContain('"wait_for_room_update"');\n    expect(source).toContain("afterRoomSeq");\n    expect(source).toContain("room_seq_ahead");\n    expect(source).toContain("normalizeWaitForTurnTimeout");\n    expect(source).toContain("WAIT_FOR_TURN_POLL_MS");\n  });\n});\n''')
+
+          replace_once(
+              "worker/src/mcp.ts",
+              '} from "./wait-for-turn";\n\ninterface McpEnv {',
+              '} from "./wait-for-turn";\nimport {\n  classifyWaitForRoomUpdate,\n  normalizeAfterRoomSeq,\n} from "./wait-for-room-update";\n\ninterface McpEnv {',
+              "remote wait import",
+          )
+
+          room_wait_tool = '''\n    server.registerTool(\n      "wait_for_room_update",\n      {\n        description:\n          "Wait for a semantic Room change after one roomSeq cursor. Controllers and advisors may use it; it does not grant play authority. timeoutMs bounds only this cancellable tool call and cannot wake an Agent run after it has ended.",\n        inputSchema: z.object({\n          afterRoomSeq: z.number().int().nonnegative(),\n          timeoutMs: z.number().int().min(1_000).max(25_000).optional(),\n        }),\n      },\n      async ({ afterRoomSeq, timeoutMs }, ctx) => {\n        let cursor: number;\n        try {\n          cursor = normalizeAfterRoomSeq(afterRoomSeq);\n        } catch (error) {\n          return errorResult(\n            "invalid_room_seq_cursor",\n            error instanceof Error ? error.message : "Invalid Room event cursor.",\n          );\n        }\n\n        let boundedTimeout: number;\n        try {\n          boundedTimeout = normalizeWaitForTurnTimeout(timeoutMs);\n        } catch (error) {\n          return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");\n        }\n\n        const signal = ctx.mcpReq.signal;\n        const startedAt = Date.now();\n        while (true) {\n          throwIfWaitCancelled(signal);\n          const result = await room.getSnapshotBySeatToken(seatToken);\n          if (!result.ok) return errorResult(result.error.code, result.error.message);\n          const snapshot = rpcValue(result) as GameRoomSnapshotV1;\n          const reason = classifyWaitForRoomUpdate(snapshot, cursor);\n          if (reason === "cursor_ahead") {\n            return errorResult(\n              "room_seq_ahead",\n              `afterRoomSeq ${cursor} is ahead of current roomSeq ${snapshot.roomSeq}. Refresh with get_turn before waiting again.`,\n            );\n          }\n          if (reason) {\n            return textResult({\n              version: 1,\n              reason,\n              waitedMs: Date.now() - startedAt,\n              afterRoomSeq: cursor,\n              roomSeq: snapshot.roomSeq,\n              snapshot,\n            });\n          }\n\n          const elapsed = Date.now() - startedAt;\n          if (elapsed >= boundedTimeout) {\n            return textResult({\n              version: 1,\n              reason: "timeout",\n              waitedMs: elapsed,\n              afterRoomSeq: cursor,\n              roomSeq: snapshot.roomSeq,\n              stillWaiting: true,\n              snapshot,\n            });\n          }\n          await waitForTurnDelay(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed), signal);\n        }\n      },\n    );\n'''
+          replace_once(
+              "worker/src/mcp.ts",
+              '\n    server.registerTool(\n      "play_move",',
+              room_wait_tool + '\n    server.registerTool(\n      "play_move",',
+              "remote Room wait tool",
+          )
+          replace_once(
+              "worker/src/mcp.ts",
+              '          "Post a short room comment as this connected actor. Comments are a side channel: they never mutate game rules, turn order, or room revision.",',
+              '          "Post a short room comment as this connected actor. Comments are a side channel: they never mutate game rules, turn order, or game revision, but they advance roomSeq for Room observers.",',
+              "comment roomSeq description",
+          )
+
+          replace_once(
+              "packages/cli/src/mcp-bridge.ts",
+              'Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling.',
+              'Use join_room() with a WL code for an existing Agent seat, then use wait_for_turn instead of polling for Controller turns. Advisors and other observers should use wait_for_room_update(afterRoomSeq) for semantic Room changes while the current Agent run remains active.',
+              "local instructions",
+          )
+
+          local_wait_tool = '''  {\n    name: "wait_for_room_update",\n    description:\n      "Wait for any semantic Room change after the supplied roomSeq. Works for Controllers and Advisors without granting play authority. timeoutMs bounds only this cancellable call; an ended Agent run cannot be woken by MCP.",\n    inputSchema: {\n      type: "object",\n      properties: {\n        afterRoomSeq: {\n          type: "integer",\n          minimum: 0,\n          description: "Last semantic Room cursor already observed; use 0 to request the current snapshot immediately.",\n        },\n        timeoutMs: { type: "integer", minimum: 1000, maximum: 25000, default: 25000 },\n      },\n      required: ["afterRoomSeq"],\n      additionalProperties: false,\n    },\n  },\n'''
+          replace_once(
+              "packages/cli/src/mcp-bridge.ts",
+              '  {\n    name: "play_move",',
+              local_wait_tool + '  {\n    name: "play_move",',
+              "local Room wait tool",
+          )
+          insert_after(
+              "packages/cli/src/mcp-bridge.ts",
+              'function requiredRevision(args: Record<string, unknown>): number {\n  const value = args.expectedRevision;\n  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error("expectedRevision must be a non-negative integer.");\n  return value as number;\n}\n',
+              '\nfunction requiredRoomSeq(args: Record<string, unknown>): number {\n  const value = args.afterRoomSeq;\n  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error("afterRoomSeq must be a non-negative integer.");\n  return value as number;\n}\n',
+              "local room cursor parser",
+          )
+          replace_once(
+              "packages/cli/src/mcp-bridge.ts",
+              '  return name === "get_turn" || name === "wait_for_turn" || name === "ui_get_game" || name === "ui_hint"',
+              '  return name === "get_turn" || name === "wait_for_turn" || name === "wait_for_room_update" || name === "ui_get_game" || name === "ui_hint"',
+              "local cancellation allowlist",
+          )
+          replace_once(
+              "packages/cli/src/mcp-bridge.ts",
+              '  if (name === "play_move") {',
+              '  if (name === "wait_for_room_update") {\n    const timeoutMs = args.timeoutMs;\n    if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1_000 || (timeoutMs as number) > 25_000)) {\n      throw new Error("timeoutMs must be an integer between 1000 and 25000.");\n    }\n    return callActiveRoomTool(\n      "wait_for_room_update",\n      {\n        afterRoomSeq: requiredRoomSeq(args),\n        ...(timeoutMs === undefined ? {} : { timeoutMs }),\n      },\n      signalForRemoteRead(name, signal),\n    );\n  }\n  if (name === "play_move") {',
+              "local Room wait proxy",
+          )
+
+          replace_once(
+              "packages/cli/test/mcp-bridge.test.ts",
+              '      "wait_for_turn",\n      "play_move",',
+              '      "wait_for_turn",\n      "wait_for_room_update",\n      "play_move",',
+              "local bridge expected tools",
+          )
+          insert_after(
+              "packages/cli/test/mcp-bridge.test.ts",
+              '    expect(JSON.stringify(LOCAL_MCP_TOOLS)).not.toContain("wlview_");\n',
+              '\n    const roomWait = LOCAL_MCP_TOOLS.find((tool) => tool.name === "wait_for_room_update");\n    expect(roomWait?.inputSchema.required).toEqual(["afterRoomSeq"]);\n    expect(JSON.stringify(roomWait?.inputSchema)).toContain("afterRoomSeq");\n',
+              "local bridge Room wait schema test",
+          )
+          insert_after(
+              "packages/cli/test/mcp-bridge.test.ts",
+              '    expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_turn");\n',
+              '    expect(LOCAL_MCP_INSTRUCTIONS).toContain("wait_for_room_update");\n',
+              "local bridge instructions test",
+          )
+
+          replace_once(
+              "scripts/validate-mcp-stdio.mjs",
+              '    "wait_for_turn",\n    "play_move",',
+              '    "wait_for_turn",\n    "wait_for_room_update",\n    "play_move",',
+              "packaged MCP required tool",
+          )
+
+          replace_once(
+              "scripts/validate-repository-contract.mjs",
+              'const remoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];\nfor (const tool of remoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);\n\nconst localTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...remoteTools];\nfor (const tool of localTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);',
+              '''const publishedRemoteTools = ["get_turn", "wait_for_turn", "play_move", "comment", "yield_to_bot", "take_control"];\nconst sourceRemoteTools = ["get_turn", "wait_for_turn", "wait_for_room_update", "play_move", "comment", "yield_to_bot", "take_control"];\nfor (const tool of sourceRemoteTools) requireIncludes("agent.json mcp.tools", manifest.mcp?.tools, tool);\n\nconst publishedLocalTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...publishedRemoteTools];\nconst sourceLocalTools = ["open_game", "create_room", "join_room", "get_active_room", "leave_room", ...sourceRemoteTools];\nif (packageVersion === publishedVersion) {\n  for (const tool of sourceLocalTools) requireIncludes("agent.json localMcp.tools", manifest.localMcp?.tools, tool);\n  if (manifest.localMcp?.candidateTools !== undefined) fail("published CLI state must not retain localMcp.candidateTools");\n} else {\n  for (const tool of publishedLocalTools) requireIncludes("agent.json published localMcp.tools", manifest.localMcp?.tools, tool);\n  for (const tool of sourceLocalTools) requireIncludes("agent.json source localMcp.candidateTools", manifest.localMcp?.candidateTools, tool);\n}''',
+              "published/source tool truth",
+          )
+          validator = Path("scripts/validate-repository-contract.mjs").read_text()
+          validator = validator.replace(
+              '  "wait_for_turn",\n  "play_move(expectedRevision, moveId)",',
+              '  "wait_for_turn",\n  "wait_for_room_update",\n  "play_move(expectedRevision, moveId)",',
+          )
+          validator = validator.replace(
+              '  "wait_for_turn",\n  "yield_to_bot()",',
+              '  "wait_for_turn",\n  "wait_for_room_update",\n  "yield_to_bot()",',
+          )
+          if validator.count('"wait_for_room_update"') < 5:
+              raise SystemExit("repository validator did not acquire expected Room wait checks")
+          Path("scripts/validate-repository-contract.mjs").write_text(validator)
+
+          onboarding = Path("scripts/validate-onboarding-contract.mjs").read_text()
+          onboarding = onboarding.replace(
+              '  "result `_meta`",\n]) requireText("apps/web/public/agent.md", needle);',
+              '  "result `_meta`",\n  "wait_for_room_update",\n]) requireText("apps/web/public/agent.md", needle);',
+          )
+          onboarding = onboarding.replace(
+              '  "tool-result `_meta`",\n]) requireText("apps/web/public/skills/waitloop/SKILL.md", needle);',
+              '  "tool-result `_meta`",\n  "wait_for_room_update",\n]) requireText("apps/web/public/skills/waitloop/SKILL.md", needle);',
+          )
+          onboarding = onboarding.replace(
+              '  "tool-result `_meta`",\n]) requireText("apps/web/public/llms.txt", needle);',
+              '  "tool-result `_meta`",\n  "wait_for_room_update",\n]) requireText("apps/web/public/llms.txt", needle);',
+          )
+          onboarding = onboarding.replace(
+              '    "tool result _meta",\n  ]],',
+              '    "tool result _meta",\n    "wait_for_room_update",\n  ]],',
+          )
+          onboarding = onboarding.replace(
+              '    "compatibility matrix",\n  ]],',
+              '    "compatibility matrix",\n    "wait_for_room_update",\n  ]],',
+          )
+          Path("scripts/validate-onboarding-contract.mjs").write_text(onboarding)
+
+          manifest_path = Path("apps/web/public/agent.json")
+          manifest = json.loads(manifest_path.read_text())
+          manifest["cli"]["candidateSummary"] = (
+              "Human-vs-bots MCP Apps are response-driven with zero periodic reads; snapshots add semantic roomSeq, "
+              "and alpha.9 adds bounded cancellable wait_for_room_update for Controllers and Advisors. Push subscription transport remains future work."
+          )
+          source_remote = [
+              "get_turn", "wait_for_turn", "wait_for_room_update", "play_move", "comment", "yield_to_bot", "take_control"
+          ]
+          manifest["mcp"]["tools"] = source_remote
+          manifest["mcp"]["roomUpdateBehavior"] = (
+              "wait_for_room_update(afterRoomSeq, timeoutMs?) waits 1-25 seconds for roomSeq to advance or the Room to finish; "
+              "it is read-only, cancellable, Advisor-safe, and cannot wake an Agent run after final response"
+          )
+          manifest["localMcp"]["candidateTools"] = [
+              "open_game", "create_room", "join_room", "get_active_room", "leave_room", *source_remote
+          ]
+          manifest["localMcp"]["candidateCancellation"] = (
+              "alpha.9 additionally propagates caller cancellation through wait_for_room_update; all mutation-capable calls remain non-abortable mid-flight"
+          )
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+          # Repository and public Agent surfaces distinguish installed alpha.8 from the alpha.9 source candidate.
+          replace_once(
+              "README.md",
+              '### Full model-visible local surface\n\n```text\nopen_game()\ncreate_room()\njoin_room(code)\nget_active_room()\nleave_room()\nget_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```',
+              '### Model-visible local surface\n\nThe published npm alpha.8 exposes:\n\n```text\nopen_game()\ncreate_room()\njoin_room(code)\nget_active_room()\nleave_room()\nget_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\nThe alpha.9 source candidate additionally exposes:\n\n```text\nwait_for_room_update(afterRoomSeq, timeoutMs?)\n```',
+              "README candidate tool surface",
+          )
+          insert_after(
+              "README.md",
+              'Remote/local Agent MCP provide `wait_for_turn()`. It returns on turn, finish, lobby, pause, Controller change, or a bounded transport timeout. Timeout never auto-passes or replaces a Casual Agent.\n',
+              '\nRemote MCP and the alpha.9 local source candidate also provide `wait_for_room_update(afterRoomSeq, timeoutMs?)`. It waits for semantic `roomSeq` changes such as moves, comments, Controller transitions, and Room phase changes, so Advisors can observe without gaining `seat:play`. It remains a bounded current-run wait, not background wake-up or the final push transport.\n',
+              "README Room wait",
+          )
+
+          replace_once(
+              "packages/cli/README.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "CLI README source tool",
+          )
+          insert_after(
+              "packages/cli/README.md",
+              'Use `wait_for_turn()` instead of polling `get_turn()`. It returns on turn, finish, pause, lobby, Controller change, or a bounded transport timeout.\n',
+              '\nUse `wait_for_room_update(afterRoomSeq, timeoutMs?)` when a Controller or Advisor needs any semantic Room change rather than only an actionable turn. It returns when `roomSeq` advances, the Room finishes, or the bounded call times out. It is cancellable and read-only, but it cannot restart an Agent after final response.\n',
+              "CLI README Room wait",
+          )
+
+          replace_once(
+              "docs/cli.md",
+              'get_turn\nwait_for_turn\nplay_move',
+              'get_turn\nwait_for_turn\nwait_for_room_update\nplay_move',
+              "CLI docs source tools",
+          )
+          replace_once(
+              "docs/cli.md",
+              'Human MCP App refresh is different: the App periodically calls app-only `ui_get_game` through the Host while its iframe remains open. This does not wake an ended Agent run or create a game clock.',
+              'Human MCP App refresh is different: the alpha.9 App is response-driven and performs no periodic `ui_get_game` calls. It refreshes only for explicit, one-shot lifecycle, stale-state, or uncertain-result recovery, and this still does not wake an ended Agent run.',
+              "CLI docs response-driven correction",
+          )
+          insert_after(
+              "docs/cli.md",
+              'MCP is not a background scheduler: if an Agent returns its final response, no MCP server can spontaneously restart that run.\n',
+              '\nFor companion and observation flows, `wait_for_room_update(afterRoomSeq, timeoutMs?)` waits for the semantic `roomSeq` cursor to advance or the Room to finish. It works for Advisors without granting Controller authority, propagates cancellation, and remains bounded to 25 seconds per call.\n',
+              "CLI docs Room wait",
+          )
+          replace_once(
+              "docs/cli.md",
+              'get_turn\nwait_for_turn\nui_get_game',
+              'get_turn\nwait_for_turn\nwait_for_room_update\nui_get_game',
+              "CLI docs cancellation",
+          )
+
+          replace_once(
+              "AGENTS.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "AGENTS local source tools",
+          )
+          replace_once(
+              "AGENTS.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\nRoom ID, Actor token',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\nRoom ID, Actor token',
+              "AGENTS remote tools",
+          )
+          insert_after(
+              "AGENTS.md",
+              'Continuous Agent play keeps the current run active through repeated `wait_for_turn -> play_move` until the requested condition. Human `open_game` play is driven by App clicks instead.\n',
+              '\n## Wait-for-Room-update invariant\n\n`wait_for_room_update(afterRoomSeq, timeoutMs?)` is a bounded semantic-event wait for Controllers and Advisors. It uses authenticated private projection and `roomSeq`, returns on cursor advance, Room finish, or timeout, propagates cancellation, never grants `seat:play`, and cannot wake an Agent run after final response. A cursor ahead of the authoritative Room must fail and require `get_turn()` recovery. This bounded polling primitive is not the final WebSocket/subscription transport.\n',
+              "AGENTS Room wait invariant",
+          )
+          replace_once(
+              "AGENTS.md",
+              'get_turn\nwait_for_turn\nui_get_game',
+              'get_turn\nwait_for_turn\nwait_for_room_update\nui_get_game',
+              "AGENTS cancellation",
+          )
+
+          replace_once(
+              "apps/web/public/agent.md",
+              '### Model-visible local tools\n\n```text\nopen_game(gameId?, mode?, roomId?)\ncreate_room()\njoin_room(code)\nget_active_room()\nleave_room()\nget_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```',
+              '### Model-visible local tools\n\nThe published npm alpha.8 exposes:\n\n```text\nopen_game(gameId?, mode?, roomId?)\ncreate_room()\njoin_room(code)\nget_active_room()\nleave_room()\nget_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\nThe alpha.9 source candidate additionally exposes:\n\n```text\nwait_for_room_update(afterRoomSeq, timeoutMs?)\n```',
+              "Agent guide candidate local tools",
+          )
+          insert_after(
+              "apps/web/public/agent.md",
+              '`get_turn()` remains available for an immediate snapshot. Do not tightly poll it when `wait_for_turn()` is available.\n',
+              '\n## Semantic Room-update waiting\n\nRemote Room MCP and the alpha.9 local source candidate expose:\n\n```text\nwait_for_room_update({"afterRoomSeq":12,"timeoutMs":25000})\n```\n\nUse the last snapshot `roomSeq`, not game `revision`. It returns `room_updated` when a move, comment, Controller transition, Room phase, Join, or semantic presence event advances the cursor; it returns `game_finished` for a terminal Room and `timeout` when one bounded call expires. A cursor ahead of the authoritative Room fails with `room_seq_ahead`; recover with `get_turn()`. The tool is read-only, cancellable, and Advisor-safe, but it cannot wake an Agent run after the Agent has sent a final reply.\n',
+              "Agent guide Room wait",
+          )
+          replace_once(
+              "apps/web/public/agent.md",
+              '`wait_for_turn()` is Controller/turn-oriented, not a general Room revision subscription. An Advisor that is bound to a Human-controlled Seat may receive `controller_changed` immediately instead of waiting for the next Human move. Do not claim that an Advisor is continuously monitoring the table merely because it is bound or connected, and do not promise background advice after the current Agent response ends. A future companion-specific Room-update wait primitive is required for that experience.',
+              '`wait_for_turn()` remains Controller/turn-oriented and may return `controller_changed` immediately for a Human-controlled companion Seat. During the same active Agent run, an Advisor should instead repeat `wait_for_room_update(afterRoomSeq)` and may post `comment(text)` after relevant semantic events. Binding or connection still does not mean an ended Agent run is listening, so never promise background advice after final response.',
+              "Agent guide Advisor behavior",
+          )
+          replace_once(
+              "apps/web/public/agent.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()',
+              "Agent guide remote tools",
+          )
+          replace_once(
+              "apps/web/public/agent.md",
+              '11. Advisors may inspect/comment but need explicit delegation to play; `wait_for_turn()` is not a companion Room-update stream.',
+              '11. Advisors may inspect/comment but need explicit delegation to play; use `wait_for_room_update(afterRoomSeq)` rather than `wait_for_turn()` to observe semantic companion events during the current Agent run.',
+              "Agent guide operating order",
+          )
+
+          replace_once(
+              "apps/web/public/skills/waitloop/SKILL.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "Skill published list anchor",
+          )
+          insert_after(
+              "apps/web/public/skills/waitloop/SKILL.md",
+              'take_control()\n```\n\nThe bridge internally reuses Human Room HTTP',
+              '\n\nThe alpha.9 source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; the published alpha.8 local bridge does not. Remote Room MCP exposes it after the corresponding Worker deployment.\n\nThe bridge internally reuses Human Room HTTP',
+              "Skill candidate tool note",
+          )
+          replace_once(
+              "apps/web/public/skills/waitloop/SKILL.md",
+              'An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented, not a generic Room-update subscription. A Human-controlled companion Seat may cause an Advisor wait to return `controller_changed` immediately. Do not claim continuous monitoring or background advice after the current Agent response ends.',
+              'An Advisor is also different: `wait_for_turn()` is Controller/turn-oriented and may return `controller_changed` immediately. While the current Agent run remains active, use `wait_for_room_update(afterRoomSeq)` to observe moves, comments, Controller changes, Room phase, and other semantic events. It still cannot provide background advice after final response.',
+              "Skill Advisor wait",
+          )
+          replace_once(
+              "apps/web/public/skills/waitloop/SKILL.md",
+              '6. Do not use `wait_for_turn()` as an Advisor Room-revision stream; no such companion-specific wait tool exists yet.',
+              '6. Advisors use `wait_for_room_update(afterRoomSeq)` for semantic Room events and reserve `wait_for_turn()` for Controller/actionable-turn behavior.',
+              "Skill gameplay rule",
+          )
+          replace_once(
+              "apps/web/public/skills/waitloop/SKILL.md",
+              'Remote Room MCP tools are `get_turn`, `wait_for_turn`, `play_move`, `comment`, `yield_to_bot`, and `take_control`.',
+              'Remote Room MCP tools are `get_turn`, `wait_for_turn`, `wait_for_room_update`, `play_move`, `comment`, `yield_to_bot`, and `take_control`.',
+              "Skill remote tools",
+          )
+
+          insert_after(
+              "apps/web/public/llms.txt",
+              'take_control()\n```\n\n`create_room()` creates',
+              '\n\nThe alpha.9 local source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; published npm alpha.8 does not.\n\n`create_room()` creates',
+              "llms candidate tool",
+          )
+          replace_once(
+              "apps/web/public/llms.txt",
+              'Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().',
+              'Remote Room MCP tools: get_turn(), wait_for_turn(timeoutMs?), wait_for_room_update(afterRoomSeq, timeoutMs?), play_move(expectedRevision, moveId), comment(text), yield_to_bot(), take_control().',
+              "llms remote tools",
+          )
+          replace_once(
+              "apps/web/public/llms.txt",
+              'For an Advisor, `wait_for_turn()` is not a general Room-revision stream and may return `controller_changed` immediately while the Human remains Controller. Do not claim continuous companion monitoring or background advice after the current Agent response ends.',
+              'For an Advisor, `wait_for_turn()` remains Controller-oriented and may return `controller_changed` immediately. During the current active Agent run, use `wait_for_room_update(afterRoomSeq)` to observe semantic `roomSeq` changes. It is bounded and cancellable but cannot provide background advice after final response.',
+              "llms Advisor wait",
+          )
+
+          replace_once(
+              "docs/mcp.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "MCP docs local tools",
+          )
+          replace_once(
+              "docs/mcp.md",
+              'Multi-Actor Rooms cannot use game `revision` as the sole subscription cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence changes can be visible without changing game revision.\n\nA future subscription protocol therefore needs a separate monotonic cursor such as:\n\n```text\nroomSeq\n```\n\nIt advances for semantic client-visible Room changes, but not for heartbeat-only timestamp writes such as an unchanged `lastSeenAt` refresh.',
+              'Multi-Actor Rooms cannot use game `revision` as the update cursor. Game revision is reserved for play/pass concurrency, while comments, Controller changes, Room phase changes, Join/connection transitions, and semantic presence can change independently. The implemented monotonic `roomSeq` advances for those semantic changes but not heartbeat-only timestamp writes.\n\nRemote MCP and the alpha.9 local source candidate now expose bounded `wait_for_room_update(afterRoomSeq, timeoutMs?)`. This makes Advisor/current-run observation correct without granting play authority, but it is still a polling-based transport primitive rather than the final push subscription.',
+              "MCP docs implemented wait boundary",
+          )
+          replace_once(
+              "docs/mcp.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\n### `get_turn()`',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\n### `get_turn()`',
+              "MCP docs remote tools",
+          )
+          insert_after(
+              "docs/mcp.md",
+              '`wait_for_turn` is a Controller/turn primitive, not a general Room-revision subscription. In a `companion-agent` Room where the Human remains active Controller, an Advisor may receive `controller_changed` immediately rather than waiting for the next Human move. Binding/connection therefore must not be presented as continuous listening. A dedicated Room-update wait/event primitive is still required for a truly long-lived companion loop.\n',
+              '\n### `wait_for_room_update(afterRoomSeq, timeoutMs?)`\n\nWaits for the authenticated projection `roomSeq` to advance, or for the Room to finish, with the same 1–25 second transport bound and cancellation behavior. It is valid for Controllers and Advisors and does not grant `seat:play`. `afterRoomSeq = 0` returns the current snapshot immediately; a cursor ahead of the Room returns `room_seq_ahead` and requires `get_turn()` recovery. Repeating this tool can support advice only while the Agent run remains active. It is not a WebSocket subscription and cannot wake a completed run.\n',
+              "MCP docs Room wait tool",
+          )
+          replace_once(
+              "docs/mcp.md",
+              'get_active_room / get_turn / wait_for_turn\nui_get_game / ui_hint',
+              'get_active_room / get_turn / wait_for_turn / wait_for_room_update\nui_get_game / ui_hint',
+              "MCP docs cancellation",
+          )
+
+          replace_once(
+              "docs/protocol.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "Protocol remote tools",
+          )
+          insert_after(
+              "docs/protocol.md",
+              '`stillWaiting` appears for transport timeout. Actionable Room states return immediately. Timeout never mutates game state or authorizes fallback.\n',
+              '\n### `wait_for_room_update`\n\nInput requires the last observed semantic cursor and accepts the same optional bounded timeout:\n\n```json\n{"afterRoomSeq": 12, "timeoutMs": 25000}\n```\n\nResult reasons are `room_updated`, `game_finished`, or `timeout`; the result includes `afterRoomSeq`, current `roomSeq`, `waitedMs`, and the authenticated snapshot. `afterRoomSeq = 0` returns the current snapshot immediately. A cursor greater than the authoritative Room returns `room_seq_ahead`; malformed cursors return `invalid_room_seq_cursor`. This read-only wait never grants Controller authority or wakes an ended Agent run.\n',
+              "Protocol Room wait",
+          )
+          replace_once(
+              "docs/protocol.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\n`open_game` starts',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()\n```\n\n`open_game` starts',
+              "Protocol local tools",
+          )
+          replace_once(
+              "docs/protocol.md",
+              'get_active_room\nget_turn\nwait_for_turn\nui_get_game',
+              'get_active_room\nget_turn\nwait_for_turn\nwait_for_room_update\nui_get_game',
+              "Protocol cancellation",
+          )
+          replace_once(
+              "docs/protocol.md",
+              'invalid_wait_timeout\nrate_limited',
+              'invalid_wait_timeout\ninvalid_room_seq_cursor\nroom_seq_ahead\nrate_limited',
+              "Protocol errors",
+          )
+
+          replace_once(
+              "docs/game-system.md",
+              'get_turn\nwait_for_turn\nplay_move',
+              'get_turn\nwait_for_turn\nwait_for_room_update\nplay_move',
+              "Game system local tools",
+          )
+          insert_after(
+              "docs/game-system.md",
+              'A user request for continuous play still requires the Agent harness to keep its current run active and call the tool again after transport timeout.\n',
+              '\n`wait_for_room_update(afterRoomSeq, timeoutMs?)` is the parallel semantic-event primitive. It returns when `roomSeq` advances, the Room finishes, or one bounded wait times out. It uses the same authenticated projection for Controllers and Advisors, never grants play capability, propagates cancellation, and remains a bounded polling step until push subscription transport is implemented.\n',
+              "Game system Room wait",
+          )
+          replace_once(
+              "docs/game-system.md",
+              '- wait: actionable reasons and timeout bounds, no mutation;',
+              '- waits: actionable turn reasons plus roomSeq update reasons, cursor/timeout bounds, cancellation, and no mutation;',
+              "Game system tests",
+          )
+
+          replace_once(
+              "docs/security.md",
+              '- teardown stops polling.',
+              '- teardown disables subsequent lifecycle-recovery calls; the Human-vs-bots App has no periodic state timer.',
+              "Security App lifecycle",
+          )
+          replace_once(
+              "docs/security.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "Security remote tools",
+          )
+          insert_after(
+              "docs/security.md",
+              'It uses authenticated reads under the existing per-Actor MCP-read budget. Timeout cannot auto-pass, play, change Controller, trigger Bot fallback, or create a competitive clock.\n',
+              '\n`wait_for_room_update` uses the same bounded authenticated reads and exposes only the caller\'s existing projection. `afterRoomSeq` is a cursor, not authorization; an ahead cursor fails. Advisors can wait for semantic events without receiving `seat:play`, and cancellation has no mutation effect.\n',
+              "Security Room wait",
+          )
+          replace_once(
+              "docs/security.md",
+              'get_active_room\nget_turn\nwait_for_turn\nui_get_game',
+              'get_active_room\nget_turn\nwait_for_turn\nwait_for_room_update\nui_get_game',
+              "Security cancellation",
+          )
+
+          replace_once(
+              "docs/status.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)',
+              "Status published local anchor",
+          )
+          insert_after(
+              "docs/status.md",
+              'take_control()\n```\n\n### MCP App-only tools',
+              '\n\nThe alpha.9 source candidate additionally exposes:\n\n```text\nwait_for_room_update(afterRoomSeq, timeoutMs?)\n```\n\n### MCP App-only tools',
+              "Status candidate local tool",
+          )
+          replace_once(
+              "docs/status.md",
+              'Alpha.9 also adds the Room-event foundation: every Agent and Human snapshot includes `roomSeq`, legacy Rooms normalize to sequence 1, and all GameRoom state writes flow through one semantic commit path. Comments, Controller changes, Room phase, Join claim, meaningful Actor status, and game revision changes advance `roomSeq`; heartbeat-only `lastSeenAt` and credential-only writes do not. Multi-Actor subscription transport is still future work and must reuse streams by Room plus authorized principal/projection, never by Room ID alone.',
+              'Alpha.9 also adds the Room-event foundation and bounded observation primitive: every Agent and Human snapshot includes `roomSeq`; semantic writes advance it; heartbeat-only and credential-only writes do not; and `wait_for_room_update(afterRoomSeq, timeoutMs?)` lets Controllers or Advisors wait 1–25 seconds for the cursor to advance or the Room to finish. This is cancellable current-run polling, not the final push subscription, and future connection reuse must still key by Room plus authorized principal/projection.',
+              "Status alpha9 Room wait",
+          )
+          replace_once(
+              "docs/status.md",
+              'get_turn()\nwait_for_turn(timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()',
+              'get_turn()\nwait_for_turn(timeoutMs?)\nwait_for_room_update(afterRoomSeq, timeoutMs?)\nplay_move(expectedRevision, moveId)\ncomment(text)\nyield_to_bot()\ntake_control()',
+              "Status remote tools",
+          )
+          replace_once(
+              "docs/status.md",
+              'For Advisors, `wait_for_turn` is not a general Room-revision subscription. In the manually tested `companion-agent` flow, an Advisor bound to a Human-controlled Seat received `controller_changed` immediately rather than waiting for the next Human move. Binding/connected state therefore does not mean the Agent is continuously listening.',
+              'For Advisors, `wait_for_turn` remains Controller-oriented and can return `controller_changed` immediately. `wait_for_room_update(afterRoomSeq)` now provides the bounded semantic-event wait needed during the same active Agent run. Binding/connected state still does not mean an ended Agent response is continuously listening.',
+              "Status Advisor wait",
+          )
+          replace_once(
+              "docs/status.md",
+              'The currently tested companion flow is fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. There is no one-step local `open_companion_game` entry and no companion-specific Room-update wait primitive yet.',
+              'The currently tested companion flow remains fragmented: the Human creates `companion-agent` in standalone Web, relays a one-time Join code, and the Agent calls `join_room`. The bounded `wait_for_room_update` primitive now exists, but there is still no one-step local `open_companion_game` entry or push subscription transport.',
+              "Status companion gap",
+          )
+          replace_once(
+              "docs/status.md",
+              '- 106 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, and Room event sequencing;',
+              '- more than 110 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, Room event sequencing, and bounded Room-update waiting;',
+              "Status test count",
+          )
+          insert_after(
+              "docs/status.md",
+              '- Room sequence tests proving game/comment/Controller/status changes advance, heartbeat-only writes do not, and centralized commits own all write/broadcast decisions;\n',
+              '- Room-update wait tests proving cursor advance/finish/timeout semantics, ahead-cursor recovery, Advisor-safe projection reuse, and cancellability;\n',
+              "Status wait tests",
+          )
+          replace_once(
+              "docs/status.md",
+              '- packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;\n- 15 tools with correct model/app visibility and one MCP App resource;',
+              '- packaged CLI MCP stdio `initialize -> tools/list -> resources/list/read -> tools/call` validation;\n- published alpha.8 remains a 15-tool bridge; the alpha.9 source candidate validates 16 tools with correct model/app visibility and one MCP App resource;',
+              "Status source tool count",
+          )
+          replace_once(
+              "docs/status.md",
+              '- subscription transport using the implemented `roomSeq` cursor is not yet available;',
+              '- push subscription transport using the implemented `roomSeq` cursor is not yet available; the bounded `wait_for_room_update` polling primitive is available;',
+              "Status known gap",
+          )
+          replace_once(
+              "docs/status.md",
+              '- Advisor Room-update waiting distinct from Controller-oriented `wait_for_turn`;\n',
+              '',
+              "Status remove completed wait gap",
+          )
+
+          replace_once(
+              "docs/roadmap.md",
+              'The semantic Room cursor foundation is now implemented. Before adding a new wait/subscription tool, preserve the distinction from game revision:',
+              'The semantic Room cursor and bounded update wait are now implemented. Preserve the distinction from game revision while building the push transport:',
+              "Roadmap Room wait intro",
+          )
+          insert_after(
+              "docs/roadmap.md",
+              '- regression tests proving game/comment/Controller/status events advance, heartbeat-only writes do not, and collection order is irrelevant.\n',
+              '- bounded cancellable `wait_for_room_update(afterRoomSeq, timeoutMs?)` for Controllers and Advisors, including ahead-cursor recovery and terminal Room return.\n',
+              "Roadmap implemented wait",
+          )
+          replace_once(
+              "docs/roadmap.md",
+              '1. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;\n2. define bounded, cancellable `wait_for_room_update(afterRoomSeq, timeoutMs)` semantics for Advisors/local Apps;\n3. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;\n4. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;\n5. use polling only as an explicitly bounded, stoppable fallback when push is unavailable.',
+              '1. define a Human snapshot subscription endpoint—the current browser viewer WebSocket remains intentionally disabled because it exposes a different projection protocol;\n2. let the local bridge reuse one remote connection for multiple waiters sharing the same authorization/projection key;\n3. add waiter leases, single waiter per App, 30–60 second last-waiter grace, maximum idle TTL, reconnect jitter, and final cleanup on Room finish;\n4. use the implemented bounded wait only as the stoppable fallback when push is unavailable.',
+              "Roadmap remaining subscription order",
+          )
+          replace_once(
+              "docs/roadmap.md",
+              '- a bounded `wait_for_room_update(afterRoomSeq, timeoutMs)` primitive for Advisors that does not imply play authority;\n',
+              '- integrate the existing bounded `wait_for_room_update(afterRoomSeq, timeoutMs)` into the one-step companion flow and future push subscription without implying play authority;\n',
+              "Roadmap companion integration",
+          )
+
+          # Keep canonical docs and code terminology aligned.
+          for path in ["docs/mcp.md", "docs/protocol.md", "docs/game-system.md", "docs/security.md", "docs/status.md", "docs/roadmap.md"]:
+              if "wait_for_room_update" not in Path(path).read_text():
+                  raise SystemExit(f"{path} is missing wait_for_room_update")
+
+          # Remove this temporary workflow before committing the real change.
+          Path(".github/workflows/patch-wait-for-room-update-temp.yml").unlink()
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add bounded Room update waiting"
+          git push origin HEAD:fix/wait-for-room-update
