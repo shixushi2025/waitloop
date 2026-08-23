@@ -28,11 +28,13 @@ describe("browser request budgets", () => {
     expect(game).not.toContain("}, 1000);\n}");
   });
 
-  it("backs failed lifecycle WebSocket reconnects off instead of retrying every 1.5 seconds forever", () => {
+  it("backs failed lifecycle WebSocket reconnects off and restores safely after page lifecycle changes", () => {
     const app = source("apps/web/public/app.js");
     expect(app).toContain("MAX_SESSION_RECONNECT_DELAY_MS");
     expect(app).toContain("scheduleSessionReconnect");
     expect(app).toContain("document.hidden");
+    expect(app).toContain('window.addEventListener("pagehide"');
+    expect(app).toContain('window.addEventListener("pageshow"');
     expect(app).not.toContain("window.setTimeout(() => connectSessionSocket(id), 1500)");
   });
 });
