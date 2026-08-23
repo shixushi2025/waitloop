@@ -32,6 +32,12 @@ export function nextRoomRefreshDelay(currentDelay, changed) {
 
 export function roomRefreshSignature(current) {
   if (!current || typeof current !== "object") return "";
+  if (Number.isSafeInteger(current.roomSeq) && current.roomSeq >= 1) {
+    return `roomSeq:${current.roomSeq}`;
+  }
+
+  // Legacy snapshots predate roomSeq. Keep a deterministic fallback until the
+  // compatibility projection is removed.
   const actors = (Array.isArray(current.actors) ? current.actors : [])
     .filter((actor) => actor && typeof actor.id === "string")
     .map((actor) => {
