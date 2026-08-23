@@ -40,6 +40,7 @@ import {
   restoreSeatOwnerControl,
   setBoundSeatController,
 } from "./room-control";
+import { nextRoomSeq, normalizeRoomSeq } from "./room-sequence";
 
 export interface GameRoomEnv extends HostedAgentEnv {}
 
@@ -58,6 +59,7 @@ interface GameJoinStateV1 {
 
 interface PersistedGameRoomV1 {
   version: 1;
+  roomSeq?: number;
   room: StoredGameRoom;
   botPlayerIds: string[];
   // Kept under the old storage key for migration safety; entries are actor IDs
@@ -84,6 +86,7 @@ interface PersistedGameRoomV1 {
 }
 
 interface NormalizedGameRoomV1 extends PersistedGameRoomV1 {
+  roomSeq: number;
   viewerTokenHashes: Record<string, string>;
   actorCredentialHashes: Record<string, string>;
   actors: GameActorV1[];
@@ -113,6 +116,7 @@ interface SocketAttachmentV1 {
 }
 
 export type GameRoomSnapshotV1 = StoredGameSnapshot & {
+  roomSeq: number;
   // Legacy projections remain during the public browser migration.
   participants: GameParticipantV1[];
   seatStates: GameSeatRuntimeV1[];
@@ -305,6 +309,7 @@ function normalizeState(state: PersistedGameRoomV1): NormalizedGameRoomV1 {
   validateActorRoomModel({ actors, seats, bindings, actorStates, roomOwnerActorId });
   return {
     ...state,
+    roomSeq: normalizeRoomSeq(state.roomSeq),
     viewerTokenHashes: { ...(state.viewerTokenHashes ?? {}) },
     actorCredentialHashes: { ...(state.actorCredentialHashes ?? {}) },
     actors,
@@ -373,6 +378,12 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     await this.ctx.storage.put(STATE_KEY, state);
   }
 
+  private async commitState(previous: NormalizedGameRoomV1, next: NormalizedGameRoomV1): Promise<void> {
+    next.roomSeq = nextRoomSeq(previous, next);
+    await this.writeState(next);
+    if (next.roomSeq !== previous.roomSeq) await this.broadcast(next);
+  }
+
   private async consumeRateLimit(scope: string, limit: number, windowMs: number): Promise<boolean> {
     const key = `rate:${scope}`;
     const now = Date.now();
@@ -399,6 +410,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
     const waiting = state.roomPhase === "waiting_for_players";
     return {
       ...base,
+      roomSeq: state.roomSeq,
       currentPlayerId: waiting ? null : base.currentPlayerId,
       legalMoves: waiting ? [] : base.legalMoves,
       participants: legacyParticipants(state),
@@ -660,6 +672,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       if (waitingForPlayers) room = game.pause(room);
       let state: NormalizedGameRoomV1 = {
         version: 1,
+        roomSeq: 1,
         room,
         botPlayerIds: [...request.botPlayerIds],
         seatTokenHashes,
@@ -748,8 +761,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         },
         join: { ...join, claimedAt: now },
       };
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return this.getJoinInfo(joinCodeHash);
     } catch (error) {
       return failure(error);
@@ -779,7 +791,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
           [actorId]: await hashToken(viewerToken),
         },
       };
-      await this.writeState(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -824,8 +836,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         };
         next = await this.runAutomatedPlayers(next);
       }
-      await this.writeState(next);
-      if (statusChanged || started) await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -907,8 +918,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const state = await this.readState();
       if (!state) return denied("room_not_found", "Game room is not initialized.");
       const next = await this.applySeatMove(state, command.playerId, command.expectedRevision, command.moveId);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       const actorId = this.resolveActorForLegacyViewer(next, viewerId);
       if (!actorId) return denied("viewer_not_in_room", "Viewer is not in this room.");
       return { ok: true, value: this.snapshot(next, actorId) };
@@ -928,8 +938,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       }
       const moved = await this.applyActorMove(state, actorId, expectedRevision, moveId);
       if (!moved.ok) return moved;
-      await this.writeState(moved.value);
-      await this.broadcast(moved.value);
+      await this.commitState(state, moved.value);
       return { ok: true, value: this.snapshot(moved.value, actorId) };
     } catch (error) {
       return failure(error);
@@ -947,8 +956,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       }
       const moved = await this.applyActorMove(state, actorId, expectedRevision, moveId);
       if (!moved.ok) return moved;
-      await this.writeState(moved.value);
-      await this.broadcast(moved.value);
+      await this.commitState(state, moved.value);
       return { ok: true, value: this.snapshot(moved.value, actorId) };
     } catch (error) {
       return failure(error);
@@ -973,8 +981,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         return denied("controller_not_ready", "Connected agent must be online before it can control the seat.");
       }
       const next = setBoundSeatController(state, seat.id, targetActorId) as NormalizedGameRoomV1;
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, ownerActorId) };
     } catch (error) {
       return failure(error);
@@ -1011,8 +1018,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         Date.now(),
       ) as NormalizedGameRoomV1;
       next = await this.runAutomatedPlayers(next);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1039,8 +1045,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         return denied("controller_not_ready", "The seat owner must reconnect before control can be restored.");
       }
       const next = restoreSeatOwnerControl(state, seatId) as NormalizedGameRoomV1;
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1066,8 +1071,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         Date.now(),
       ) as NormalizedGameRoomV1;
       next = await this.runAutomatedPlayers(next);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1101,8 +1105,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
           },
         },
       };
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1129,8 +1132,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
         createdAt: Date.now(),
       };
       const next: NormalizedGameRoomV1 = { ...state, comments: [...state.comments, comment].slice(-MAX_COMMENTS) };
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1158,8 +1160,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const actorId = this.resolveActorForLegacyViewer(state, viewerId);
       if (!actorId) return denied("viewer_not_in_room", "Viewer is not in this room.");
       const next = await this.pauseState(state);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1173,8 +1174,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const actorId = await this.resolveViewer(state, viewerToken);
       if (!actorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
       const next = await this.pauseState(state);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1188,8 +1188,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const actorId = this.resolveActorForLegacyViewer(state, viewerId);
       if (!actorId) return denied("viewer_not_in_room", "Viewer is not in this room.");
       const next = await this.resumeState(state);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);
@@ -1203,8 +1202,7 @@ export class GameRoom extends DurableObject<GameRoomEnv> {
       const actorId = await this.resolveViewer(state, viewerToken);
       if (!actorId) return denied("invalid_viewer_token", "Room viewer credential is invalid.");
       const next = await this.resumeState(state);
-      await this.writeState(next);
-      await this.broadcast(next);
+      await this.commitState(state, next);
       return { ok: true, value: this.snapshot(next, actorId) };
     } catch (error) {
       return failure(error);

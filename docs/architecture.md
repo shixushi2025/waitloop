@@ -241,6 +241,7 @@ One `GameRoom` Durable Object persists one Room:
 
 ```text
 game state
+roomSeq semantic event cursor
 Seats
 Actors
 Bindings

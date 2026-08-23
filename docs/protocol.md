@@ -68,6 +68,7 @@ ready | waiting | connecting | connected | disconnected
 Agent snapshots include:
 
 ```text
+roomSeq
 actors[]
 seats[]
 bindings[]
@@ -87,6 +88,15 @@ legalMoves[]
 ```
 
 Human snapshots remove exhaustive machine `legalMoves[]` and expose constrained Human actions in `controls`.
+
+`revision` and `roomSeq` have different purposes:
+
+```text
+revision  game-rule concurrency cursor used by play/pass expectedRevision
+roomSeq   monotonic semantic Room-event cursor used by future subscriptions
+```
+
+`roomSeq` advances when client-visible Room meaning changes: game revision/status, comments, Controller/binding/temporary-Bot changes, Room phase, Join claim, or semantic Actor status transitions. Credential rotation and heartbeat-only timestamp refreshes do not advance it.
 
 The Human MCP App receives the same Human projection as standalone Web. The App capability changes transport authorization only; it does not widen hidden information.
 

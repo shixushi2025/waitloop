@@ -161,7 +161,7 @@ Alpha.8 capped `recent activity` at the latest four chronological single-line ro
 
 The alpha.9 source candidate keeps the compact history but removes periodic Human-vs-bots refresh entirely. Human play/pass responses already include the authoritative state after synchronous Bot automation and render immediately; hint is read-only. `ui_get_game` is used only for explicit refresh, reopen, stale or uncertain-result recovery, and one-shot focus/visibility recovery. These reads are single-flight, so an idle mounted App produces zero recurring Worker and Durable Object reads.
 
-This candidate does not pretend to solve multi-Actor synchronization. Future connected/companion freshness requires a Room event subscription with a semantic event cursor and authorization-specific projection reuse, not permanent polling.
+Alpha.9 also adds the Room-event foundation: every Agent and Human snapshot includes `roomSeq`, legacy Rooms normalize to sequence 1, and all GameRoom state writes flow through one semantic commit path. Comments, Controller changes, Room phase, Join claim, meaningful Actor status, and game revision changes advance `roomSeq`; heartbeat-only `lastSeenAt` and credential-only writes do not. Multi-Actor subscription transport is still future work and must reuse streams by Room plus authorized principal/projection, never by Room ID alone.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
@@ -360,7 +360,7 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Tests currently covering this flow
 
-- 98 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, and browser request budgets;
+- 106 unit/regression tests across rules, identity, controller fallback, lifecycle, CLI, MCP, Human MCP App custody/presentation, browser request budgets, and Room event sequencing;
 - lifecycle terminal cleanup and duplicate Stop/SessionEnd finalization;
 - Human Room creation through existing HTTP and private Set-Cookie capture;
 - hashed local Human session file name and private credential storage;
@@ -371,6 +371,7 @@ Rate limiting remains abuse protection, not accounting.
 - fixed four-row, non-scrolling recent activity contract;
 - executable embedded-App runtime tests proving 24-hour idle produces zero reads, repeated focus/visibility events remain single-flight, and hidden/busy/torn-down states do not refresh;
 - source-contract checks prohibiting a periodic Human MCP App refresh timer;
+- Room sequence tests proving game/comment/Controller/status changes advance, heartbeat-only writes do not, and centralized commits own all write/broadcast decisions;
 - standalone connected/companion Room refresh stops while hidden and backs unchanged visible state off from 1 to 10 seconds;
 - lifecycle WebSocket failures reconnect with bounded backoff and respect page lifecycle;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;
@@ -386,8 +387,8 @@ Rate limiting remains abuse protection, not accounting.
 
 ## Known gaps
 
-- Room event sequencing separate from game revision; comments, Controller changes, and semantic presence changes need a subscription cursor such as `roomSeq`;
-- subscription reuse must be keyed by Room plus authorized principal/projection, not Room ID alone;
+- subscription transport using the implemented `roomSeq` cursor is not yet available;
+- subscription reuse must still be implemented by Room plus authorized principal/projection, not Room ID alone;
 - a Human snapshot subscription protocol is not implemented; the current browser viewer WebSocket route remains intentionally disabled;
 - automated real-host smoke coverage for Codex desktop and manual verification of additional Codex/Claude/other Host surfaces;
 - same-Room transfer from local MCP App to standalone browser without exposing long-lived credentials;

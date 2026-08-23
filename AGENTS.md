@@ -181,9 +181,9 @@ Required design:
 - any temporary Web polling required for connected Actors must stop while hidden and use bounded backoff when visible state is unchanged;
 - failed WebSocket reconnects must use bounded backoff and page-lifecycle cleanup.
 
-Future Room event subscriptions must not use game revision as the only cursor. Add a separate semantic `roomSeq`/event sequence for client-visible changes such as comments, Controller transitions, Room phase, Join/connection transitions, and semantic presence changes. Heartbeat-only timestamp refreshes must not advance that cursor.
+Current Room snapshots include a separate semantic `roomSeq` cursor. All persisted state writes must pass through the centralized GameRoom commit path: game/comment/Controller/Room-phase/Join/semantic-presence changes advance and broadcast `roomSeq`, while credential-only and heartbeat-only timestamp writes do not.
 
-Subscription reuse must be scoped by origin + Room + authorized principal/credential scope + projection type/version. Never share one private snapshot stream solely by Room ID.
+Future Room subscriptions must use `roomSeq`, not game revision, as their update cursor. Subscription reuse must be scoped by origin + Room + authorized principal/credential scope + projection type/version. Never share one private snapshot stream solely by Room ID.
 
 Do not claim Codex/Claude/Cursor/other Host UI support without testing the exact active product surface. Tool availability does not prove App render/action support.
 
