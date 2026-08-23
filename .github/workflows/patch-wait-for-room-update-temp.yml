@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: fix/wait-for-room-update
-          fetch-depth: 5
+          fetch-depth: 6
 
       - name: Recover and apply staged patch
         run: |
@@ -39,14 +39,16 @@ jobs:
           lines = [line[10:] if line.startswith("          ") else line for line in block.splitlines()]
           script = "\n".join(lines) + "\n"
 
-          ambiguous = '''              'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)',
-              'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)',
-              "AGENTS local source tools",'''
-          targeted = '''              'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)',
-              'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)',
-              "AGENTS local source tools",'''
+          ambiguous = '''    "AGENTS.md",
+    'get_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)',
+    'get_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)',
+    "AGENTS local source tools",'''
+          targeted = '''    "AGENTS.md",
+    'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nplay_move(expectedRevision, moveId)',
+    'leave_room()\\nget_turn()\\nwait_for_turn(timeoutMs?)\\nwait_for_room_update(afterRoomSeq, timeoutMs?)\\nplay_move(expectedRevision, moveId)',
+    "AGENTS local source tools",'''
           if script.count(ambiguous) != 1:
-              raise SystemExit("could not retarget the AGENTS local tool-list patch")
+              raise SystemExit(f"could not retarget AGENTS local list; matches={script.count(ambiguous)}")
           script = script.replace(ambiguous, targeted, 1)
           Path("/tmp/waitloop-room-update-patch.py").write_text(script)
           PY
