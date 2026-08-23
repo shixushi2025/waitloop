@@ -54,13 +54,17 @@ describe("standalone Room refresh budget", () => {
     expect(nextRoomRefreshDelay(delay, true)).toBe(ROOM_REFRESH_MIN_DELAY_MS);
   });
 
-  it("ignores heartbeat timestamps but notices user-visible state changes", () => {
+  it("ignores heartbeat and array-order noise but notices user-visible state changes", () => {
     const base = snapshot();
     expect(roomRefreshSignature(snapshot({
       actorStates: [
         { actorId: "human", status: "ready" },
         { actorId: "agent", status: "connected", lastSeenAt: 999999 },
       ],
+    }))).toBe(roomRefreshSignature(base));
+    expect(roomRefreshSignature(snapshot({
+      actors: [...base.actors].reverse(),
+      seats: [...base.seats].reverse(),
     }))).toBe(roomRefreshSignature(base));
     expect(roomRefreshSignature(snapshot({ revision: 5 }))).not.toBe(roomRefreshSignature(base));
     expect(roomRefreshSignature(snapshot({
