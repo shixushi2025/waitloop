@@ -44,17 +44,10 @@ https://waitloop.run/mcp
 Published CLI alpha:
 
 ```text
-0.1.0-alpha.7
-```
-
-Current source/build candidate:
-
-```text
 0.1.0-alpha.8
-candidatePublished: false
 ```
 
-Alpha.7 includes the Human-operated MCP App path and has been verified on the npm registry with the `alpha` dist-tag pointing to `0.1.0-alpha.7`. Alpha.8 is source-only until its release workflow verifies the exact package and moves the npm `alpha` dist-tag; it must not be described as installable yet.
+Alpha.8 was published through npm trusted publishing. The release workflow verified the exact package version, confirmed the npm `alpha` dist-tag points to `0.1.0-alpha.8`, installed `@waitloop/cli@alpha` into a clean prefix, and validated the packaged MCP stdio/MCP Apps bridge before recording publication success.
 
 Install/update remains:
 
@@ -123,7 +116,7 @@ Cursor lifecycle integration remains available, while stable stdio MCP setup is 
 
 ## Agent-native interactive Human table
 
-The published alpha.7 provides:
+The published alpha.8 provides:
 
 ```text
 open_game({gameId:"doudizhu", mode:"human-bots"})
@@ -157,7 +150,7 @@ refresh
 inline/fullscreen where the Host permits it
 ```
 
-The alpha.8 source candidate changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. Human actions still update immediately from their mutation responses. The former 1.2-second loop is replaced by a visible-only safety refresh that backs off through 5, 10, 20, and 30 seconds, resets on visible state changes or Human actions, and stops when hidden, torn down, finished, or unloaded.
+Alpha.8 changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. Human actions still update immediately from their mutation responses. The former 1.2-second loop is replaced by a visible-only safety refresh that backs off through 5, 10, 20, and 30 seconds, resets on visible state changes or Human actions, and stops when hidden, torn down, finished, or unloaded.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
@@ -179,7 +172,7 @@ Inline operation requires an MCP Apps-capable Host that:
 - forwards the initial tool result including result `_meta`;
 - proxies App server-tool calls.
 
-A real Codex desktop client session has manually rendered and operated the published alpha.7 App. In that session the transcript showed the safe JSON/structured tool result while the Human-facing App rendered simultaneously. Agents must not treat visible JSON as proof of render failure or automatically create a separate browser game.
+A real Codex desktop client session first manually rendered and operated the App on alpha.7; alpha.8 preserves that path and adds the bounded refresh/request-budget fixes. In that session the transcript showed the safe JSON/structured tool result while the Human-facing App rendered simultaneously. Agents must not treat visible JSON as proof of render failure or automatically create a separate browser game.
 
 This observation is manual and surface-specific. Waitloop still does not claim every Codex/Claude/Cursor/terminal/desktop surface implements all required behaviors. Unsupported Hosts receive safe text/structured results and fallback guidance.
 
@@ -365,7 +358,7 @@ Rate limiting remains abuse protection, not accounting.
 - local bridge tool/instruction/resource metadata and error redaction;
 - embedded MCP App JavaScript syntax;
 - fixed four-row, non-scrolling recent activity contract;
-- no continuous idle polling from the Human MCP App;
+- visible-only Human MCP App safety refresh bounded from 5 to 30 seconds, with immediate mutation-driven updates and hidden/teardown cleanup;
 - standalone connected/companion Room refresh stops while hidden and backs unchanged visible state off from 1 to 10 seconds;
 - lifecycle WebSocket failures reconnect with bounded backoff and respect page lifecycle;
 - read-only AbortSignal propagation and cancellable `wait_for_turn` polling;

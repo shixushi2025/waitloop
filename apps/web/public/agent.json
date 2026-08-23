@@ -13,10 +13,7 @@
   "description": "Developer-native waiting layer for coding agents with lifecycle hooks, Human-operated MCP Apps, tiny games, hosted AI players, and room-scoped MCP game actors.",
   "cli": {
     "packageName": "@waitloop/cli",
-    "version": "0.1.0-alpha.7",
-    "candidateVersion": "0.1.0-alpha.8",
-    "candidatePublished": false,
-    "candidateSummary": "MCP App recent activity is capped at four non-scrolling rows; Human actions update immediately from mutation responses, while a visible-only safety refresh backs off from 5 to 30 seconds and stops when hidden or torn down. Connected Web tables retain visibility-aware 1-10 second backoff, and failed lifecycle WebSockets reconnect with bounded backoff.",
+    "version": "0.1.0-alpha.8",
     "distTag": "alpha",
     "published": true,
     "registry": "https://registry.npmjs.org/",
@@ -35,7 +32,7 @@
     "doctorCommand": "waitloop doctor",
     "doctorBehavior": "checks the published CLI version plus detected Codex version/hooks capability, installed lifecycle hook events, and stable local MCP configuration",
     "releaseWorkflow": "https://github.com/shixushi2025/waitloop/actions/workflows/publish-cli.yml",
-    "publicationVerification": "alpha.7 was published through npm trusted publishing and verified from the registry; the packaged MCP stdio bridge exposes 15 tools and one MCP App resource"
+    "publicationVerification": "alpha.8 was published through npm trusted publishing; the exact version and alpha dist-tag were verified, a clean @alpha installation passed, and the packaged MCP stdio/MCP Apps bridge was validated"
   },
   "skill": {
     "status": "available",
