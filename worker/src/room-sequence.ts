@@ -1,5 +1,5 @@
 export interface RoomSequenceComparableV1 {
-  roomSeq?: number;
+  roomSeq?: number | undefined;
   room: {
     revision: number;
     status: string;
@@ -15,7 +15,7 @@ export interface RoomSequenceComparableV1 {
   actors: Array<{
     id: string;
     kind: string;
-    temporary?: boolean;
+    temporary?: boolean | undefined;
   }>;
   bindings: Array<{
     actorId: string;
@@ -25,10 +25,10 @@ export interface RoomSequenceComparableV1 {
   actorStates: Record<string, {
     actorId: string;
     status: string;
-    lastSeenAt?: number;
-    connectedAt?: number;
-    disconnectedAt?: number;
-    statusChangedAt?: number;
+    lastSeenAt?: number | undefined;
+    connectedAt?: number | undefined;
+    disconnectedAt?: number | undefined;
+    statusChangedAt?: number | undefined;
   }>;
   comments: Array<{
     id: string;
@@ -39,11 +39,11 @@ export interface RoomSequenceComparableV1 {
   botPlayerIds: string[];
   temporaryBotSeatIds: string[];
   join?: {
-    actorId?: string;
-    seatId?: string;
-    playerId?: string;
-    claimedAt?: number;
-  };
+    actorId?: string | undefined;
+    seatId?: string | undefined;
+    playerId?: string | undefined;
+    claimedAt?: number | undefined;
+  } | undefined;
 }
 
 function compareFirst(left: readonly unknown[], right: readonly unknown[]): number {
