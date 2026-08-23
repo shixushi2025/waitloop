@@ -29,7 +29,14 @@ jobs:
           new = 'source = replaceOnce(source, `\\n          stopPolling();\\n        } else if`, `\\n        } else if`, "MCP App finished polling stop");'
           if text.count(old) != 1:
               raise SystemExit(f"expected one polling-stop patch line, found {text.count(old)}")
-          path.write_text(text.replace(old, new))
+          text = text.replace(old, new)
+          for value in ("protocol", "window.location.host", "encodeURIComponent(id)"):
+              token = "${" + value + "}"
+              escaped = "\\${" + value + "}"
+              if token not in text:
+                  raise SystemExit(f"missing lifecycle template token {token}")
+              text = text.replace(token, escaped)
+          path.write_text(text)
           PY
           node scripts/patch-request-polling-temp.mjs
           rm scripts/patch-request-polling-temp.mjs
