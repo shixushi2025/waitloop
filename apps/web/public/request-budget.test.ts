@@ -10,13 +10,15 @@ function source(path: string) {
 }
 
 describe("browser request budgets", () => {
-  it("does not continuously poll from the Human MCP App", () => {
+  it("uses visible-only bounded fallback refresh in the Human MCP App", () => {
     const app = source("packages/cli/src/mcp-app.ts");
-    expect(app).not.toContain("schedulePolling");
-    expect(app).not.toContain("pollTimer");
+    expect(app).toContain("MCP_APP_REFRESH_MIN_DELAY_MS = 5000");
+    expect(app).toContain("MCP_APP_REFRESH_MAX_DELAY_MS = 30000");
+    expect(app).toContain("scheduleRefresh");
+    expect(app).toContain("stopRefresh");
+    expect(app).toContain('document.visibilityState !== "visible"');
+    expect(app).toContain('window.addEventListener("pagehide", stopRefresh)');
     expect(app).not.toContain("}, 1200)");
-    expect(app).toContain("visibilitychange");
-    expect(app).toContain("refreshWhenVisible");
   });
 
   it("backs visible connected-room polling off and stops it while hidden", () => {

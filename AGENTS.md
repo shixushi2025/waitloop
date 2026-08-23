@@ -174,8 +174,9 @@ Required design:
 - unsupported Hosts get an honest fallback, not fake inline success;
 - standalone Web fallback starts a separate game unless a future explicit transfer protocol exists;
 - `open_game(roomId)` may reopen only a still-valid local interactive Room;
-- Human-vs-bots App state is action-driven: mutation responses are authoritative and an idle mounted App must not continuously call `ui_get_game`;
-- explicit/focus/visibility refresh must be one-shot and guarded against overlap;
+- Human-vs-bots App state is action-driven: mutation responses are authoritative, so normal Human actions must update immediately without waiting for polling;
+- safety refresh may run only while visible, must start no faster than 5 seconds, back off to a maximum 30-second interval when unchanged, and stop on hidden/pagehide/teardown/finish;
+- explicit/focus/visibility refresh must be immediate, one-shot, and guarded against overlap;
 - any Web polling required for connected Actors must stop while hidden and use bounded backoff when visible state is unchanged;
 - failed WebSocket reconnects must use bounded backoff and page-lifecycle cleanup.
 

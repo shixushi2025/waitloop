@@ -157,7 +157,7 @@ refresh
 inline/fullscreen where the Host permits it
 ```
 
-The alpha.8 source candidate changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. The 1.2-second idle `ui_get_game` loop is removed; Human-vs-bots state advances from mutation responses, explicit refresh, and one-shot refresh when the App becomes visible or focused.
+The alpha.8 source candidate changes compact history and request behavior in this area: `recent activity` is capped at the latest four chronological single-line rows, uses ellipsis for long rows, and has no internal scrollbar. `current trick` remains separate and authoritative. Human actions still update immediately from their mutation responses. The former 1.2-second loop is replaced by a visible-only safety refresh that backs off through 5, 10, 20, and 30 seconds, resets on visible state changes or Human actions, and stops when hidden, torn down, finished, or unloaded.
 
 The App uses MCP Apps postMessage initialization/tool-result/host-context/size/display-mode/teardown messages and calls the four app-only tools through the Host's `tools/call` proxy.
 
