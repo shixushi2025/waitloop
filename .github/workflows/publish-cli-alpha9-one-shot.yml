@@ -1,0 +1,69 @@
+name: publish-cli-alpha9-one-shot
+
+on:
+  push:
+    branches:
+      - release/cli-alpha9-one-shot
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish-alpha9
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate exact release source
+        run: |
+          node -e "const p=require('./packages/cli/package.json'); if (p.version !== '0.1.0-alpha.9') throw new Error('unexpected CLI version: ' + p.version)"
+          pnpm check
+          pnpm check:repo-contract
+          pnpm check:cli-package
+          pnpm check:mcp-stdio
+          find apps/web/public -name '*.js' -print0 | xargs -0 -n1 node --check
+          pnpm exec wrangler deploy --dry-run --outdir .wrangler-dist
+
+      - name: Publish alpha.9 through npm trusted publishing
+        working-directory: packages/cli
+        run: npm publish --access public --tag alpha --provenance
+
+      - name: Verify exact Registry version and alpha dist-tag
+        run: |
+          expected='0.1.0-alpha.9'
+          for attempt in $(seq 1 30); do
+            exact=$(npm view '@waitloop/cli@0.1.0-alpha.9' version 2>/dev/null || true)
+            tagged=$(npm view '@waitloop/cli@alpha' version 2>/dev/null || true)
+            if test "$exact" = "$expected" && test "$tagged" = "$expected"; then
+              echo "Published and verified @waitloop/cli@$expected"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Registry verification failed" >&2
+          exit 1
