@@ -52,7 +52,7 @@ describe("standalone game snapshot selectors", () => {
     expect(selectors.companionActor(current)).toBeNull();
   });
 
-  it("keeps legacy participant and seat-state fallbacks", () => {
+  it("keeps legacy participant, controller, and seat-state fallbacks", () => {
     const current = {
       status: "paused",
       participants: [{ id: "agent-old", kind: "connected-agent", label: "Legacy Agent" }],
@@ -61,6 +61,7 @@ describe("standalone game snapshot selectors", () => {
     expect(selectors.phaseOf(current)).toBe("paused");
     expect(selectors.viewerActorId(current)).toBe("you");
     expect(selectors.actorFor(current, "agent-old")?.label).toBe("Legacy Agent");
+    expect(selectors.controllerActorForSeat(current, "agent-old")?.id).toBe("agent-old");
     expect(selectors.actorStateFor(current, "agent-old")?.status).toBe("disconnected");
   });
 
@@ -70,5 +71,15 @@ describe("standalone game snapshot selectors", () => {
     expect(selectors.actorLabel(current, "human-1")).toBe("you");
     expect(selectors.actorLabel(current, "missing")).toBe("missing");
     expect(selectors.seatLabel(current, null)).toBe("room");
+  });
+
+  it("derives legacy phases without mutating the snapshot", () => {
+    const finished = { status: "finished" };
+    const paused = { status: "paused" };
+    const playing = { status: "playing" };
+    expect(selectors.phaseOf(finished)).toBe("finished");
+    expect(selectors.phaseOf(paused)).toBe("paused");
+    expect(selectors.phaseOf(playing)).toBe("playing");
+    expect(finished).toEqual({ status: "finished" });
   });
 });
