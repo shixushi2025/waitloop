@@ -1,13 +1,12 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
+import { boundedSnapshotWait } from "./bounded-snapshot-wait";
 import type { GameRoom, GameRoomSnapshotV1 } from "./game-room";
 import {
   classifyWaitForTurn,
   normalizeWaitForTurnTimeout,
-  throwIfWaitCancelled,
   WAIT_FOR_TURN_POLL_MS,
-  waitForTurnDelay,
 } from "./wait-for-turn";
 import {
   classifyWaitForRoomUpdate,
@@ -67,6 +66,15 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
     return new Response(connected.error.message, { status });
   }
 
+  const readSnapshot = async () => {
+    const result = await room.getSnapshotBySeatToken(seatToken);
+    if (!result.ok) return { ok: false as const, error: result.error };
+    return {
+      ok: true as const,
+      snapshot: rpcValue(result) as GameRoomSnapshotV1,
+    };
+  };
+
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name: "waitloop", version: "0.2.0" });
 
@@ -78,9 +86,9 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
         inputSchema: z.object({}),
       },
       async () => {
-        const result = await room.getSnapshotBySeatToken(seatToken);
+        const result = await readSnapshot();
         if (!result.ok) return errorResult(result.error.code, result.error.message);
-        return textResult(rpcValue(result));
+        return textResult(result.snapshot);
       },
     );
 
@@ -101,36 +109,31 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
           return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");
         }
 
-        const signal = ctx.mcpReq.signal;
-        const startedAt = Date.now();
-        let latest: GameRoomSnapshotV1 | null = null;
-        while (true) {
-          throwIfWaitCancelled(signal);
-          const result = await room.getSnapshotBySeatToken(seatToken);
-          if (!result.ok) return errorResult(result.error.code, result.error.message);
-          latest = rpcValue(result) as GameRoomSnapshotV1;
-          const reason = classifyWaitForTurn(latest);
-          if (reason) {
-            return textResult({
-              version: 1,
-              reason,
-              waitedMs: Date.now() - startedAt,
-              snapshot: latest,
-            });
-          }
-
-          const elapsed = Date.now() - startedAt;
-          if (elapsed >= boundedTimeout) {
-            return textResult({
-              version: 1,
-              reason: "timeout",
-              waitedMs: elapsed,
-              stillWaiting: true,
-              snapshot: latest,
-            });
-          }
-          await waitForTurnDelay(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed), signal);
+        const wait = await boundedSnapshotWait({
+          timeoutMs: boundedTimeout,
+          pollMs: WAIT_FOR_TURN_POLL_MS,
+          signal: ctx.mcpReq.signal,
+          readSnapshot,
+          classify: classifyWaitForTurn,
+        });
+        if (wait.kind === "read_error") {
+          return errorResult(wait.error.code, wait.error.message);
         }
+        if (wait.kind === "matched") {
+          return textResult({
+            version: 1,
+            reason: wait.reason,
+            waitedMs: wait.waitedMs,
+            snapshot: wait.snapshot,
+          });
+        }
+        return textResult({
+          version: 1,
+          reason: "timeout",
+          waitedMs: wait.waitedMs,
+          stillWaiting: true,
+          snapshot: wait.snapshot,
+        });
       },
     );
 
@@ -162,45 +165,41 @@ export async function handleWaitloopMcp(request: Request, env: McpEnv): Promise<
           return errorResult("invalid_wait_timeout", error instanceof Error ? error.message : "Invalid wait timeout.");
         }
 
-        const signal = ctx.mcpReq.signal;
-        const startedAt = Date.now();
-        while (true) {
-          throwIfWaitCancelled(signal);
-          const result = await room.getSnapshotBySeatToken(seatToken);
-          if (!result.ok) return errorResult(result.error.code, result.error.message);
-          const snapshot = rpcValue(result) as GameRoomSnapshotV1;
-          const reason = classifyWaitForRoomUpdate(snapshot, cursor);
-          if (reason === "cursor_ahead") {
-            return errorResult(
-              "room_seq_ahead",
-              `afterRoomSeq ${cursor} is ahead of current roomSeq ${snapshot.roomSeq}. Refresh with get_turn before waiting again.`,
-            );
-          }
-          if (reason) {
-            return textResult({
-              version: 1,
-              reason,
-              waitedMs: Date.now() - startedAt,
-              afterRoomSeq: cursor,
-              roomSeq: snapshot.roomSeq,
-              snapshot,
-            });
-          }
-
-          const elapsed = Date.now() - startedAt;
-          if (elapsed >= boundedTimeout) {
-            return textResult({
-              version: 1,
-              reason: "timeout",
-              waitedMs: elapsed,
-              afterRoomSeq: cursor,
-              roomSeq: snapshot.roomSeq,
-              stillWaiting: true,
-              snapshot,
-            });
-          }
-          await waitForTurnDelay(Math.min(WAIT_FOR_TURN_POLL_MS, boundedTimeout - elapsed), signal);
+        const wait = await boundedSnapshotWait({
+          timeoutMs: boundedTimeout,
+          pollMs: WAIT_FOR_TURN_POLL_MS,
+          signal: ctx.mcpReq.signal,
+          readSnapshot,
+          classify: (snapshot) => classifyWaitForRoomUpdate(snapshot, cursor),
+        });
+        if (wait.kind === "read_error") {
+          return errorResult(wait.error.code, wait.error.message);
         }
+        if (wait.kind === "matched" && wait.reason === "cursor_ahead") {
+          return errorResult(
+            "room_seq_ahead",
+            `afterRoomSeq ${cursor} is ahead of current roomSeq ${wait.snapshot.roomSeq}. Refresh with get_turn before waiting again.`,
+          );
+        }
+        if (wait.kind === "matched") {
+          return textResult({
+            version: 1,
+            reason: wait.reason,
+            waitedMs: wait.waitedMs,
+            afterRoomSeq: cursor,
+            roomSeq: wait.snapshot.roomSeq,
+            snapshot: wait.snapshot,
+          });
+        }
+        return textResult({
+          version: 1,
+          reason: "timeout",
+          waitedMs: wait.waitedMs,
+          afterRoomSeq: cursor,
+          roomSeq: wait.snapshot.roomSeq,
+          stillWaiting: true,
+          snapshot: wait.snapshot,
+        });
       },
     );
 
