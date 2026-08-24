@@ -128,13 +128,12 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
 ```
-
-The alpha.9 source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; the published alpha.8 local bridge does not. Remote Room MCP exposes it after the corresponding Worker deployment.
 
 The bridge internally reuses Human Room HTTP, Room/Join HTTP, and remote Room MCP. A normal Agent should not manually construct HTTP, read cached credential JSON, initialize remote MCP, or parse SSE.
 

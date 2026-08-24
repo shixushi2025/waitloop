@@ -74,13 +74,12 @@ get_active_room()
 leave_room()
 get_turn()
 wait_for_turn(timeoutMs?)
+wait_for_room_update(afterRoomSeq, timeoutMs?)
 play_move(expectedRevision, moveId)
 comment(text)
 yield_to_bot()
 take_control()
 ```
-
-The alpha.9 local source candidate additionally exposes `wait_for_room_update(afterRoomSeq, timeoutMs?)`; published npm alpha.8 does not.
 
 `create_room()` creates the fully headless `agent-bots` mode. `join_room()` claims, caches, selects, and authenticates a supplied one-time Join code. CLI equivalents are `waitloop room create` and `waitloop join <code>`.
 
