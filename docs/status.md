@@ -94,7 +94,7 @@ ui_hint(roomId, uiToken, expectedRevision, cursor?)
 
 The bridge reuses existing Human Room HTTP, Room/Join HTTP, and remote Room MCP. Agent credentials, Human cookies, and the private `wlui_` App capability remain in separate local custody and are never returned through model-visible content.
 
-## Human-operated MCP App
+## Agent-native interactive Human table
 
 `open_game({gameId:"doudizhu", mode:"human-bots"})` creates an ordinary Human-controlled `bots` Room:
 
@@ -118,7 +118,9 @@ The Human-vs-bots App is response-driven. Human play/pass responses include the 
 
 A real Codex Desktop session has rendered and operated this MCP App. In that session, safe JSON was model-visible while the Human-facing App rendered simultaneously. Visible JSON is therefore not evidence of render failure, and Agents must not automatically open a separate browser game.
 
-Unsupported Hosts receive a safe result and fallback guidance. The standalone Web fallback starts a separate game; it does not resume the private inline Room.
+### Host support boundary
+
+Unsupported Hosts receive a safe result and fallback guidance. The standalone Web fallback starts a separate browser-controlled game; it does not resume the private inline Room. Human cookies and the private App capability are delivered only through tool result _meta and never exposed in model-visible content.
 
 ## Room event and waiting model
 
