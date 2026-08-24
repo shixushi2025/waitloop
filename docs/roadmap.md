@@ -2,7 +2,7 @@
 
 This document contains only future work that remains relevant. Completed implementation belongs in canonical subsystem docs and [`status.md`](status.md).
 
-The current priority is **stabilization and behavior-preserving refactoring before feature expansion**. The stable local MCP bridge, Human-operated MCP App, `wait_for_turn`, `wait_for_room_update`, `revision`, and `roomSeq` foundations are published. New game modes and broad product expansion remain paused.
+The current priority is **stabilization before feature expansion**, implemented through behavior-preserving refactoring. The stable local MCP bridge, Human-operated MCP App, `wait_for_turn`, `wait_for_room_update`, `revision`, and `roomSeq` foundations are published. New game modes and broad product expansion remain paused.
 
 ## 1. Behavior-preserving structural refactoring
 
@@ -49,6 +49,7 @@ Remaining work:
 
 - turn the successful Codex Desktop observation into a repeatable smoke procedure;
 - record exact Host surfaces and versions rather than generalizing across a product family;
+- maintain a compatibility matrix for each tested Host surface and version;
 - verify initial result forwarding, result `_meta`, App `tools/call`, resize, theme, fullscreen, and teardown;
 - verify visible structured output never triggers an unnecessary standalone-browser fallback;
 - test reopen, expiry, unauthorized access, stale revision, invalid move, pass legality, and uncertain network results;
@@ -93,9 +94,9 @@ The current browser viewer WebSocket remains intentionally disabled until the Hu
 
 Acceptance: moves, comments, Controller transitions, Room phase, and meaningful connection events reach each authorized projection promptly without permanent polling, cursor gaps, or private-state cross-talk.
 
-## 4. Existing Agent and companion flow stabilization
+## 4. Existing Agent flow stabilization
 
-Treat the current flow as a product regression path:
+Treat the current Agent and companion flow as a product regression path:
 
 ```text
 install/update
