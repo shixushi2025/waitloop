@@ -138,6 +138,8 @@ roomSeq
 
 `wait_for_turn()` is Controller/actionable-turn oriented. `wait_for_room_update(afterRoomSeq, timeoutMs?)` is a read-only, cancellable semantic-event wait for Controllers and Advisors. Both are bounded current-run primitives; neither can wake an Agent after it has sent a final response.
 
+MCP is request/response participation. It can keep the current Agent run waiting efficiently, but it is not a background scheduler and cannot restart an Agent after the run has ended.
+
 Future private subscription reuse must be keyed by at least:
 
 ```text
